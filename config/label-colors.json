@@ -1,0 +1,18 @@
+{
+  "security": "d73a4a",
+  "code-quality": "0075ca",
+  "architecture": "7057ff",
+  "testing": "008672",
+  "error-handling": "e4e669",
+  "performance": "ff7b00",
+  "api-design": "0e8a16",
+  "database": "5319e7",
+  "frontend": "1d76db",
+  "observability": "fbca04",
+  "devops": "b60205",
+  "compliance": "d93f0b",
+  "maintainability": "c5def5",
+  "i18n": "bfd4f2",
+  "documentation": "d4c5f9",
+  "concurrency": "f9d0c4"
+}

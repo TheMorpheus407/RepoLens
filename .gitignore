@@ -1,0 +1,7 @@
+logs/
+.semaphore/
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store

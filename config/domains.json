@@ -1,0 +1,100 @@
+{
+  "domains": [
+    {
+      "id": "security",
+      "name": "Security",
+      "order": 1,
+      "lenses": ["injection", "xss-csrf", "auth-session", "authorization", "secrets", "dependency-cves", "security-headers", "cryptography", "input-sanitization", "data-exposure", "rate-abuse"]
+    },
+    {
+      "id": "code-quality",
+      "name": "Code Quality",
+      "order": 2,
+      "lenses": ["naming", "complexity", "dead-code", "duplication", "magic-values", "code-smells", "linting", "formatting", "comments", "type-safety", "immutability", "readability", "consistency", "pattern-consistency"]
+    },
+    {
+      "id": "architecture",
+      "name": "Architecture",
+      "order": 3,
+      "lenses": ["separation-of-concerns", "module-boundaries", "circular-deps", "coupling", "single-responsibility", "dependency-direction", "api-contract", "state-architecture", "extensibility"]
+    },
+    {
+      "id": "testing",
+      "name": "Testing",
+      "order": 4,
+      "lenses": ["unit-test-gaps", "integration-test-gaps", "e2e-test-gaps", "test-quality", "test-anti-patterns", "edge-cases", "error-path-tests", "test-maintainability", "test-determinism"]
+    },
+    {
+      "id": "error-handling",
+      "name": "Error Handling",
+      "order": 5,
+      "lenses": ["unhandled-errors", "error-swallowing", "error-messages", "error-boundaries", "graceful-degradation", "timeout-retry"]
+    },
+    {
+      "id": "performance",
+      "name": "Performance",
+      "order": 6,
+      "lenses": ["query-performance", "memory", "blocking-io", "frontend-perf", "caching", "algorithm", "pagination", "connection-mgmt", "startup-perf"]
+    },
+    {
+      "id": "api-design",
+      "name": "API Design",
+      "order": 7,
+      "lenses": ["rest-conventions", "request-validation", "response-consistency", "api-versioning", "api-idempotency", "api-documentation"]
+    },
+    {
+      "id": "database",
+      "name": "Database",
+      "order": 8,
+      "lenses": ["schema-design", "migration-quality", "index-strategy", "transaction-safety", "data-integrity", "query-safety"]
+    },
+    {
+      "id": "frontend",
+      "name": "Frontend",
+      "order": 9,
+      "lenses": ["component-architecture", "accessibility", "responsive-design", "loading-states", "error-states", "empty-states", "form-ux", "routing", "frontend-security"]
+    },
+    {
+      "id": "observability",
+      "name": "Observability",
+      "order": 10,
+      "lenses": ["logging", "structured-logging", "metrics", "audit-trail", "health-monitoring"]
+    },
+    {
+      "id": "devops",
+      "name": "DevOps",
+      "order": 11,
+      "lenses": ["ci-pipeline", "docker", "env-config", "deployment-safety", "infra-reproducibility", "dependency-management"]
+    },
+    {
+      "id": "compliance",
+      "name": "Compliance",
+      "order": 12,
+      "lenses": ["gdpr-dsgvo", "nis2", "sovereignty", "privacy-by-design", "data-retention", "consent-flows"]
+    },
+    {
+      "id": "maintainability",
+      "name": "Maintainability",
+      "order": 13,
+      "lenses": ["tech-debt", "upgrade-paths", "config-patterns", "error-traceability", "modularity", "dependency-management"]
+    },
+    {
+      "id": "i18n",
+      "name": "Internationalization",
+      "order": 14,
+      "lenses": ["i18n-strings", "i18n-formatting"]
+    },
+    {
+      "id": "documentation",
+      "name": "Documentation",
+      "order": 15,
+      "lenses": ["code-docs", "architecture-docs", "operational-docs", "onboarding-docs"]
+    },
+    {
+      "id": "concurrency",
+      "name": "Concurrency",
+      "order": 16,
+      "lenses": ["race-conditions", "async-patterns", "resource-contention", "transaction-concurrency"]
+    }
+  ]
+}
