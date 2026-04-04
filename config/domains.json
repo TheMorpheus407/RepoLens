@@ -106,7 +106,7 @@
       "id": "compliance",
       "name": "Compliance",
       "order": 18,
-      "lenses": ["gdpr-dsgvo", "nis2", "sovereignty", "privacy-by-design", "data-retention", "consent-flows"]
+      "lenses": ["gdpr-dsgvo", "nis2", "sovereignty", "privacy-by-design", "data-retention", "consent-flows", "tos-legal-audit", "privacy-policy-audit", "impressum", "cookie-policy", "security-disclosure", "subscription-cancellation", "refund-widerrufsrecht", "price-transparency", "invoice-compliance", "payment-pci", "newsletter-consent", "dispute-resolution", "accessibility-eaa", "ai-act", "cyber-resilience-act", "youth-protection", "automated-decisions", "ecommerce-law", "sbom-supply-chain", "secure-sdlc", "incident-response", "audit-trail-gobd"]
     },
     {
       "id": "maintainability",
