@@ -52,49 +52,99 @@
       "id": "frontend",
       "name": "Frontend",
       "order": 9,
-      "lenses": ["component-architecture", "accessibility", "responsive-design", "loading-states", "error-states", "empty-states", "form-ux", "routing", "frontend-security"]
+      "lenses": ["component-architecture", "accessibility", "responsive-design", "routing", "frontend-security"]
+    },
+    {
+      "id": "visual-design",
+      "name": "Visual Design",
+      "order": 10,
+      "lenses": ["color-system", "typography-scale", "spacing-system", "visual-hierarchy", "icon-consistency"]
+    },
+    {
+      "id": "design-system",
+      "name": "Design System",
+      "order": 11,
+      "lenses": ["design-tokens", "component-library-usage", "css-architecture", "ui-copy-consistency"]
+    },
+    {
+      "id": "interaction-design",
+      "name": "Interaction Design",
+      "order": 12,
+      "lenses": ["loading-states", "error-states", "form-ux", "animation-transitions", "interactive-feedback", "touch-targets", "scroll-behavior", "keyboard-navigation"]
+    },
+    {
+      "id": "information-architecture",
+      "name": "Information Architecture",
+      "order": 13,
+      "lenses": ["empty-states", "navigation-patterns", "content-hierarchy", "search-ux", "help-context", "dashboard-patterns"]
+    },
+    {
+      "id": "adaptive-ux",
+      "name": "Adaptive UX",
+      "order": 14,
+      "lenses": ["theme-adaptation", "adaptive-content", "viewport-sizing", "rtl-layout", "print-stylesheet"]
+    },
+    {
+      "id": "ux-antipatterns",
+      "name": "UX Anti-Patterns",
+      "order": 15,
+      "lenses": ["dark-patterns", "cognitive-overload", "destructive-actions", "flow-dead-ends", "permission-antipatterns", "notification-interrupts"]
     },
     {
       "id": "observability",
       "name": "Observability",
-      "order": 10,
+      "order": 16,
       "lenses": ["logging", "structured-logging", "metrics", "audit-trail", "health-monitoring"]
     },
     {
       "id": "devops",
       "name": "DevOps",
-      "order": 11,
+      "order": 17,
       "lenses": ["ci-pipeline", "docker", "env-config", "deployment-safety", "infra-reproducibility", "dependency-management"]
     },
     {
       "id": "compliance",
       "name": "Compliance",
-      "order": 12,
+      "order": 18,
       "lenses": ["gdpr-dsgvo", "nis2", "sovereignty", "privacy-by-design", "data-retention", "consent-flows"]
     },
     {
       "id": "maintainability",
       "name": "Maintainability",
-      "order": 13,
+      "order": 19,
       "lenses": ["tech-debt", "upgrade-paths", "config-patterns", "error-traceability", "modularity", "dependency-management"]
     },
     {
       "id": "i18n",
       "name": "Internationalization",
-      "order": 14,
+      "order": 20,
       "lenses": ["i18n-strings", "i18n-formatting"]
     },
     {
       "id": "documentation",
       "name": "Documentation",
-      "order": 15,
+      "order": 21,
       "lenses": ["code-docs", "architecture-docs", "operational-docs", "onboarding-docs"]
     },
     {
       "id": "concurrency",
       "name": "Concurrency",
-      "order": 16,
+      "order": 22,
       "lenses": ["race-conditions", "async-patterns", "resource-contention", "transaction-concurrency"]
+    },
+    {
+      "id": "discovery",
+      "name": "Product Discovery",
+      "order": 23,
+      "mode": "discover",
+      "lenses": ["product-gaps", "integration-opportunities", "ux-improvements", "monetization", "developer-experience", "automation", "data-insights", "scale-readiness", "community-ecosystem", "competitive-edge", "accessibility-inclusion", "content-education", "ai-augmentation", "workflow-orchestration"]
+    },
+    {
+      "id": "deployment",
+      "name": "Deployment",
+      "order": 24,
+      "mode": "deploy",
+      "lenses": ["service-health", "application-health", "tls-certificates", "dns-resolution", "time-synchronization", "network-security", "load-balancing", "reverse-proxy", "disk-storage", "memory-cpu", "resource-limits", "container-health", "database-health", "queue-messaging", "secrets-credentials", "ssh-access-control", "system-hardening", "log-analysis", "logging-pipeline", "monitoring-health", "backup-verification", "disaster-recovery", "config-drift", "dependency-health", "update-patching", "cronjob-scheduler"]
     }
   ]
 }

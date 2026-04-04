@@ -1,6 +1,6 @@
 ---
 id: empty-states
-domain: frontend
+domain: information-architecture
 name: Empty State Design
 role: Empty State Specialist
 ---

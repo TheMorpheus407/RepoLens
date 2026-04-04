@@ -14,5 +14,13 @@
   "maintainability": "c5def5",
   "i18n": "bfd4f2",
   "documentation": "d4c5f9",
-  "concurrency": "f9d0c4"
+  "concurrency": "f9d0c4",
+  "visual-design": "e91e63",
+  "design-system": "009688",
+  "interaction-design": "3f51b5",
+  "information-architecture": "ff5722",
+  "adaptive-ux": "00bcd4",
+  "ux-antipatterns": "ff9800",
+  "discovery": "06d6a0",
+  "deployment": "1a7f37"
 }

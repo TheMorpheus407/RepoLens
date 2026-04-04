@@ -1,6 +1,6 @@
 ---
 id: error-states
-domain: frontend
+domain: interaction-design
 name: Error State Handling
 role: Error State UI Specialist
 ---

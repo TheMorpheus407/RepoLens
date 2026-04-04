@@ -1,33 +1,61 @@
 #!/usr/bin/env bash
 # RepoLens — JSON summary generation
 
-# init_summary <summary_file> <run_id> <project_path> <mode> <agent>
+# init_summary <summary_file> <run_id> <project_path> <mode> <agent> [spec_file] [max_issues]
 #   Creates initial summary.json skeleton
 init_summary() {
   local file="$1" run_id="$2" project="$3" mode="$4" agent="$5"
+  local spec_file="${6:-}" max_issues="${7:-}"
+  local spec_json="null"
+  if [[ -n "$spec_file" ]]; then
+    spec_json="$(jq -n --arg p "$spec_file" '$p')"
+  fi
+  local max_issues_json="null"
+  if [[ -n "$max_issues" ]]; then
+    max_issues_json="$max_issues"
+  fi
   cat > "$file" <<ENDJSON
 {
   "run_id": "$run_id",
   "project": "$project",
   "mode": "$mode",
   "agent": "$agent",
+  "spec": $spec_json,
+  "max_issues": $max_issues_json,
   "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "completed_at": null,
+  "stopped_reason": null,
   "lenses": [],
   "totals": {"lenses_run": 0, "iterations_total": 0, "issues_created": 0}
 }
 ENDJSON
 }
 
-# record_lens <summary_file> <domain> <lens_id> <iterations> <status>
+# record_lens <summary_file> <domain> <lens_id> <iterations> <status> [issues]
 #   Appends a lens result to the summary
 record_lens() {
   local file="$1" domain="$2" lens_id="$3" iterations="$4" status="$5"
+  local issues="${6:-0}"
   local tmp="${file}.tmp"
+  local lenses_increment=1
+  if [[ "$status" == "skipped" ]]; then
+    lenses_increment=0
+  fi
   jq --arg d "$domain" --arg l "$lens_id" --argjson i "$iterations" --arg s "$status" \
-    '.lenses += [{"domain": $d, "lens": $l, "iterations": $i, "status": $s}] |
-     .totals.lenses_run += 1 |
-     .totals.iterations_total += $i' "$file" > "$tmp" && mv "$tmp" "$file"
+     --argjson iss "$issues" --argjson lr "$lenses_increment" \
+    '.lenses += [{"domain": $d, "lens": $l, "iterations": $i, "status": $s, "issues_created": $iss}] |
+     .totals.lenses_run += $lr |
+     .totals.iterations_total += $i |
+     .totals.issues_created += $iss' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+# set_stop_reason <summary_file> <reason>
+#   Sets the stopped_reason field in summary.json
+set_stop_reason() {
+  local file="$1" reason="${2:-}"
+  [[ -n "$reason" ]] || return 0
+  local tmp="${file}.tmp"
+  jq --arg r "$reason" '.stopped_reason = $r' "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 # finalize_summary <summary_file>

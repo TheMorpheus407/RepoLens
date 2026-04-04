@@ -1,6 +1,6 @@
 ---
 id: form-ux
-domain: frontend
+domain: interaction-design
 name: Form UX Quality
 role: Form UX Specialist
 ---

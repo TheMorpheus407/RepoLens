@@ -1,6 +1,6 @@
 ---
 id: loading-states
-domain: frontend
+domain: interaction-design
 name: Loading State Handling
 role: Loading State Specialist
 ---
