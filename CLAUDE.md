@@ -2,7 +2,7 @@
 
 ## What This Is
 
-RepoLens is a standalone multi-lens code audit tool. It runs 152 expert analysis agents (112 code analysis + 14 product discovery + 26 deployment/server audit) against any git repository or live server and creates GitHub issues for real findings. Think of it as automated code review and infrastructure auditing with deep specialization.
+RepoLens is a standalone multi-lens code audit tool. It runs 273 expert analysis agents (192 code analysis + 11 tool gate + 14 product discovery + 26 deployment/server audit + 13 open-source readiness + 17 content quality) against any git repository or live server and creates GitHub issues for real findings. Think of it as automated code review, tool-driven static/dynamic analysis, and infrastructure auditing with deep specialization.
 
 ## Architecture
 

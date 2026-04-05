@@ -51,6 +51,8 @@ Every issue MUST have this structure:
 
 {{LENS_BODY}}
 
+{{HOSTED_SECTION}}
+
 {{MAX_ISSUES_SECTION}}
 
 ## Termination

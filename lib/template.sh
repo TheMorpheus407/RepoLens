@@ -27,7 +27,7 @@ read_spec_file() {
   sed '1s/^\xEF\xBB\xBF//' "$file" | tr -d '\r'
 }
 
-# compose_prompt <base_template> <lens_file> <variables_string> [spec_file] [mode] [max_issues] [source_file]
+# compose_prompt <base_template> <lens_file> <variables_string> [spec_file] [mode] [max_issues] [source_file] [hosted]
 #   1. Reads the base template
 #   2. Reads the lens body
 #   3. Substitutes {{LENS_BODY}} in base template with lens body
@@ -39,6 +39,7 @@ read_spec_file() {
 compose_prompt() {
   local base_file="$1" lens_file="$2" vars_string="$3"
   local spec_file="${4:-}" mode="${5:-audit}" max_issues="${6:-}" source_file="${7:-}"
+  local hosted="${8:-false}"
   local base_content lens_body spec_section prompt key value
 
   base_content="$(cat "$base_file")"
@@ -111,7 +112,15 @@ Read the source file using your file reading capabilities (cat, head, or equival
 
   prompt="${prompt//\{\{SOURCE_SECTION\}\}/$source_section}"
 
-  # Step 5 (LAST): Build and insert spec section
+  # Step 5: Build and insert hosted section
+  local hosted_section=""
+  if [[ "$hosted" == "true" ]]; then
+    hosted_section="$(build_hosted_section)"
+  fi
+
+  prompt="${prompt//\{\{HOSTED_SECTION\}\}/$hosted_section}"
+
+  # Step 6 (LAST): Build and insert spec section
   # Done last so spec content is never subject to variable substitution
   spec_section=""
   if [[ -n "$spec_file" && -f "$spec_file" ]]; then

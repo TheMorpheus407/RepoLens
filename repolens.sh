@@ -10,6 +10,7 @@ source "$SCRIPT_DIR/lib/streak.sh"
 source "$SCRIPT_DIR/lib/template.sh"
 source "$SCRIPT_DIR/lib/summary.sh"
 source "$SCRIPT_DIR/lib/parallel.sh"
+source "$SCRIPT_DIR/lib/hosted.sh"
 
 # --- Usage ---
 usage() {
@@ -34,6 +35,7 @@ Options:
   --resume <run-id>       Resume a previous interrupted run
   --spec <file>           Spec/PRD/roadmap to guide analysis (any text file)
   --max-issues <n>        Stop after creating n total issues (dry-run quality check)
+  --hosted                Spin up project's Docker Compose in isolated network for DAST scanning and testing
   -h, --help              Show help
 
 Examples:
@@ -59,6 +61,8 @@ Examples:
   repolens.sh --project ~/myapp --agent claude --mode content --source ~/docs/curriculum.md --spec lesson-format.md
   repolens.sh --project ~/myapp --agent claude --mode audit --source ~/docs/threat-report.pdf
   repolens.sh --project ~/myapp --agent claude --mode content --focus topic-extraction --source ~/docs/textbook.pdf
+  repolens.sh --project ~/myapp --agent claude --hosted --domain toolgate
+  repolens.sh --project ~/myapp --agent claude --hosted --focus dast-web
 EOF
 
   # Dynamic section: list modes, domains, and lenses from config
@@ -158,6 +162,7 @@ SPEC_FILE=""
 MAX_ISSUES=""
 CHANGE_STATEMENT=""
 SOURCE_FILE=""
+HOSTED=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -220,6 +225,10 @@ while [[ $# -gt 0 ]]; do
       SOURCE_FILE="$2"
       shift 2
       ;;
+    --hosted)
+      HOSTED=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -262,7 +271,13 @@ _cleanup_clone() {
     rm -rf "$CLONE_DIR"
   fi
 }
-trap _cleanup_clone EXIT
+_cleanup_all() {
+  if $HOSTED 2>/dev/null; then
+    cleanup_hosted "${RUN_ID:-}" 2>/dev/null
+  fi
+  _cleanup_clone
+}
+trap _cleanup_all EXIT
 
 if [[ "$PROJECT_PATH" =~ ^(https://|git@|ssh://|git://) ]]; then
   CLONE_DIR="$(mktemp -d)"
@@ -297,6 +312,12 @@ if [[ -n "$SPEC_FILE" ]]; then
     die "Spec file appears to be binary: $SPEC_FILE — only text files are supported."
   fi
   unset _spec_size
+fi
+
+# --- Validate --hosted prerequisites ---
+if $HOSTED; then
+  command -v docker >/dev/null 2>&1 || die "--hosted requires Docker to be installed"
+  detect_compose_file "$PROJECT_PATH" >/dev/null || die "--hosted requires a docker-compose.yml or compose.yml in the project"
 fi
 
 # --- Validate source file ---
@@ -379,6 +400,13 @@ log_info "Agent: $AGENT | Mode: $MODE | Parallel: $PARALLEL"
 [[ "$MODE" == "content" ]] && log_info "Content mode: content audit & creation (DONE streak: 1)"
 [[ -n "$CHANGE_STATEMENT" ]] && log_info "Change: $CHANGE_STATEMENT"
 [[ -n "$SOURCE_FILE" ]] && log_info "Source: $SOURCE_FILE"
+if $HOSTED; then
+  log_info "Hosted mode: spinning up Docker environment..."
+  if ! setup_hosted_env "$PROJECT_PATH" "$RUN_ID"; then
+    die "Failed to set up hosted environment. Check Docker and compose file."
+  fi
+  log_info "Hosted environment ready: $HOSTED_SERVICES"
+fi
 
 # --- Resolve lens list ---
 resolve_lenses() {
@@ -499,9 +527,13 @@ fi
 # --- Global issue counter ---
 GLOBAL_ISSUES_CREATED=0
 
-# --- Force sequential when --max-issues is active ---
+# --- Force sequential when --max-issues or --hosted is active ---
 if [[ -n "$MAX_ISSUES" ]] && $PARALLEL; then
   log_warn "Forcing sequential mode: --max-issues requires sequential execution to enforce global limit."
+  PARALLEL=false
+fi
+if $HOSTED && $PARALLEL; then
+  log_warn "Forcing sequential mode: --hosted requires sequential execution to avoid concurrent DAST conflicts."
   PARALLEL=false
 fi
 
@@ -553,10 +585,11 @@ run_lens() {
   vars+="|REPO_OWNER=${REPO_OWNER}"
   [[ -n "$CHANGE_STATEMENT" ]] && vars+="|CHANGE_STATEMENT=${CHANGE_STATEMENT}"
   [[ -n "$SOURCE_FILE" ]] && vars+="|SOURCE_PATH=${SOURCE_FILE}"
+  [[ -n "$HOSTED_NETWORK" ]] && vars+="|HOSTED_NETWORK=${HOSTED_NETWORK}"
 
   # Compose prompt
   local prompt
-  prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE")"
+  prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
 
   # Create lens log directory
   local lens_log_dir="$LOG_BASE/$domain/$lens_id"

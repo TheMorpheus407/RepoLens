@@ -159,6 +159,12 @@
       "order": 26,
       "mode": "content",
       "lenses": ["content-inventory", "metadata-completeness", "content-staleness", "content-accessibility", "content-linking", "content-duplication", "content-completeness", "content-consistency", "code-examples", "content-pii", "multimedia-quality", "content-versioning", "audience-targeting", "content-localization", "topic-extraction", "content-planning", "exercise-design"]
+    },
+    {
+      "id": "toolgate",
+      "name": "Tool Gate",
+      "order": 27,
+      "lenses": ["lint", "typecheck", "security-sast", "security-deps", "quality-gates", "test-suite", "dast-web", "dast-injection", "dast-scanner", "dast-headers", "dast-api"]
     }
   ]
 }
