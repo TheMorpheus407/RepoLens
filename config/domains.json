@@ -164,7 +164,7 @@
       "id": "toolgate",
       "name": "Tool Gate",
       "order": 27,
-      "lenses": ["lint", "typecheck", "security-sast", "security-deps", "quality-gates", "test-suite", "dast-web", "dast-injection", "dast-scanner", "dast-headers", "dast-api"]
+      "lenses": ["lint", "typecheck", "security-sast", "security-deps", "quality-gates", "test-suite", "dast-web", "dast-injection", "dast-scanner", "dast-headers", "dast-api", "session-zap", "session-sqlmap", "session-nuclei", "session-lighthouse", "session-k6", "session-zap-api", "session-schemathesis"]
     }
   ]
 }
