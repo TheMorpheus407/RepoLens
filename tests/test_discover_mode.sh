@@ -74,14 +74,15 @@ assert_eq "no lenses outside discovery domain" "" "$non_discovery"
 echo ""
 echo "Test 3: Audit mode excludes discovery domain"
 audit_lenses="$(jq -r --arg mode "audit" \
-  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") else select(.mode != "discover") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
+  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
 audit_discovery="$(echo "$audit_lenses" | grep "^discovery/" || true)"
 assert_eq "no discovery lenses in audit mode" "" "$audit_discovery"
 
 echo ""
-echo "Test 4: Audit mode lens count unchanged"
+echo "Test 4: Audit mode lens count matches domains.json"
 audit_count="$(echo "$audit_lenses" | wc -l)"
-assert_eq "audit lens count is 112" "112" "$audit_count"
+expected_audit_count="$(jq '[.domains[] | select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") | .lenses | length] | add' "$DOMAINS_FILE")"
+assert_eq "audit lens count matches domains.json" "$expected_audit_count" "$audit_count"
 
 echo ""
 echo "Test 5: Feature mode excludes discovery domain"
