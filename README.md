@@ -93,6 +93,9 @@ RepoLens supports 8 modes. Each mode controls which domains/lenses are visible a
 
 # CI — skip confirmation prompt for automation
 ./repolens.sh --project ~/my-app --agent claude --parallel --yes
+
+# Dry run — preview which lenses would run without executing anything
+./repolens.sh --project ~/my-app --agent claude --mode deploy --dry-run
 ```
 
 ## CLI Reference
@@ -124,6 +127,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--max-issues <n>` | Stop after creating *n* total issues |
 | `--hosted` | Spin up Docker Compose for DAST scanning (used with `toolgate` domain) |
 | `--max-cost <amount>` | Warn if estimated cost exceeds this dollar amount (e.g., `--max-cost 10`) |
+| `--dry-run` | Validate config and show which lenses would run, then exit (no agents executed) |
 | `--yes, -y` | Skip confirmation prompt (for CI/automation) |
 | `-h, --help` | Show help |
 
@@ -170,14 +174,16 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 
 1. Validates target repo (or server for `deploy` mode), agent CLI, and `gh` auth
 2. Resolves lens list (all, `--domain`, or `--focus`)
-3. Shows confirmation prompt (target repo, mode, lens count, estimated cost) — requires `y` to proceed, or use `--yes` to skip. If `--max-cost` is set and the estimate exceeds it, a warning is displayed
-4. Ensures GitHub labels exist (`audit:<domain>/<lens>`)
-5. For each lens:
+3. If `--dry-run`: prints mode, agent, project path, and the full lens list, then exits — no agents run and no prompts are shown
+4. For `deploy` mode: prompts for explicit authorization confirmation (`I confirm I am authorized to audit this server [y/N]`). Displays legal references (§202a StGB, CFAA, EU Directive 2013/40/EU). `--yes` bypasses this prompt
+5. Shows confirmation prompt (target repo, mode, lens count, estimated cost) — requires `y` to proceed, or use `--yes` to skip. If `--max-cost` is set and the estimate exceeds it, a warning is displayed
+6. Ensures GitHub labels exist (`audit:<domain>/<lens>`)
+7. For each lens:
    - Composes prompt from base template + lens expert focus
    - Runs agent in target repo directory
    - Agent reads code, finds issues, creates GitHub issues via `gh`
    - Loops until DONE detected (3× streak for audit/feature/bugfix, 1× for other modes)
-6. Generates `logs/<run-id>/summary.json`
+8. Generates `logs/<run-id>/summary.json`
 
 For a deeper look at the methodology — how lenses are composed, how agents iterate, and how streak detection works — see [METHODOLOGY.md](METHODOLOGY.md).
 
@@ -240,7 +246,16 @@ This software is provided **"as is"**, without warranty of any kind, express or 
 
 ### Deploy Mode — Authorization Required
 
-`deploy` mode runs read-only inspection commands on a live server (e.g., `systemctl`, `journalctl`, `ss`, `df`). **You must have explicit authorization to audit the target server before running deploy mode.** Unauthorized server scanning may violate laws and policies. RepoLens enforces read-only operation through prompt instructions, but responsibility for authorization lies with the user.
+`deploy` mode runs read-only inspection commands on a live server (e.g., `systemctl`, `journalctl`, `ss`, `df`). **You must have explicit authorization to audit the target server before running deploy mode.**
+
+**Legal risk:** Running RepoLens deploy mode against infrastructure you do not own or are not explicitly authorized to audit may constitute a criminal offense, including but not limited to:
+
+- **Germany:** [§202a StGB](https://www.gesetze-im-internet.de/stgb/__202a.html) — Ausspähen von Daten (data espionage)
+- **EU:** Directive 2013/40/EU — Attacks against information systems
+- **United States:** Computer Fraud and Abuse Act (CFAA), 18 U.S.C. §1030
+- **United Kingdom:** Computer Misuse Act 1990
+
+RepoLens enforces read-only operation through prompt instructions, but **responsibility for authorization lies entirely with the user**. The CLI will prompt for explicit authorization confirmation before executing deploy mode. Using `--yes` to skip this prompt implies acceptance of this responsibility.
 
 ### About `--dangerously-skip-permissions`
 

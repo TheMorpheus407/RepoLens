@@ -38,6 +38,7 @@ Options:
   --hosted                Spin up project's Docker Compose in isolated network for DAST scanning and testing
   --yes, -y               Skip confirmation prompt (for CI/automation)
   --max-cost <amount>     Warn if estimated cost exceeds this dollar amount
+  --dry-run               Validate config and show what would run, then exit (no agents executed)
   -h, --help              Show help
 
 Examples:
@@ -167,6 +168,7 @@ SOURCE_FILE=""
 HOSTED=false
 AUTO_YES=false
 MAX_COST=""
+DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -235,6 +237,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --yes|-y)
       AUTO_YES=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
       shift
       ;;
     --max-cost)
@@ -553,6 +559,55 @@ confirm_run() {
   esac
 }
 
+# --- Deploy authorization gate ---
+confirm_deploy_authorization() {
+  [[ "$MODE" == "deploy" ]] || return 0
+
+  if $AUTO_YES; then
+    return 0
+  fi
+
+  if [[ ! -t 0 ]]; then
+    die "Deploy mode requires authorization confirmation. Use --yes to skip (implies you accept responsibility)."
+  fi
+
+  echo ""
+  echo "=== Deploy Mode — Authorization Required ==="
+  echo ""
+  echo "Deploy mode runs read-only inspection commands on a live server"
+  echo "(e.g., systemctl, journalctl, ss, df)."
+  echo ""
+  echo "WARNING: Running this against infrastructure you do not own or"
+  echo "are not authorized to audit may violate computer crime laws,"
+  echo "including §202a StGB (DE), the Computer Fraud and Abuse Act (US),"
+  echo "and similar legislation in other jurisdictions."
+  echo ""
+  read -rp "I confirm I am authorized to audit this server [y/N] " answer
+  case "$answer" in
+    [yY]|[yY][eE][sS]) return 0 ;;
+    *) echo "Aborted — deploy mode requires explicit authorization."; exit 0 ;;
+  esac
+}
+
+# --- Dry-run output ---
+if $DRY_RUN; then
+  echo ""
+  echo "=== Dry Run ==="
+  echo "Mode:         $MODE"
+  echo "Agent:        $AGENT"
+  echo "Project:      $PROJECT_PATH"
+  echo "Lenses:       $TOTAL_LENSES"
+  echo ""
+  echo "Lenses that would run:"
+  for lens_entry in "${LENS_LIST[@]}"; do
+    echo "  $lens_entry"
+  done
+  echo ""
+  echo "Dry run complete — no agents were executed."
+  exit 0
+fi
+
+confirm_deploy_authorization
 confirm_run
 
 # --- Ensure GitHub labels ---
