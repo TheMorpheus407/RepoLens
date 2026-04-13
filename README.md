@@ -216,7 +216,7 @@ Completed lenses are skipped. The run ID is printed at startup and found in `log
 
 ### License
 
-This project is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE) for the full text.
+This project is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE) for the full text and [NOTICE](NOTICE) for required attribution.
 
 ### No Warranty
 
