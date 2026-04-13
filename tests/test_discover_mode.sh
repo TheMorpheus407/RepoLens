@@ -293,8 +293,8 @@ echo "Test 22: discover.md has all required body sections"
 assert_contains "idea summary" "Idea Summary" "$base_content"
 assert_contains "opportunity" "Opportunity" "$base_content"
 assert_contains "current state" "Current State" "$base_content"
-assert_contains "vision" "Vision" "$base_content"
-assert_contains "effort estimate" "Effort Estimate" "$base_content"
+assert_contains "proposed implementation" "Proposed Implementation" "$base_content"
+assert_contains "acceptance criteria" "Acceptance Criteria" "$base_content"
 assert_contains "dependencies" "Dependencies" "$base_content"
 assert_contains "risks" "Risks & Open Questions" "$base_content"
 
@@ -361,7 +361,7 @@ assert_contains "spec content" "multi-lens code audit tool" "$result"
 
 echo ""
 echo "Test 27: repolens.sh accepts discover mode"
-if grep -q "audit|feature|bugfix|discover)" "$SCRIPT_DIR/repolens.sh"; then
+if grep -q '|discover[|)]' "$SCRIPT_DIR/repolens.sh"; then
   TOTAL=$((TOTAL + 1))
   PASS=$((PASS + 1))
   echo "  PASS: discover in mode validation"
