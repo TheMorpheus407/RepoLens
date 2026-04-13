@@ -90,6 +90,9 @@ RepoLens supports 8 modes. Each mode controls which domains/lenses are visible a
 
 # Content — audit or create educational content
 ./repolens.sh --project ~/my-app --agent claude --mode content --source ~/docs/math-book.pdf
+
+# CI — skip confirmation prompt for automation
+./repolens.sh --project ~/my-app --agent claude --parallel --yes
 ```
 
 ## CLI Reference
@@ -120,6 +123,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--spec <file>` | Spec/PRD/roadmap to guide analysis (any text file, max 100 KB) |
 | `--max-issues <n>` | Stop after creating *n* total issues |
 | `--hosted` | Spin up Docker Compose for DAST scanning (used with `toolgate` domain) |
+| `--yes, -y` | Skip confirmation prompt (for CI/automation) |
 | `-h, --help` | Show help |
 
 ## Domains & Lenses (280 total across 27 domains)
@@ -165,13 +169,14 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 
 1. Validates target repo (or server for `deploy` mode), agent CLI, and `gh` auth
 2. Resolves lens list (all, `--domain`, or `--focus`)
-3. Ensures GitHub labels exist (`audit:<domain>/<lens>`)
-4. For each lens:
+3. Shows confirmation prompt (target repo, mode, lens count) — requires `y` to proceed, or use `--yes` to skip
+4. Ensures GitHub labels exist (`audit:<domain>/<lens>`)
+5. For each lens:
    - Composes prompt from base template + lens expert focus
    - Runs agent in target repo directory
    - Agent reads code, finds issues, creates GitHub issues via `gh`
    - Loops until DONE detected (3× streak for audit/feature/bugfix, 1× for other modes)
-5. Generates `logs/<run-id>/summary.json`
+6. Generates `logs/<run-id>/summary.json`
 
 For a deeper look at the methodology — how lenses are composed, how agents iterate, and how streak detection works — see [METHODOLOGY.md](METHODOLOGY.md).
 

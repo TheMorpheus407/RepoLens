@@ -36,6 +36,7 @@ Options:
   --spec <file>           Spec/PRD/roadmap to guide analysis (any text file)
   --max-issues <n>        Stop after creating n total issues (dry-run quality check)
   --hosted                Spin up project's Docker Compose in isolated network for DAST scanning and testing
+  --yes, -y               Skip confirmation prompt (for CI/automation)
   -h, --help              Show help
 
 Examples:
@@ -163,6 +164,7 @@ MAX_ISSUES=""
 CHANGE_STATEMENT=""
 SOURCE_FILE=""
 HOSTED=false
+AUTO_YES=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -227,6 +229,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --hosted)
       HOSTED=true
+      shift
+      ;;
+    --yes|-y)
+      AUTO_YES=true
       shift
       ;;
     -h|--help)
@@ -471,6 +477,41 @@ is_lens_completed() {
 mark_lens_completed() {
   echo "$1" >> "$completed_lenses_file"
 }
+
+# --- Confirmation gate ---
+confirm_run() {
+  if $AUTO_YES; then
+    return 0
+  fi
+
+  # Non-interactive detection (piped stdin)
+  if [[ ! -t 0 ]]; then
+    die "Running non-interactively without --yes flag. Use --yes to skip confirmation."
+  fi
+
+  echo ""
+  echo "=== RepoLens Confirmation ==="
+  echo "Target repo:  $REPO_OWNER/$REPO_NAME"
+  echo "Mode:         $MODE"
+  echo "Agent:        $AGENT"
+  echo "Lenses:       $TOTAL_LENSES"
+  if [[ -n "$MAX_ISSUES" ]]; then
+    echo "Max issues:   $MAX_ISSUES"
+  else
+    echo "Max issues:   (unlimited)"
+  fi
+  echo ""
+  echo "This will run $TOTAL_LENSES analysis agent(s) against the repository above."
+  echo "Each agent may create GitHub issues directly."
+  echo ""
+  read -rp "Proceed? [y/N] " answer
+  case "$answer" in
+    [yY]|[yY][eE][sS]) return 0 ;;
+    *) echo "Aborted."; exit 0 ;;
+  esac
+}
+
+confirm_run
 
 # --- Ensure GitHub labels ---
 ensure_labels() {
