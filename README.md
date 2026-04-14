@@ -2,6 +2,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Version: v0.1.0](https://img.shields.io/badge/version-v0.1.0-brightgreen.svg)](CHANGELOG.md)
+[![CI](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/TheMorpheus407/RepoLens?style=social)](https://github.com/TheMorpheus407/RepoLens)
 
 **Multi-lens code audit tool.** Runs 280 specialist lenses across 27 domains against any git repository or live server and creates GitHub issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, and infrastructure auditing — all with deep specialization.

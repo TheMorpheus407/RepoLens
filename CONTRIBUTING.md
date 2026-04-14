@@ -217,6 +217,8 @@ Tests live in the `tests/` directory and follow the `test_*.sh` naming pattern. 
 
 When adding a new lens, run `make check` to verify your lens file is correctly structured and registered.
 
+CI runs ShellCheck and the full test suite automatically on every pull request and push to `master`. You will see the results as a status check on your PR.
+
 ## Reporting Bugs
 
 Open a [GitHub issue](https://github.com/TheMorpheus407/RepoLens/issues) with:

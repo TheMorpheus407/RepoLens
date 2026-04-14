@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - `--local` flag: write findings as local markdown files instead of creating GitHub issues — no `gh` CLI required
 - `--output <path>` flag: custom output directory for local markdown files (requires `--local`, defaults to `logs/<run-id>/issues/`)
 
+### Infrastructure
+
+- GitHub Actions CI workflow: ShellCheck linting and test suite (`make check`) run on every push to `master` and pull request
+- CI status badge in README
+
 ## [0.1.0] - 2026-04-14
 
 ### Added
