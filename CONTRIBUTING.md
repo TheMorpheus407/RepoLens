@@ -198,6 +198,7 @@ The DCO is a lightweight alternative to a full CLA — it simply means you agree
 
 All shell scripts in RepoLens follow these conventions:
 
+- Every `.sh` file must include the Apache 2.0 license header immediately after the shebang line. See any existing file (e.g., `lib/core.sh`) for the exact 13-line header block
 - Use `set -uo pipefail` at the top of every script — do not use `set -e` (callers handle errors explicitly)
 - Functions should be pure where possible — side effects must be documented in comments
 - Config is JSON, parsed with `jq`

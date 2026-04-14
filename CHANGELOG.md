@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - `GOVERNANCE.md` documenting project leadership (BDFL model), decision-making, contribution acceptance criteria, conflict resolution, and governance evolution
 - Governance section in README linking to `GOVERNANCE.md`
 
+### Compliance
+
+- All `.sh` source files now include the standard Apache 2.0 license header (copyright, license grant, and disclaimer) after the shebang line, per the Apache License 2.0 APPENDIX recommendation. This ensures individual files remain license-identifiable when extracted or redistributed outside the full repository context
+
 ### Security
 
 - `.gitignore` now covers common sensitive file patterns (`.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.jks`, `*.keystore`, `*.pfx`, `key.properties`, `google-services.json`, `GoogleService-Info.plist`, `credentials.json`, `secrets.yaml`, `secrets.yml`) to prevent accidental secret commits. `.env.example` is excluded so contributors can commit environment variable templates
