@@ -206,6 +206,8 @@ For a deeper look at the methodology — how lenses are composed, how agents ite
 
 ## Adding a Lens
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contribution workflow (fork, branch, PR process).
+
 1. Create `prompts/lenses/<domain>/<your-lens>.md`:
 
 ```yaml
