@@ -268,10 +268,5 @@ When using `--agent claude`, RepoLens displays an explanation of the flag and as
 
 ## Support
 
-If you find RepoLens useful, consider supporting its development:
-
-- Star this repo on GitHub
-- [Sponsor on GitHub](https://github.com/sponsors/TheMorpheus407)
-- [Support on Patreon](https://patreon.com/themorpheus407)
-- Share it with your team
+Supported by [Patreon patrons](https://patreon.com/themorpheus407) — thank you.
 
