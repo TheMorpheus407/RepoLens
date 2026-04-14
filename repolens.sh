@@ -12,6 +12,32 @@ source "$SCRIPT_DIR/lib/summary.sh"
 source "$SCRIPT_DIR/lib/parallel.sh"
 source "$SCRIPT_DIR/lib/hosted.sh"
 
+VERSION="0.1.0"
+
+show_version() {
+  local sponsors_file="$SCRIPT_DIR/config/sponsors.json"
+  echo "RepoLens v${VERSION}"
+  echo ""
+  if [[ -f "$sponsors_file" ]] && command -v jq >/dev/null 2>&1; then
+    echo "Sponsors:"
+    jq -r '.sponsors[] | "  \(.name): \(.url)"' "$sponsors_file" 2>/dev/null
+  fi
+}
+
+show_about() {
+  local sponsors_file="$SCRIPT_DIR/config/sponsors.json"
+  echo "RepoLens v${VERSION}"
+  echo ""
+  echo "A standalone multi-lens code audit and analysis tool."
+  echo "Runs expert analysis agents against any git repository or live server"
+  echo "and creates GitHub issues for real findings."
+  echo ""
+  if [[ -f "$sponsors_file" ]] && command -v jq >/dev/null 2>&1; then
+    echo "Sponsors:"
+    jq -r '.sponsors[] | "  \(.name): \(.url)"' "$sponsors_file" 2>/dev/null
+  fi
+}
+
 # --- Usage ---
 usage() {
   cat <<'EOF'
@@ -39,6 +65,8 @@ Options:
   --yes, -y               Skip confirmation prompt (for CI/automation)
   --max-cost <amount>     Warn if estimated cost exceeds this dollar amount
   --dry-run               Validate config and show what would run, then exit (no agents executed)
+  --version               Show version and sponsor information, then exit
+  --about                 Show tool description and sponsor information, then exit
   -h, --help              Show help
 
 Examples:
@@ -247,6 +275,14 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "Option --max-cost requires a dollar amount."
       MAX_COST="$2"
       shift 2
+      ;;
+    --version)
+      show_version
+      exit 0
+      ;;
+    --about)
+      show_about
+      exit 0
       ;;
     -h|--help)
       usage

@@ -129,6 +129,8 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--max-cost <amount>` | Warn if estimated cost exceeds this dollar amount (e.g., `--max-cost 10`) |
 | `--dry-run` | Validate config and show which lenses would run, then exit (no agents executed) |
 | `--yes, -y` | Skip confirmation prompt (for CI/automation) |
+| `--version` | Show version and sponsor information, then exit |
+| `--about` | Show tool description and sponsor information, then exit |
 | `-h, --help` | Show help |
 
 ## Domains & Lenses (280 total across 27 domains)
