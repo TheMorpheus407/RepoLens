@@ -16,8 +16,11 @@
 # RepoLens — DONE streak detection
 
 # Strip ANSI escape sequences from stdin.
+# Uses a bash variable for the ESC byte instead of \x1b hex escapes in sed,
+# because BSD sed (macOS) does not support \x1b — only GNU sed does.
 strip_ansi() {
-  sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b\([0-9;]*[a-zA-Z]//g; s/\x1b\]8;[^\]*\\//g'
+  local esc=$'\x1b'
+  sed -E "s/${esc}\[[0-9;]*[a-zA-Z]//g; s/${esc}\([0-9;]*[a-zA-Z]//g; s/${esc}\]8;[^\\\\]*\\\\//g"
 }
 
 # Strip non-alphanumeric (keep _), uppercase.
