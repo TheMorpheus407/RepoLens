@@ -44,6 +44,7 @@ RepoLens runs AI agents with shell access against target repositories and server
 - **Deploy mode** runs commands on live servers — always review agent output
 - The `--dangerously-skip-permissions` flag grants agents autonomous operation without confirmation prompts
 - Prompt templates are user-facing and should be reviewed for injection risks
+- `--spec` file content is embedded in agent prompts — known tag-breakout vectors are sanitized, but only use spec files from trusted sources
 
 ## Supported Versions
 

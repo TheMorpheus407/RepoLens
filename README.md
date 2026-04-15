@@ -147,6 +147,7 @@ Start small with `--focus <lens-id>` or one `--domain`, then scale up with `--pa
 Under the hood, RepoLens spawns AI agents (claude, codex, etc.) with shell access — claude specifically runs with `--dangerously-skip-permissions` for autonomous operation. That means:
 
 - **Prompt injection is trivial.** A README, code comment, commit message, or docstring in the scanned repo can instruct the agent to do arbitrary things.
+- **`--spec` files from untrusted sources are dangerous.** Spec content is embedded in the agent prompt. While RepoLens sanitizes known tag-breakout vectors (e.g., `</spec>` injection), a malicious spec file can still influence agent behavior through indirect prompt injection. Only use `--spec` with files you wrote or trust completely.
 - **Scripts in the scanned repo can execute.** A hostile `docker-compose.yml`, `Makefile`, `package.json` postinstall hook, or shell script could be invoked by the agent while investigating.
 - **Deploy mode runs live shell commands** against whatever host you point it at — see also [Legal → Deploy Mode](#deploy-mode--authorization-required) for the authorization requirements.
 
