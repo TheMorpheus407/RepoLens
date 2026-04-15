@@ -563,6 +563,35 @@ if [[ -f "$SHELLCHECKRC" ]]; then
   assert_matches "has disable= directive" "^disable=SC[0-9]+" "$sc_content"
 fi
 
+echo ""
+echo "Test 56: All test files are executable"
+TOTAL=$((TOTAL + 1))
+non_exec=()
+for t in "$SCRIPT_DIR"/tests/test_*.sh; do
+  if [[ ! -x "$t" ]]; then
+    non_exec+=("$(basename "$t")")
+  fi
+done
+if [[ "${#non_exec[@]}" -eq 0 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: every tests/test_*.sh is executable"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: ${#non_exec[@]} test file(s) not executable:"
+  for f in "${non_exec[@]}"; do
+    echo "    - $f"
+  done
+fi
+
+echo ""
+echo "Test 57: README documents how to run tests"
+README_FILE="$SCRIPT_DIR/README.md"
+if [[ -f "$README_FILE" ]]; then
+  readme_content="$(cat "$README_FILE")"
+  assert_contains "README has Running Tests section" "Running Tests" "$readme_content"
+  assert_contains "README documents make check entry point" "make check" "$readme_content"
+fi
+
 # --- Summary ---
 echo ""
 echo "================================"
