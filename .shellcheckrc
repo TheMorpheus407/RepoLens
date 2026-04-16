@@ -1,3 +1,5 @@
 # We intentionally use set -uo pipefail without set -e
 # Callers handle errors explicitly
-disable=SC2317
+# SC2015: A && B || C is intentional (|| true to suppress exit codes)
+# SC2016: Single-quoted $0 is intentional (expands in child shell, not parent)
+disable=SC2317,SC2015,SC2016

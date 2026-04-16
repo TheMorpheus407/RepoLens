@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
+
 # tests/run-all.sh — pure-bash test runner that mirrors `make check`.
 #
 # Produces output in the SAME format the Makefile does so any existing consumer

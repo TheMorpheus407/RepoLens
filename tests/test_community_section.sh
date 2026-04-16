@@ -269,7 +269,7 @@ echo ""
 echo "Test 23: ## Security appears before ## Legal"
 TOTAL=$((TOTAL + 1))
 if [[ -f "$README" ]]; then
-  security_line="$(grep -n '## Security' "$README" | head -1 | cut -d: -f1)"
+  security_line="$(grep -n '^## Security$' "$README" | head -1 | cut -d: -f1)"
   legal_line="$(grep -n '## Legal' "$README" | head -1 | cut -d: -f1)"
   if [[ -n "$security_line" && -n "$legal_line" && "$security_line" -lt "$legal_line" ]]; then
     PASS=$((PASS + 1))
@@ -307,9 +307,9 @@ echo ""
 echo "Test 25: Community sections appear in correct order (Contributing → Authors → Security)"
 TOTAL=$((TOTAL + 1))
 if [[ -f "$README" ]]; then
-  contributing_line="$(grep -n '## Contributing' "$README" | head -1 | cut -d: -f1)"
-  authors_line="$(grep -n '## Authors' "$README" | head -1 | cut -d: -f1)"
-  security_line="$(grep -n '## Security' "$README" | head -1 | cut -d: -f1)"
+  contributing_line="$(grep -n '^## Contributing' "$README" | head -1 | cut -d: -f1)"
+  authors_line="$(grep -n '^## Authors' "$README" | head -1 | cut -d: -f1)"
+  security_line="$(grep -n '^## Security$' "$README" | head -1 | cut -d: -f1)"
   if [[ -n "$contributing_line" && -n "$authors_line" && -n "$security_line" && \
         "$contributing_line" -lt "$authors_line" && "$authors_line" -lt "$security_line" ]]; then
     PASS=$((PASS + 1))
@@ -472,7 +472,7 @@ echo ""
 echo "Test 37: ## Support is separate from ## Contributing (different line numbers)"
 TOTAL=$((TOTAL + 1))
 if [[ -f "$README" ]]; then
-  support_line="$(grep -n '## Support' "$README" | head -1 | cut -d: -f1)"
+  support_line="$(grep -n '^## Support$' "$README" | head -1 | cut -d: -f1)"
   contributing_line="$(grep -n '## Contributing' "$README" | head -1 | cut -d: -f1)"
   if [[ -n "$support_line" && -n "$contributing_line" && "$support_line" -ne "$contributing_line" ]]; then
     PASS=$((PASS + 1))

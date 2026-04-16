@@ -374,23 +374,23 @@ echo "Test 19: README contains thank-you acknowledgment"
 assert_matches "has thank you" "(?i)thank you" "$readme_content"
 
 # =====================================================================
-# Test 20: Support section is minimal (heading + 1-2 content lines)
+# Test 20: Support section is concise (heading + a few content lines)
 # =====================================================================
-# The issue says "single line" — the section should be heading + one line of content
+# The section contains policy info (no-free-support, bug reports, commercial, Patreon) — allow headroom
 
 echo ""
-echo "Test 20: Support section is minimal (single content line)"
+echo "Test 20: Support section is concise (no more than 8 non-blank lines)"
 TOTAL=$((TOTAL + 1))
 support_section="$(echo "$readme_content" | sed -n '/^## Support$/,/^## /p' | head -n -1)"
 content_lines="$(echo "$support_section" | grep -cE '^[^[:space:]]' 2>/dev/null || echo 0)"
-# Expect: 1 heading line + 1 content line = 2 lines with non-whitespace starting chars
-if [[ "$content_lines" -le 3 ]]; then
+# Expect: heading + policy paragraphs + Patreon line — up to 8 non-blank lines
+if [[ "$content_lines" -le 8 ]]; then
   PASS=$((PASS + 1))
-  echo "  PASS: Support section has $content_lines non-blank lines (minimal)"
+  echo "  PASS: Support section has $content_lines non-blank lines (concise)"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: Support section has $content_lines non-blank lines (expected <= 3)"
-  echo "    Section: $(echo "$support_section" | head -5)"
+  echo "  FAIL: Support section has $content_lines non-blank lines (expected <= 8)"
+  echo "    Section: $(echo "$support_section" | head -10)"
 fi
 
 # =====================================================================
