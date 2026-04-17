@@ -275,6 +275,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REPOLENS_AGENT_TIMEOUT` | `600` | Per-invocation agent timeout in seconds. Every agent call is wrapped with `timeout(1)` at this cap — if an agent hangs (stuck network, auth prompt, quota check in flight), the invocation is killed, the iteration is logged with `[ERROR] agent timed out after Ns`, and the lens loop continues. Deploy / content modes with long read cycles may benefit from a higher value (e.g. `REPOLENS_AGENT_TIMEOUT=1800`). |
+| `REPOLENS_CHILD_MAX_WAIT` | `14400` | Per-child deadline in seconds for parallel-mode workers. `wait_all` polls each background lens with `kill -0` + `sleep 1` and, if a child exceeds this deadline, sends SIGTERM (10s grace) then SIGKILL, logs `[lens_id] exceeded REPOLENS_CHILD_MAX_WAIT=Ns`, and continues reaping the remaining children. Outer safety net — the agent-level `REPOLENS_AGENT_TIMEOUT` handles the inner loop. Should be ≥ `MAX_ITERATIONS_PER_LENS × REPOLENS_AGENT_TIMEOUT` plus a buffer for non-agent I/O (`gh` queries, file locks). |
 
 ## Domains & Lenses (280 total across 27 domains)
 
