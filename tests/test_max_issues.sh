@@ -407,9 +407,35 @@ else
 fi
 
 echo ""
-echo "Test 28: count_repo_issues — returns 0 for nonexistent repo"
-result="$(count_repo_issues "nonexistent-owner/nonexistent-repo-xyz" "fake-label")"
-assert_eq "zero for nonexistent repo" "0" "$result"
+echo "Test 28: count_repo_issues — returns non-zero + empty stdout when gh fails"
+# Previously this test asserted "0" for an unreachable repo, which encoded the
+# bug fixed in issue #116: silently swallowing gh failures as zero. New
+# contract: gh failure → function exits 1 with empty stdout so callers can
+# distinguish "unknown" from "legitimately zero".
+_t28_fake_bin="$(mktemp -d)"
+cat > "$_t28_fake_bin/gh" <<'FAKE_GH'
+#!/usr/bin/env bash
+echo "HTTP 403: rate limit exceeded" >&2
+exit 1
+FAKE_GH
+chmod +x "$_t28_fake_bin/gh"
+_t28_orig_path="$PATH"
+PATH="$_t28_fake_bin:$PATH"
+set +u
+t28_result="$(count_repo_issues "some-owner/some-repo" "some-label" 2>/dev/null)"
+t28_rc=$?
+set -u
+PATH="$_t28_orig_path"
+rm -rf "$_t28_fake_bin"
+assert_eq "empty stdout on gh failure" "" "$t28_result"
+TOTAL=$((TOTAL + 1))
+if [[ "$t28_rc" -ne 0 ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: non-zero exit on gh failure (rc=$t28_rc)"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: expected non-zero exit on gh failure, got rc=$t28_rc"
+fi
 
 # =====================================================================
 # Run ID generation (xxd fix)

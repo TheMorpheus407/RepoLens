@@ -986,12 +986,24 @@ run_lens() {
 
   log_info "[$domain/$lens_id] Starting lens: $lens_name"
 
-  # Snapshot issue count before loop
+  # Snapshot issue count before loop.
+  # count_repo_issues now returns non-zero + empty stdout when gh fails;
+  # we must NOT collapse that back into 0 (it would reintroduce the silent
+  # failure bug). If the baseline cannot be established, fall back to 0
+  # with a prominent warning. This may over-count later deltas, which is
+  # safe — at worst we trip MAX_ISSUES earlier. Under-counting was the
+  # original bug: summary claimed 0 while GitHub actually held N > 0.
   local issues_baseline=0
   if $LOCAL_MODE; then
     issues_baseline="$(count_dry_run_issues "$lens_local_dir")"
   else
-    issues_baseline="$(count_repo_issues "$REPO_OWNER/$REPO_NAME" "$lens_label")"
+    local _baseline_out=""
+    if _baseline_out="$(count_repo_issues "$REPO_OWNER/$REPO_NAME" "$lens_label")"; then
+      issues_baseline="$_baseline_out"
+    else
+      issues_baseline=0
+      log_warn "[$domain/$lens_id] Could not establish issue baseline from GitHub; assuming 0. Per-lens counts may be inflated if pre-existing issues carry label '$lens_label'."
+    fi
   fi
 
   # Run lens loop with DONE streak detection
@@ -1033,18 +1045,30 @@ run_lens() {
       break
     fi
 
-    # Count issues created by this lens
-    local current_issue_count
+    # Count issues created by this lens.
+    # If count_repo_issues fails (gh rate-limited, auth expired, network
+    # blip, repo gone, etc.) we MUST NOT treat that as "0 issues" — that
+    # was the original bug. Reuse prev_lens_issues so the counter stays
+    # monotonic and the summary doesn't lie about what GitHub holds.
+    local current_issue_count=""
+    local count_ok=true
     if $LOCAL_MODE; then
       current_issue_count="$(count_dry_run_issues "$lens_local_dir")"
     else
-      current_issue_count="$(count_repo_issues "$REPO_OWNER/$REPO_NAME" "$lens_label")"
+      if ! current_issue_count="$(count_repo_issues "$REPO_OWNER/$REPO_NAME" "$lens_label")"; then
+        count_ok=false
+      fi
     fi
-    lens_issues=$((current_issue_count - issues_baseline))
-    [[ "$lens_issues" -lt 0 ]] && lens_issues=0
-    local iter_issues=$((lens_issues - prev_lens_issues))
-    [[ "$iter_issues" -gt 0 ]] && log_info "[$domain/$lens_id] $iter_issues issue(s) created this iteration ($lens_issues lens total)"
-    prev_lens_issues="$lens_issues"
+    if $count_ok; then
+      lens_issues=$((current_issue_count - issues_baseline))
+      [[ "$lens_issues" -lt 0 ]] && lens_issues=0
+      local iter_issues=$((lens_issues - prev_lens_issues))
+      [[ "$iter_issues" -gt 0 ]] && log_info "[$domain/$lens_id] $iter_issues issue(s) created this iteration ($lens_issues lens total)"
+      prev_lens_issues="$lens_issues"
+    else
+      log_warn "[$domain/$lens_id] Iteration $iteration: unable to query GitHub issue count; reusing previous count ($prev_lens_issues). Delta for this iteration is unknown."
+      lens_issues="$prev_lens_issues"
+    fi
 
     # Check global issue budget
     if [[ -n "$MAX_ISSUES" ]]; then
