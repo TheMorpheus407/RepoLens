@@ -251,8 +251,11 @@ fi
 _MAKE_OK_OUT=""
 _MAKE_OK_RC=0
 if [[ -f "$SCRIPT_DIR/Makefile" ]] && command -v make >/dev/null 2>&1; then
-  _MAKE_OK_OUT="$(cd "$SCRIPT_DIR" && REPOLENS_MAKE_CHECK=1 make check 2>&1 || true)"
-  (cd "$SCRIPT_DIR" && REPOLENS_MAKE_CHECK=1 make check >/dev/null 2>&1); _MAKE_OK_RC=$?
+  # set -e is not active (script uses set -uo pipefail), so a non-zero
+  # exit from the command substitution won't abort — $? correctly
+  # captures make's rc.
+  _MAKE_OK_OUT="$(cd "$SCRIPT_DIR" && REPOLENS_MAKE_CHECK=1 make check 2>&1)"
+  _MAKE_OK_RC=$?
 fi
 
 echo ""
@@ -325,7 +328,7 @@ echo "Results: 0/1 passed, 1 failed"
 exit 1
 FAILEOF
   chmod +x "$_fail_script"
-  _FAIL_MAKE_OUT="$(cd "$SCRIPT_DIR" && REPOLENS_MAKE_CHECK=1 make check 2>&1 || true)"
+  _FAIL_MAKE_OUT="$(cd "$SCRIPT_DIR" && REPOLENS_MAKE_CHECK=1 make check 2>&1)"
   _FAIL_MAKE_RC=$?
   rm -f "$_fail_script"
 fi
