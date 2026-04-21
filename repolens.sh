@@ -1041,15 +1041,24 @@ run_lens() {
     # abort the whole run instead of burning MAX_ITERATIONS_PER_LENS * lenses
     # worth of no-op invocations. Checked BEFORE check_done so a rate-limited
     # agent cannot accidentally trip the DONE path.
+    #
+    # Gate on agent_rc != 0 (issue #128): all supported agent CLIs exit
+    # non-zero on an upstream rate-limit / quota / auth error. A successful
+    # iteration (rc == 0) that happens to quote user code containing
+    # "usage limit" / "rate limit" / "try again in" is a finding, not an
+    # API failure — running the detector there produces false aborts that
+    # skip every remaining lens.
     local rl_hit rl_sig rl_snip
-    rl_hit="$(detect_agent_rate_limit "$output_file" || true)"
-    if [[ -n "$rl_hit" ]]; then
-      rl_sig="${rl_hit%%|*}"
-      rl_snip="${rl_hit#*|}"
-      log_error "[$domain/$lens_id] Agent rate-limited / quota exceeded. Aborting run. Matched: $rl_sig. Snippet: $rl_snip"
-      : > "$LOG_BASE/.rate-limit-abort"
-      exit_status="rate-limited"
-      break
+    if [[ "$agent_rc" -ne 0 ]]; then
+      rl_hit="$(detect_agent_rate_limit "$output_file" || true)"
+      if [[ -n "$rl_hit" ]]; then
+        rl_sig="${rl_hit%%|*}"
+        rl_snip="${rl_hit#*|}"
+        log_error "[$domain/$lens_id] Agent rate-limited / quota exceeded. Aborting run. Matched: $rl_sig. Snippet: $rl_snip"
+        : > "$LOG_BASE/.rate-limit-abort"
+        exit_status="rate-limited"
+        break
+      fi
     fi
 
     # Count issues created by this lens.
