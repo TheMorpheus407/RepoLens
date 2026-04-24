@@ -77,3 +77,36 @@ detect_forge_provider() {
   esac
   return 0
 }
+
+# require_forge_cli <provider>
+#   Verifies the forge CLI binary for <provider> is on PATH.
+#   On success: returns 0 silently.
+#   On failure: calls die() with a provider-specific install hint (exit 1).
+#
+#   Valid providers: gh | tea | fj
+#   Any other value dies with an "unknown provider" message to guard against
+#   caller typos.
+#
+#   Depends on die() from lib/core.sh — sourcing forge.sh without core.sh
+#   means callers must define die themselves (the companion
+#   detect_forge_provider has no such dependency).
+require_forge_cli() {
+  local provider="${1:-}"
+  case "$provider" in
+    gh)
+      command -v gh >/dev/null 2>&1 \
+        || die "gh not found — install from https://cli.github.com"
+      ;;
+    tea)
+      command -v tea >/dev/null 2>&1 \
+        || die "tea not found — install from https://gitea.com/gitea/tea"
+      ;;
+    fj)
+      command -v fj >/dev/null 2>&1 \
+        || die "fj not found — install from https://codeberg.org/Codeberg/fj"
+      ;;
+    *)
+      die "require_forge_cli: unknown provider '$provider' (expected gh|tea|fj)"
+      ;;
+  esac
+}

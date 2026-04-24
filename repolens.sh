@@ -36,6 +36,7 @@ source "$SCRIPT_DIR/lib/template.sh"
 source "$SCRIPT_DIR/lib/summary.sh"
 source "$SCRIPT_DIR/lib/parallel.sh"
 source "$SCRIPT_DIR/lib/hosted.sh"
+source "$SCRIPT_DIR/lib/forge.sh"
 
 VERSION="0.1.0"
 
@@ -88,6 +89,7 @@ Options:
   --max-issues <n>        Stop after creating n total issues (dry-run quality check)
   --local                 Write findings as local markdown files instead of creating GitHub issues
   --output <path>         Output directory for local markdown files (requires --local, default: logs/<run-id>/issues/)
+  --forge <provider>      gh (GitHub) | tea (Gitea) | fj (Forgejo/Codeberg) — overrides auto-detection from origin
   --hosted                Spin up project's Docker Compose in isolated network for DAST scanning and testing
   --yes, -y               Skip confirmation prompt (for CI/automation)
   --max-cost <amount>     Warn if min. cost estimate exceeds this dollar amount (real cost typically 2–5x higher)
@@ -242,6 +244,7 @@ MAX_COST=""
 DRY_RUN=false
 LOCAL_MODE=false
 OUTPUT_DIR=""
+FORGE_PROVIDER=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -319,6 +322,11 @@ while [[ $# -gt 0 ]]; do
     --output)
       [[ $# -ge 2 ]] || die "Option --output requires a path argument."
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --forge)
+      [[ $# -ge 2 ]] || die "Option --forge requires an argument (gh|tea|fj)."
+      FORGE_PROVIDER="$2"
       shift 2
       ;;
     --dry-run)
@@ -472,9 +480,6 @@ fi
 # --- Validate agent and dependencies ---
 validate_agent "$AGENT"
 require_cmd git
-if ! $LOCAL_MODE; then
-  require_cmd gh
-fi
 require_cmd jq
 require_cmd timeout
 
@@ -484,7 +489,27 @@ case "$AGENT" in
   opencode|opencode/*) require_cmd opencode ;;
 esac
 
+# --- Resolve and validate forge provider ---
+if [[ -n "$FORGE_PROVIDER" ]]; then
+  case "$FORGE_PROVIDER" in
+    gh|tea|fj) ;;
+    *) die "Invalid --forge: $FORGE_PROVIDER (expected gh, tea, or fj)" ;;
+  esac
+else
+  _origin_url="$(git -C "$PROJECT_PATH" remote get-url origin 2>/dev/null || true)"
+  FORGE_PROVIDER="$(detect_forge_provider "$_origin_url")"
+  unset _origin_url
+fi
+
+if ! $LOCAL_MODE; then
+  if [[ "$FORGE_PROVIDER" == "unknown" ]]; then
+    die "Could not detect forge provider from origin remote. Pass --forge <gh|tea|fj> explicitly (required for self-hosted Gitea/Forgejo instances)."
+  fi
+  require_forge_cli "$FORGE_PROVIDER"
+fi
+
 # --- Validate gh auth ---
+# TODO (#59): route through forge_auth_status to cover tea/fj.
 if ! $LOCAL_MODE; then
   gh auth status >/dev/null 2>&1 || die "gh is not authenticated. Run 'gh auth login'."
 fi
