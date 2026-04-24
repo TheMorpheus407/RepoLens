@@ -110,3 +110,71 @@ require_forge_cli() {
       ;;
   esac
 }
+
+# forge_auth_status
+#   Verify the user is authenticated against the current forge. Prints
+#   nothing on success; dies on failure. Provider dispatch reads
+#   $FORGE_PROVIDER (resolved by repolens.sh before any forge call).
+#
+#   gh  → `gh auth status` — exit 0 ok, non-zero triggers die with the
+#         exact README-troubleshooting message.
+#   tea → die "not yet implemented" (lands in #61).
+#   fj  → die "not yet implemented" (lands in #62).
+#
+#   Callers in repolens.sh keep their outer `if ! $LOCAL_MODE` gate —
+#   this wrapper is provider-aware but not mode-aware.
+#
+#   Depends on die() from lib/core.sh.
+forge_auth_status() {
+  case "${FORGE_PROVIDER:-}" in
+    gh)
+      gh auth status >/dev/null 2>&1 \
+        || die "gh is not authenticated. Run 'gh auth login'."
+      ;;
+    tea)
+      die "forge_auth_status: tea backend not yet implemented (see #61)"
+      ;;
+    fj)
+      die "forge_auth_status: fj backend not yet implemented (see #62)"
+      ;;
+    *)
+      die "forge_auth_status: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      ;;
+  esac
+}
+
+# forge_label_create <label> <color> <owner/repo>
+#   Create or update (upsert) a label on the target repository.
+#   Best-effort by design: non-zero exit from the underlying CLI is
+#   swallowed (matches the pre-refactor inline `|| true`) so a labels
+#   permission error never halts a run.
+#
+#   gh  → `gh label create <label> --color <color> --force -R <owner/repo>`
+#         with stderr suppressed and exit ignored.
+#   tea → die "not yet implemented" (lands in #61).
+#   fj  → die "not yet implemented" (lands in #62).
+#
+#   All three args are required; any missing arg is a caller bug and
+#   dies loudly rather than pass garbage to the forge CLI.
+#
+#   Depends on die() from lib/core.sh.
+forge_label_create() {
+  local label="${1:-}" color="${2:-}" repo="${3:-}"
+  [[ -n "$label" && -n "$color" && -n "$repo" ]] \
+    || die "forge_label_create: missing argument (label='$label' color='$color' repo='$repo')"
+
+  case "${FORGE_PROVIDER:-}" in
+    gh)
+      gh label create "$label" --color "$color" --force -R "$repo" 2>/dev/null || true
+      ;;
+    tea)
+      die "forge_label_create: tea backend not yet implemented (see #61)"
+      ;;
+    fj)
+      die "forge_label_create: fj backend not yet implemented (see #62)"
+      ;;
+    *)
+      die "forge_label_create: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      ;;
+  esac
+}

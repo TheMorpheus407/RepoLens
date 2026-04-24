@@ -508,10 +508,9 @@ if ! $LOCAL_MODE; then
   require_forge_cli "$FORGE_PROVIDER"
 fi
 
-# --- Validate gh auth ---
-# TODO (#59): route through forge_auth_status to cover tea/fj.
+# --- Validate forge auth ---
 if ! $LOCAL_MODE; then
-  gh auth status >/dev/null 2>&1 || die "gh is not authenticated. Run 'gh auth login'."
+  forge_auth_status
 fi
 
 # --- Generate or resume run ID ---
@@ -903,19 +902,19 @@ ensure_labels() {
     local color
     color="$(jq -r --arg d "$domain" '.[$d] // "ededed"' "$COLORS_FILE")"
 
-    gh label create "$label" --color "$color" --force -R "$REPO_OWNER/$REPO_NAME" 2>/dev/null || true
+    forge_label_create "$label" "$color" "$REPO_OWNER/$REPO_NAME"
   done
 
   # Ensure enhancement label for discover mode
   if [[ "$MODE" == "discover" ]]; then
-    gh label create "enhancement" --color "a2eeef" --force -R "$REPO_OWNER/$REPO_NAME" 2>/dev/null || true
+    forge_label_create "enhancement" "a2eeef" "$REPO_OWNER/$REPO_NAME"
   fi
 
   if [[ -n "$SPEC_FILE" ]]; then
     local spec_basename
     spec_basename="$(basename "$SPEC_FILE" | sed 's/\.[^.]*$//')"
     local spec_label="spec:${spec_basename}"
-    gh label create "$spec_label" --color "c9b1ff" --force -R "$REPO_OWNER/$REPO_NAME" 2>/dev/null || true
+    forge_label_create "$spec_label" "c9b1ff" "$REPO_OWNER/$REPO_NAME"
   fi
 
   log_info "Labels ready."
