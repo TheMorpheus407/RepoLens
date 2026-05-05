@@ -170,7 +170,7 @@
       "id": "kubernetes",
       "name": "Kubernetes",
       "order": 28,
-      "lenses": ["security-context", "network-policies"]
+      "lenses": ["security-context", "network-policies", "resource-management"]
     }
   ]
 }

@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tests for issue #66/#67: kubernetes lens integration.
+# Tests for issue #66/#67/#68: kubernetes lens integration.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SECURITY_CONTEXT_LENS_FILE="$SCRIPT_DIR/prompts/lenses/kubernetes/security-context.md"
 NETWORK_POLICIES_LENS_FILE="$SCRIPT_DIR/prompts/lenses/kubernetes/network-policies.md"
+RESOURCE_MANAGEMENT_LENS_FILE="$SCRIPT_DIR/prompts/lenses/kubernetes/resource-management.md"
 DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
 COLORS_FILE="$SCRIPT_DIR/config/label-colors.json"
 
@@ -67,11 +68,12 @@ assert_file_exists() {
 }
 
 echo ""
-echo "=== Test Suite: kubernetes lenses (issues #66/#67) ==="
+echo "=== Test Suite: kubernetes lenses (issues #66/#67/#68) ==="
 echo ""
 
 assert_file_exists "security-context lens prompt exists" "$SECURITY_CONTEXT_LENS_FILE"
 assert_file_exists "network-policies lens prompt exists" "$NETWORK_POLICIES_LENS_FILE"
+assert_file_exists "resource-management lens prompt exists" "$RESOURCE_MANAGEMENT_LENS_FILE"
 
 security_context_content=""
 if [[ -f "$SECURITY_CONTEXT_LENS_FILE" ]]; then
@@ -81,6 +83,11 @@ fi
 network_policies_content=""
 if [[ -f "$NETWORK_POLICIES_LENS_FILE" ]]; then
   network_policies_content="$(cat "$NETWORK_POLICIES_LENS_FILE")"
+fi
+
+resource_management_content=""
+if [[ -f "$RESOURCE_MANAGEMENT_LENS_FILE" ]]; then
+  resource_management_content="$(cat "$RESOURCE_MANAGEMENT_LENS_FILE")"
 fi
 
 echo ""
@@ -150,9 +157,9 @@ kubernetes_mode="$(jq -r '.domains[] | select(.id == "kubernetes") | .mode // "n
 assert_eq "no mode field" "null" "$kubernetes_mode"
 
 echo ""
-echo "Test 9: Kubernetes domain contains both lenses in stable order"
+echo "Test 9: Kubernetes domain contains all lenses in stable order"
 kubernetes_lenses="$(jq -r '.domains[] | select(.id == "kubernetes") | .lenses | join(",")' "$DOMAINS_FILE")"
-assert_eq "registered lens list" "security-context,network-policies" "$kubernetes_lenses"
+assert_eq "registered lens list" "security-context,network-policies,resource-management" "$kubernetes_lenses"
 
 echo ""
 echo "Test 10: Kubernetes label color is configured"
@@ -160,10 +167,10 @@ kubernetes_color="$(jq -r '.kubernetes // empty' "$COLORS_FILE")"
 assert_eq "kubernetes label color" "326ce5" "$kubernetes_color"
 
 echo ""
-echo "Test 11: Audit-like mode resolution includes both Kubernetes lenses"
+echo "Test 11: Audit-like mode resolution includes all Kubernetes lenses"
 audit_lenses="$(jq -r --arg mode "audit" \
   '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
-for lens in kubernetes/security-context kubernetes/network-policies; do
+for lens in kubernetes/security-context kubernetes/network-policies kubernetes/resource-management; do
   if grep -qxF "$lens" <<< "$audit_lenses"; then
     PASS=$((PASS + 1))
     TOTAL=$((TOTAL + 1))
@@ -180,7 +187,7 @@ echo "Test 12: Exclusive modes do not include Kubernetes lenses"
 for mode in discover deploy opensource content; do
   mode_lenses="$(jq -r --arg mode "$mode" \
     '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
-  for lens in kubernetes/security-context kubernetes/network-policies; do
+  for lens in kubernetes/security-context kubernetes/network-policies kubernetes/resource-management; do
     if grep -qxF "$lens" <<< "$mode_lenses"; then
       FAIL=$((FAIL + 1))
       TOTAL=$((TOTAL + 1))
@@ -191,6 +198,35 @@ for mode in discover deploy opensource content; do
       echo "  PASS: $mode mode excludes $lens"
     fi
   done
+done
+
+echo ""
+echo "Test 13: resource-management frontmatter is complete"
+assert_contains "resource-management id frontmatter" "id: resource-management" "$resource_management_content"
+assert_contains "resource-management domain frontmatter" "domain: kubernetes" "$resource_management_content"
+assert_contains "resource-management name frontmatter" "name: Kubernetes Resource Management" "$resource_management_content"
+assert_contains "resource-management role frontmatter" "role: Kubernetes Resource Management Analyst" "$resource_management_content"
+
+echo ""
+echo "Test 14: resource-management body has required sections"
+assert_contains "resource-management expert focus section" "## Your Expert Focus" "$resource_management_content"
+assert_contains "resource-management hunt section" "### What You Hunt For" "$resource_management_content"
+assert_contains "resource-management investigate section" "### How You Investigate" "$resource_management_content"
+
+echo ""
+echo "Test 15: resource-management lens covers Kubernetes resource management risks"
+for term in \
+  "HorizontalPodAutoscaler" \
+  "PodDisruptionBudget" \
+  "resources.requests" \
+  "resources.limits" \
+  "requests.cpu" \
+  "LimitRange" \
+  "ResourceQuota" \
+  "StatefulSet" \
+  "minReplicas" \
+  "stabilizationWindowSeconds"; do
+  assert_contains "resource-management mentions $term" "$term" "$resource_management_content"
 done
 
 echo ""

@@ -5,7 +5,7 @@
 [![CI](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/TheMorpheus407/RepoLens?style=social)](https://github.com/TheMorpheus407/RepoLens)
 
-**Multi-lens code audit tool.** Runs 282 specialist lenses across 28 domains against any git repository or live server and creates remote issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, and infrastructure auditing — all with deep specialization.
+**Multi-lens code audit tool.** Runs 283 specialist lenses across 28 domains against any git repository or live server and creates remote issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, and infrastructure auditing — all with deep specialization.
 
 > [!IMPORTANT]
 > **RepoLens runs AI agents with shell access against your repository, and a full audit can cost hundreds of dollars in API charges.** It is NOT a sandboxed security tool, comes with NO warranty, and you use it entirely at your own risk. **Read [Warnings & Limits](#warnings--limits) before your first run** — especially the cost and security sections.
@@ -120,7 +120,7 @@ fj -H codeberg.org auth login  # Codeberg; use your Forgejo host for self-hosted
 # 5. Audit an entire domain
 ./repolens.sh --project ~/my-app --agent claude --domain security
 
-# 6. Full parallel audit (all 282 lenses)
+# 6. Full parallel audit (all 283 lenses)
 ./repolens.sh --project ~/my-app --agent claude --parallel --max-parallel 8
 ```
 
@@ -131,7 +131,7 @@ RepoLens is a power tool. Before you point it at anything you care about — or 
 ### Cost — RepoLens can be very expensive
 
 > [!CAUTION]
-> A full audit runs **282 lenses across 28 domains**. Each lens loops until the agent emits `DONE` three times in a row (`audit` / `feature` / `bugfix` modes). That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
+> A full audit runs **283 lenses across 28 domains**. Each lens loops until the agent emits `DONE` three times in a row (`audit` / `feature` / `bugfix` modes). That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
 
 **Before launching a full audit:**
 
@@ -146,7 +146,7 @@ You are responsible for every dollar of API spend. Know your per-token pricing.
 ### Rate Limits & Automated Traffic
 
 > [!NOTE]
-> RepoLens generates a lot of automated traffic. A 282-lens run can create dozens to hundreds of remote issues, plus repo reads via `gh`, `tea`, or `fj`, plus parallel AI provider calls.
+> RepoLens generates a lot of automated traffic. A 283-lens run can create dozens to hundreds of remote issues, plus repo reads via `gh`, `tea`, or `fj`, plus parallel AI provider calls.
 
 - **GitHub API / Gitea API / Forgejo API.** Authenticated `gh` calls count against GitHub API quotas; authenticated `tea` and `fj` calls count against your Gitea or Forgejo account/API quotas. Large runs can trip rate limits. Use `--max-issues <n>` to cap output, or `--local` to skip remote forge calls entirely.
 - **AI provider rate limits.** Every iteration consumes Anthropic / OpenAI tokens. Free and low-tier accounts will hit their RPM (requests-per-minute) and TPM (tokens-per-minute) ceilings immediately under `--parallel`. Verify your account is on a tier sized for concurrent agent traffic before scaling.
@@ -195,12 +195,12 @@ RepoLens supports 8 modes. Each mode controls which domains/lenses are visible a
 
 | Mode | DONE Streak | Domains | Description |
 |------|-------------|---------|-------------|
-| `audit` | 3× | 24 code/toolgate domains (212 lenses) | **Default.** Standard code audit — finds issues in existing code |
-| `feature` | 3× | 24 code/toolgate domains (212 lenses) | Feature gap discovery — identifies missing capabilities |
-| `bugfix` | 3× | 24 code/toolgate domains (212 lenses) | Bug hunting — finds real bugs and defects |
+| `audit` | 3× | 24 code/toolgate domains (213 lenses) | **Default.** Standard code audit — finds issues in existing code |
+| `feature` | 3× | 24 code/toolgate domains (213 lenses) | Feature gap discovery — identifies missing capabilities |
+| `bugfix` | 3× | 24 code/toolgate domains (213 lenses) | Bug hunting — finds real bugs and defects |
 | `discover` | 1× | `discovery` domain (14 lenses) | Product discovery — brainstorming for product strategy |
 | `deploy` | 1× | `deployment` domain (26 lenses) | Server audit — inspects a live server for operational issues |
-| `custom` | 1× | 24 code/toolgate domains (212 lenses) | Change impact analysis — identifies what needs adapting after a change |
+| `custom` | 1× | 24 code/toolgate domains (213 lenses) | Change impact analysis — identifies what needs adapting after a change |
 | `opensource` | 1× | `open-source-readiness` domain (13 lenses) | Open-source readiness — checks if a repo can go public safely |
 | `content` | 1× | `content-quality` domain (17 lenses) | Content audit & creation — audits or creates content from `--source` material |
 
@@ -292,7 +292,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `REPOLENS_AGENT_TIMEOUT` | `6000` | Per-invocation agent timeout in seconds. Every agent call is wrapped with `timeout(1)` at this cap — if an agent hangs (stuck network, auth prompt, quota check in flight), the invocation is killed, the iteration is logged with `[ERROR] agent timed out after Ns`, and the lens loop continues. Lower (e.g. `600`) for quick smoke runs; raise further for deep research agents on large repos. |
 | `REPOLENS_CHILD_MAX_WAIT` | `144000` | Per-child deadline in seconds for parallel-mode workers. `wait_all` polls each background lens with `kill -0` + `sleep 1` and, if a child exceeds this deadline, sends SIGTERM (10s grace) then SIGKILL, logs `[lens_id] exceeded REPOLENS_CHILD_MAX_WAIT=Ns`, and continues reaping the remaining children. Outer safety net — the agent-level `REPOLENS_AGENT_TIMEOUT` handles the inner loop. Should be ≥ `MAX_ITERATIONS_PER_LENS × REPOLENS_AGENT_TIMEOUT` plus a buffer for non-agent I/O (forge queries, file locks). |
 
-## Domains & Lenses (282 total across 28 domains)
+## Domains & Lenses (283 total across 28 domains)
 
 ### Code Analysis Domains (used by `audit`, `feature`, `bugfix`, `custom`)
 
@@ -321,7 +321,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | **Documentation** | 4 | Code docs, architecture docs, operational docs, onboarding |
 | **Concurrency** | 4 | Race conditions, async patterns, resource contention, transaction concurrency |
 | **Tool Gate** | 18 | Lint, typecheck, SAST, dependency CVEs, quality gates, test suite, DAST (web, injection, scanner, headers, API), session-based tools (ZAP, sqlmap, Nuclei, Lighthouse, k6, ZAP API, Schemathesis) |
-| **Kubernetes** | 2 | Pod/container security contexts, NetworkPolicy coverage, default-deny ingress/egress, DNS egress, namespace/pod selectors, broad CIDR rules |
+| **Kubernetes** | 3 | Pod/container security contexts, NetworkPolicy coverage, HPA/PDB coverage, resource requests/limits, LimitRange and ResourceQuota guardrails |
 
 ### Mode-Specific Domains
 
