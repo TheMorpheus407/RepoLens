@@ -2,14 +2,14 @@
 
 ## What This Is
 
-RepoLens is a standalone multi-lens code audit tool. It runs 286 expert analysis agents (198 code analysis + 18 tool gate + 14 product discovery + 26 deployment/server audit + 13 open-source readiness + 17 content quality) against any git repository or live server and creates GitHub issues for real findings. Think of it as automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, and infrastructure auditing with deep specialization.
+RepoLens is a standalone multi-lens code audit tool. It runs 287 expert analysis agents (199 code analysis + 18 tool gate + 14 product discovery + 26 deployment/server audit + 13 open-source readiness + 17 content quality) against any git repository or live server and creates GitHub issues for real findings. Think of it as automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, and infrastructure auditing with deep specialization.
 
 ## Architecture
 
 - **Entry point:** `repolens.sh` — CLI that orchestrates everything
 - **Libraries:** `lib/` — Modular bash libraries (core, logging, streak detection, template engine, summary, parallel execution)
 - **Config:** `config/domains.json` (lens registry), `config/label-colors.json` (GitHub label colors)
-- **Prompts:** `prompts/_base/` (mode wrappers: audit/feature/bugfix/discover/deploy), `prompts/lenses/<domain>/<lens>.md` (286 expert prompts)
+- **Prompts:** `prompts/_base/` (mode wrappers: audit/feature/bugfix/discover/deploy), `prompts/lenses/<domain>/<lens>.md` (287 expert prompts)
 - **Logs:** `logs/<run-id>/` (runtime only, gitignored)
 
 ## Adding a New Lens
