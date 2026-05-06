@@ -176,7 +176,7 @@
       "id": "llm-security",
       "name": "LLM Security",
       "order": 29,
-      "lenses": ["output-sanitization", "prompt-injection", "agent-isolation"]
+      "lenses": ["output-sanitization", "prompt-injection", "agent-isolation", "cost-control"]
     }
   ]
 }
