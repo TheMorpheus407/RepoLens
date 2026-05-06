@@ -44,6 +44,8 @@ source "$SCRIPT_DIR/lib/parallel.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/hosted.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/android.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/forge.sh"
 
 VERSION="0.1.0"
