@@ -626,6 +626,25 @@ COLORS_FILE="$SCRIPT_DIR/config/label-colors.json"
 BASE_PROMPTS_DIR="$SCRIPT_DIR/prompts/_base"
 LENSES_DIR="$SCRIPT_DIR/prompts/lenses"
 
+# resolve_base_wrapper — return the absolute path to the base wrapper file
+# for the active mode and (deploy-only) target type. Pure path resolver:
+# no logging, no filesystem checks, no exit. Caller is responsible for
+# verifying the returned path exists on disk.
+#
+# Routing:
+#   MODE=deploy + TARGET_TYPE=android  -> prompts/_base/android.md
+#   everything else                    -> prompts/_base/<MODE>.md
+#
+# TARGET_TYPE is read with a `server` default so this works under `set -u`
+# even when the deploy dispatcher hasn't run (non-deploy modes).
+resolve_base_wrapper() {
+  if [[ "$MODE" == "deploy" && "${TARGET_TYPE:-server}" == "android" ]]; then
+    printf '%s\n' "$BASE_PROMPTS_DIR/android.md"
+  else
+    printf '%s\n' "$BASE_PROMPTS_DIR/$MODE.md"
+  fi
+}
+
 # --- Resolve local mode output directory ---
 if $LOCAL_MODE; then
   if [[ -z "$OUTPUT_DIR" ]]; then
@@ -638,10 +657,29 @@ fi
 # --- Validate config files exist ---
 [[ -f "$DOMAINS_FILE" ]] || die "Missing config: $DOMAINS_FILE"
 [[ -f "$COLORS_FILE" ]] || die "Missing config: $COLORS_FILE"
-[[ -f "$BASE_PROMPTS_DIR/$MODE.md" ]] || die "Missing base template: $BASE_PROMPTS_DIR/$MODE.md"
+# Resolve the base wrapper file once at startup. The pure resolver
+# returns the canonical mapping (deploy/android -> android.md, else
+# <MODE>.md); we then fall back to deploy.md when the canonical file is
+# absent in the deploy/android case so the run can complete with
+# degraded server-flavored safety wording until sibling #92 lands.
+BASE_WRAPPER_FILE="$(resolve_base_wrapper)"
+BASE_WRAPPER_FALLBACK=false
+if [[ ! -f "$BASE_WRAPPER_FILE" ]]; then
+  if [[ "$MODE" == "deploy" && "${TARGET_TYPE:-server}" == "android" \
+        && -f "$BASE_PROMPTS_DIR/deploy.md" ]]; then
+    BASE_WRAPPER_FILE="$BASE_PROMPTS_DIR/deploy.md"
+    BASE_WRAPPER_FALLBACK=true
+  else
+    die "Missing base template: $(resolve_base_wrapper)"
+  fi
+fi
 
 # --- Initialize logging ---
 init_logging "$RUN_ID" "$LOG_BASE"
+
+if $BASE_WRAPPER_FALLBACK; then
+  log_warn "Base wrapper $BASE_PROMPTS_DIR/android.md missing; falling back to deploy.md (server-flavored safety wording on an Android target)"
+fi
 
 log_info "RepoLens run $RUN_ID starting"
 log_info "Project: $PROJECT_PATH ($REPO_OWNER/$REPO_NAME)"
@@ -1061,7 +1099,7 @@ run_lens() {
   local domain="${lens_entry%%/*}"
   local lens_id="${lens_entry#*/}"
   local lens_file="$LENSES_DIR/$domain/$lens_id.md"
-  local base_file="$BASE_PROMPTS_DIR/$MODE.md"
+  local base_file="$BASE_WRAPPER_FILE"
 
   # Check resume
   if is_lens_completed "$lens_entry"; then
