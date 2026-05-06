@@ -119,25 +119,52 @@ setup_hosted_env() {
 }
 
 # _parse_service_json <json_line>
-#   Extracts service_name, image, and port from a single JSON service object.
-#   Prints "service_name|image|port" on stdout.
+#   Extracts service_name, image, container ID, published port, and internal target port.
+#   Prints "service_name|image|container_id|published_port|target_port" on stdout.
 _parse_service_json() {
   local json="$1"
-  local svc img port
+  local svc img container_id published_port target_port
 
   svc="$(printf '%s' "$json" | jq -r '.Service // .Name // empty' 2>/dev/null)"
   img="$(printf '%s' "$json" | jq -r '.Image // "unknown"' 2>/dev/null)"
+  container_id="$(printf '%s' "$json" | jq -r '.ID // .ContainerID // .ContainerId // empty' 2>/dev/null)"
   # Support both .Publishers (Compose v2.0-2.9) and .Ports (newer versions)
-  port="$(printf '%s' "$json" | jq -r '
-    (if .Publishers then
-       (.Publishers[] | select(.PublishedPort > 0) | .PublishedPort)
-     elif .Ports then
-       (.Ports[] | select(.PublishedPort > 0) | .PublishedPort)
-     else empty end) // empty
+  published_port="$(printf '%s' "$json" | jq -r '
+    def tcp: ((.Protocol // "tcp" | tostring | ascii_downcase) == "tcp");
+    (.Publishers[]?, .Ports[]?)
+    | select(tcp)
+    | .PublishedPort
+    | select(. != null and . != "" and ((tonumber? // 0) > 0))
+    | tostring
+  ' 2>/dev/null | head -1)"
+  target_port="$(printf '%s' "$json" | jq -r '
+    def tcp: ((.Protocol // "tcp" | tostring | ascii_downcase) == "tcp");
+    (.Publishers[]?, .Ports[]?)
+    | select(tcp)
+    | (.TargetPort // .PrivatePort // empty)
+    | select(. != null and . != "" and ((tonumber? // 0) > 0))
+    | tostring
   ' 2>/dev/null | head -1)"
 
   [[ -z "$svc" ]] && return
-  printf '%s|%s|%s\n' "$svc" "$img" "$port"
+  printf '%s|%s|%s|%s|%s\n' "$svc" "$img" "$container_id" "$published_port" "$target_port"
+}
+
+# _inspect_exposed_tcp_port <container_id>
+#   Prints the first TCP port exposed by container metadata, if any.
+_inspect_exposed_tcp_port() {
+  local container_id="$1"
+  local port
+
+  [[ -z "$container_id" ]] && return 1
+  port="$(docker inspect "$container_id" 2>/dev/null | jq -r '
+    (.[0].Config.ExposedPorts // {})
+    | keys[]
+    | select(endswith("/tcp"))
+    | split("/")[0]
+    | select(test("^[0-9]+$"))
+  ' 2>/dev/null | head -1)"
+  [[ -n "$port" ]] && printf '%s\n' "$port"
 }
 
 # discover_services <compose_file> <project_name>
@@ -161,26 +188,42 @@ discover_services() {
     parsed_lines="$json_output"
   fi
 
-  local line svc_info service_name image port_published
+  local line svc_info service_name image container_id port_published target_port internal_port port_display
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     svc_info="$(_parse_service_json "$line")"
     [[ -z "$svc_info" ]] && continue
 
-    IFS='|' read -r service_name image port_published <<< "$svc_info"
+    IFS='|' read -r service_name image container_id port_published target_port <<< "$svc_info"
 
-    local port_display="${port_published:-none}"
+    internal_port="$target_port"
+    if [[ -z "$internal_port" ]]; then
+      if [[ -z "$container_id" ]]; then
+        container_id="$(docker compose -f "$compose_file" -p "$project_name" ps -q "$service_name" 2>/dev/null | head -1)"
+      fi
+      internal_port="$(_inspect_exposed_tcp_port "$container_id")"
+    fi
+
+    port_display="${internal_port:-${port_published:-none}}"
     if [[ -n "$HOSTED_SERVICES" ]]; then
       HOSTED_SERVICES="${HOSTED_SERVICES},${service_name}:${port_display}"
     else
       HOSTED_SERVICES="${service_name}:${port_display}"
     fi
-    if [[ -n "$port_published" ]]; then
+
+    if [[ -n "$internal_port" ]]; then
+      local port_note="internal"
+      if [[ -n "$port_published" && "$port_published" != "$internal_port" ]]; then
+        port_note="${port_note}, published host port ${port_published}"
+      fi
       HOSTED_SERVICES_DETAIL="${HOSTED_SERVICES_DETAIL}
-- ${service_name}: http://${service_name}:${port_published} (${image})"
+    - ${service_name}: http://${service_name}:${internal_port} (${port_note}, ${image})"
+    elif [[ -n "$port_published" ]]; then
+      HOSTED_SERVICES_DETAIL="${HOSTED_SERVICES_DETAIL}
+    - ${service_name}: http://${service_name}:${port_published} (published, ${image})"
     else
       HOSTED_SERVICES_DETAIL="${HOSTED_SERVICES_DETAIL}
-- ${service_name}: no published port (${image})"
+    - ${service_name}: no discovered port (${image})"
     fi
   done <<< "$parsed_lines"
   HOSTED_SERVICES_DETAIL="${HOSTED_SERVICES_DETAIL#$'\n'}"  # trim leading newline

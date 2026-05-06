@@ -285,6 +285,16 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--about` | Show tool description and sponsor information, then exit |
 | `-h, --help` | Show help |
 
+### Hosted DAST Scanning
+
+Use `--hosted` with the `toolgate` domain when the target project has a Docker Compose file and you want RepoLens to run live DAST tools against the services:
+
+```bash
+./repolens.sh --project ~/my-app --agent claude --domain toolgate --hosted
+```
+
+RepoLens starts or reuses the Compose project, connects scanner containers to the same Compose network, and lists services as `http://<service>:<internal-port>`. Discovery prefers Docker-network container ports from Compose metadata, falls back to exposed TCP ports from container metadata, and only uses a published host port when no internal port is known. If a service maps host port `8080` to container port `80`, DAST tools are pointed at `http://service:80`; the published host port is kept only as context. Services with no discovered TCP port are shown as `service:none` and are not guessed.
+
 ### Environment Variables
 
 | Variable | Default | Description |
