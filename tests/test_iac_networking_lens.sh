@@ -13,11 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tests for issue #79: iac/terraform-security lens integration.
+# Tests for issue #81: iac/iac-networking lens integration.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LENS_FILE="$SCRIPT_DIR/prompts/lenses/iac/terraform-security.md"
+LENS_FILE="$SCRIPT_DIR/prompts/lenses/iac/iac-networking.md"
 DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
 
 PASS=0
@@ -65,10 +65,10 @@ assert_file_exists() {
 }
 
 echo ""
-echo "=== Test Suite: iac/terraform-security lens (issue #79) ==="
+echo "=== Test Suite: iac/iac-networking lens (issue #81) ==="
 echo ""
 
-assert_file_exists "terraform-security lens prompt exists" "$LENS_FILE"
+assert_file_exists "iac-networking lens prompt exists" "$LENS_FILE"
 
 lens_content=""
 if [[ -f "$LENS_FILE" ]]; then
@@ -77,10 +77,10 @@ fi
 
 echo ""
 echo "Test 1: frontmatter is complete"
-assert_contains "id frontmatter" "id: terraform-security" "$lens_content"
+assert_contains "id frontmatter" "id: iac-networking" "$lens_content"
 assert_contains "domain frontmatter" "domain: iac" "$lens_content"
-assert_contains "name frontmatter" "name: Terraform Security Misconfigurations" "$lens_content"
-assert_contains "role frontmatter" "role: Terraform Security Specialist" "$lens_content"
+assert_contains "name frontmatter" "name: IaC Networking" "$lens_content"
+assert_contains "role frontmatter" "role: Cloud Network Architecture Analyst" "$lens_content"
 
 echo ""
 echo "Test 2: body has required sections"
@@ -89,85 +89,103 @@ assert_contains "hunt section" "### What You Hunt For" "$lens_content"
 assert_contains "investigate section" "### How You Investigate" "$lens_content"
 
 echo ""
-echo "Test 3: prompt covers Terraform security risks"
+echo "Test 3: prompt covers IaC networking risks"
 for term in \
+  "public and private subnets" \
+  "NAT gateway" \
+  "Availability Zone" \
+  "VPC Flow Logs" \
+  "security groups" \
+  "NACLs" \
   "0.0.0.0/0" \
-  "::/0" \
-  "aws_s3_bucket_public_access_block" \
-  'acl = "public-read"' \
-  "server_side_encryption_configuration" \
-  "storage_encrypted = true" \
-  "force_ssl" \
-  "deletion_protection" \
-  "IMDSv2" \
-  'http_tokens' \
-  'privileged = true' \
-  '"Action": "*"' \
-  '"Resource": "*"' \
-  "enable_key_rotation = true" \
-  "TLSv1.2_2021" \
-  'viewer_protocol_policy = "redirect-to-https"' \
-  "aws_flow_log" \
-  "access_logs"; do
+  "egress" \
+  "database subnets" \
+  "publicly_accessible" \
+  "load balancers" \
+  "route table" \
+  "VPC peering" \
+  "transit gateway" \
+  "enable_dns_support" \
+  "VPN" \
+  "CloudFormation" \
+  "Pulumi" \
+  "CDK"; do
   assert_contains "prompt mentions $term" "$term" "$lens_content"
 done
 
 echo ""
-echo "Test 4: prompt guards against unsafe Terraform execution"
+echo "Test 4: prompt guards against unsafe IaC execution"
 for term in \
   "Reason statically by default" \
   'do not run `terraform init`' \
   'do not run `terraform plan`' \
   "provider downloads" \
   "module downloads" \
-  "credentialed Terraform commands" \
+  "credentialed" \
   "no secrets" \
-  "no network access"; do
+  "no network access" \
+  'do not run `pulumi preview`' \
+  'do not run `pulumi up`' \
+  'do not run `cdk synth`' \
+  'do not run `cdk deploy`'; do
   assert_contains "prompt safety guard mentions $term" "$term" "$lens_content"
 done
 
 echo ""
-echo "Test 5: iac domain is registered once"
+echo "Test 5: prompt redacts sensitive connectivity evidence"
+for term in \
+  "Sensitive connectivity guard" \
+  "pre-shared keys" \
+  "certificates" \
+  "connection strings" \
+  "credentials" \
+  "Redact secret-bearing values" \
+  "short fingerprint"; do
+  assert_contains "prompt redaction guard mentions $term" "$term" "$lens_content"
+done
+
+echo ""
+echo "Test 6: iac domain is registered once"
 iac_domain_count="$(jq '[.domains[] | select(.id == "iac")] | length' "$DOMAINS_FILE")"
 assert_eq "one iac domain" "1" "$iac_domain_count"
 
 echo ""
-echo "Test 6: iac domain is mode-less default audit coverage"
+echo "Test 7: iac domain is mode-less default audit coverage"
 iac_mode="$(jq -r '.domains[] | select(.id == "iac") | .mode // "null"' "$DOMAINS_FILE")"
 assert_eq "no mode field" "null" "$iac_mode"
 
 echo ""
-echo "Test 7: iac domain contains both Terraform lenses"
+echo "Test 8: iac domain contains all four IaC lenses"
 iac_lenses="$(jq -r '.domains[] | select(.id == "iac") | .lenses | join(",")' "$DOMAINS_FILE")"
 assert_eq "registered lens list" "terraform-completeness,terraform-security,iac-secrets,iac-networking" "$iac_lenses"
 
 echo ""
-echo "Test 8: Audit-like mode resolution includes terraform-security"
+echo "Test 9: Audit-like mode resolution includes iac-networking"
 audit_lenses="$(jq -r --arg mode "audit" \
   '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
-if grep -qxF "iac/terraform-security" <<< "$audit_lenses"; then
+if grep -qxF "iac/iac-networking" <<< "$audit_lenses"; then
   PASS=$((PASS + 1))
   TOTAL=$((TOTAL + 1))
-  echo "  PASS: audit mode includes iac/terraform-security"
+  echo "  PASS: audit mode includes iac/iac-networking"
 else
   FAIL=$((FAIL + 1))
   TOTAL=$((TOTAL + 1))
-  echo "  FAIL: audit mode should include iac/terraform-security"
+  echo "  FAIL: audit mode should include iac/iac-networking"
 fi
 
 echo ""
-echo "Test 9: Exclusive modes do not include terraform-security"
+echo "Test 10: Exclusive modes do not include iac-networking"
 for mode in discover deploy opensource content; do
   mode_lenses="$(jq -r --arg mode "$mode" \
     '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
-  if grep -qxF "iac/terraform-security" <<< "$mode_lenses"; then
+  if grep -qxF "iac/iac-networking" <<< "$mode_lenses"; then
     FAIL=$((FAIL + 1))
     TOTAL=$((TOTAL + 1))
-    echo "  FAIL: $mode mode should not include iac/terraform-security"
+    echo "  FAIL: $mode mode should not include iac/iac-networking"
   else
     PASS=$((PASS + 1))
     TOTAL=$((TOTAL + 1))
-    echo "  PASS: $mode mode excludes iac/terraform-security"
+    echo "  PASS: $mode mode excludes iac/iac-networking"
   fi
 done
 

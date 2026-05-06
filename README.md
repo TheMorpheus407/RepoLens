@@ -5,7 +5,7 @@
 [![CI](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/TheMorpheus407/RepoLens?style=social)](https://github.com/TheMorpheus407/RepoLens)
 
-**Multi-lens code audit tool.** Runs 295 specialist lenses across 30 domains against any git repository or live server and creates remote issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, and infrastructure auditing — all with deep specialization.
+**Multi-lens code audit tool.** Runs 296 specialist lenses across 30 domains against any git repository or live server and creates remote issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, and infrastructure auditing — all with deep specialization.
 
 > [!IMPORTANT]
 > **RepoLens runs AI agents with shell access against your repository, and a full audit can cost hundreds of dollars in API charges.** It is NOT a sandboxed security tool, comes with NO warranty, and you use it entirely at your own risk. **Read [Warnings & Limits](#warnings--limits) before your first run** — especially the cost and security sections.
@@ -120,7 +120,7 @@ fj -H codeberg.org auth login  # Codeberg; use your Forgejo host for self-hosted
 # 5. Audit an entire domain
 ./repolens.sh --project ~/my-app --agent claude --domain security
 
-# 6. Full parallel audit (225 audit-visible lenses)
+# 6. Full parallel audit (226 audit-visible lenses)
 ./repolens.sh --project ~/my-app --agent claude --parallel --max-parallel 8
 ```
 
@@ -131,7 +131,7 @@ RepoLens is a power tool. Before you point it at anything you care about — or 
 ### Cost — RepoLens can be very expensive
 
 > [!CAUTION]
-> A default full audit runs **225 audit-visible lenses across 26 code/toolgate domains**. RepoLens has 295 lenses across 30 domains in total, but `discover`, `deploy`, `opensource`, and `content` lenses are mode-specific and do not run in the default audit mode. Each audit lens loops until the agent emits `DONE` three times in a row. That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
+> A default full audit runs **226 audit-visible lenses across 26 code/toolgate domains**. RepoLens has 296 lenses across 30 domains in total, but `discover`, `deploy`, `opensource`, and `content` lenses are mode-specific and do not run in the default audit mode. Each audit lens loops until the agent emits `DONE` three times in a row. That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
 
 **Before launching a full audit:**
 
@@ -146,7 +146,7 @@ You are responsible for every dollar of API spend. Know your per-token pricing.
 ### Rate Limits & Automated Traffic
 
 > [!NOTE]
-> RepoLens generates a lot of automated traffic. A default 225-lens audit run can create dozens to hundreds of remote issues, plus repo reads via `gh`, `tea`, or `fj`, plus parallel AI provider calls.
+> RepoLens generates a lot of automated traffic. A default 226-lens audit run can create dozens to hundreds of remote issues, plus repo reads via `gh`, `tea`, or `fj`, plus parallel AI provider calls.
 
 - **GitHub API / Gitea API / Forgejo API.** Authenticated `gh` calls count against GitHub API quotas; authenticated `tea` and `fj` calls count against your Gitea or Forgejo account/API quotas. Large runs can trip rate limits. Use `--max-issues <n>` to cap output, or `--local` to skip remote forge calls entirely.
 - **AI provider rate limits.** Every iteration consumes Anthropic / OpenAI tokens. Free and low-tier accounts will hit their RPM (requests-per-minute) and TPM (tokens-per-minute) ceilings immediately under `--parallel`. Verify your account is on a tier sized for concurrent agent traffic before scaling.
@@ -195,12 +195,12 @@ RepoLens supports 8 modes. Each mode controls which domains/lenses are visible a
 
 | Mode | DONE Streak | Domains | Description |
 |------|-------------|---------|-------------|
-| `audit` | 3× | 26 code/toolgate domains (225 lenses) | **Default.** Standard code audit — finds issues in existing code |
-| `feature` | 3× | 26 code/toolgate domains (225 lenses) | Feature gap discovery — identifies missing capabilities |
-| `bugfix` | 3× | 26 code/toolgate domains (225 lenses) | Bug hunting — finds real bugs and defects |
+| `audit` | 3× | 26 code/toolgate domains (226 lenses) | **Default.** Standard code audit — finds issues in existing code |
+| `feature` | 3× | 26 code/toolgate domains (226 lenses) | Feature gap discovery — identifies missing capabilities |
+| `bugfix` | 3× | 26 code/toolgate domains (226 lenses) | Bug hunting — finds real bugs and defects |
 | `discover` | 1× | `discovery` domain (14 lenses) | Product discovery — brainstorming for product strategy |
 | `deploy` | 1× | `deployment` domain (26 lenses) | Server audit — inspects a live server for operational issues |
-| `custom` | 1× | 26 code/toolgate domains (225 lenses) | Change impact analysis — identifies what needs adapting after a change |
+| `custom` | 1× | 26 code/toolgate domains (226 lenses) | Change impact analysis — identifies what needs adapting after a change |
 | `opensource` | 1× | `open-source-readiness` domain (13 lenses) | Open-source readiness — checks if a repo can go public safely |
 | `content` | 1× | `content-quality` domain (17 lenses) | Content audit & creation — audits or creates content from `--source` material |
 
@@ -292,7 +292,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `REPOLENS_AGENT_TIMEOUT` | `6000` | Per-invocation agent timeout in seconds. Every agent call is wrapped with `timeout(1)` at this cap — if an agent hangs (stuck network, auth prompt, quota check in flight), the invocation is killed, the iteration is logged with `[ERROR] agent timed out after Ns`, and the lens loop continues. Lower (e.g. `600`) for quick smoke runs; raise further for deep research agents on large repos. |
 | `REPOLENS_CHILD_MAX_WAIT` | `144000` | Per-child deadline in seconds for parallel-mode workers. `wait_all` polls each background lens with `kill -0` + `sleep 1` and, if a child exceeds this deadline, sends SIGTERM (10s grace) then SIGKILL, logs `[lens_id] exceeded REPOLENS_CHILD_MAX_WAIT=Ns`, and continues reaping the remaining children. Outer safety net — the agent-level `REPOLENS_AGENT_TIMEOUT` handles the inner loop. Should be ≥ `MAX_ITERATIONS_PER_LENS × REPOLENS_AGENT_TIMEOUT` plus a buffer for non-agent I/O (forge queries, file locks). |
 
-## Domains & Lenses (295 total across 30 domains)
+## Domains & Lenses (296 total across 30 domains)
 
 ### Code Analysis Domains (used by `audit`, `feature`, `bugfix`, `custom`)
 
@@ -323,7 +323,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | **Tool Gate** | 18 | Lint, typecheck, SAST, dependency CVEs, quality gates, test suite, DAST (web, injection, scanner, headers, API), session-based tools (ZAP, sqlmap, Nuclei, Lighthouse, k6, ZAP API, Schemathesis) |
 | **Kubernetes** | 7 | Pod/container security contexts, NetworkPolicy coverage, HPA/PDB coverage, resource requests/limits, LimitRange/ResourceQuota guardrails, image tags, pull policies, registry trust, Ingress TLS, cert-manager, HSTS, SSL redirect, RBAC least privilege, ServiceAccount scoping, secret manifests, SealedSecrets, SOPS, External Secrets, secret RBAC |
 | **LLM Security** | 5 | LLM output sanitization, rendering safety, prompt injection, RAG/tool/chat-history injection, agent sandbox boundaries, container privilege, subprocess fallbacks, credential exposure in agent environments, LLM API key isolation, secret redaction in tool output/logs, cost/token budget enforcement, rate limits on LLM-triggering endpoints, spend anomaly detection, tier/model access controls, markdown/link injection, external system forwarding, structured output validation, filesystem and command injection risks |
-| **Infrastructure as Code** | 3 | Terraform completeness, placeholder stubs, empty resource blocks, dead modules, missing outputs, broken references, provider/backend hygiene, Terraform security groups, encryption, IAM, public access, disabled resources, zero-resource plans, README-vs-code infrastructure promises, tfvars secrets, Terraform/OpenTofu state exposure, missing sensitive annotations, backend credentials, CI -var secret handling |
+| **Infrastructure as Code** | 4 | Terraform completeness, placeholder stubs, empty resource blocks, dead modules, missing outputs, broken references, provider/backend hygiene, Terraform security groups, encryption, IAM, public access, disabled resources, zero-resource plans, README-vs-code infrastructure promises, tfvars secrets, Terraform/OpenTofu state exposure, missing sensitive annotations, backend credentials, CI -var secret handling, VPC design, public/private subnet topology, NAT gateways, VPC Flow Logs, route tables, security groups, NACLs, peering, transit gateways, DNS, VPN, load balancer placement, database subnet exposure |
 
 ### Mode-Specific Domains
 
