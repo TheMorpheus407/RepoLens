@@ -182,7 +182,7 @@
       "id": "iac",
       "name": "Infrastructure as Code",
       "order": 30,
-      "lenses": ["terraform-completeness", "terraform-security", "iac-secrets", "iac-networking"]
+      "lenses": ["terraform-completeness", "terraform-security", "iac-secrets", "iac-networking", "iac-compliance"]
     }
   ]
 }

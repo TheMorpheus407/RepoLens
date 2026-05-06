@@ -6,7 +6,7 @@
 
 ## Abstract
 
-RepoLens implements **Lens-Based Auditing (LBA)**, a methodology for automated code analysis that decomposes the audit problem into 296 narrow-focus specialist agents ("lenses") across 30 domains. Rather than asking a single generalist agent to review an entire codebase for every possible concern, LBA assigns each concern to a dedicated expert lens — one that examines the code through a single, specific perspective.
+RepoLens implements **Lens-Based Auditing (LBA)**, a methodology for automated code analysis that decomposes the audit problem into 297 narrow-focus specialist agents ("lenses") across 30 domains. Rather than asking a single generalist agent to review an entire codebase for every possible concern, LBA assigns each concern to a dedicated expert lens — one that examines the code through a single, specific perspective.
 
 The tool currently supports 8 modes of operation (audit, feature, bugfix, discover, deploy, opensource, content, custom), multiple agent backends, parallel execution, and automated GitHub issue creation. This document describes the methodology behind the tool: what Lensing is, why it works, and how its components fit together.
 
@@ -31,7 +31,7 @@ At execution time, a template engine merges a mode-specific base template with t
 - **Parallel execution** — lenses run concurrently via a file-based semaphore, with no shared state
 - **Agent-agnostic** — any LLM agent CLI (claude, codex, spark, opencode) can execute lenses
 
-The current lens inventory spans 30 domains with 296 total lenses, broken down as: 208 code analysis + 18 tool gate + 14 product discovery + 26 deployment/server audit + 13 open-source readiness + 17 content quality.
+The current lens inventory spans 30 domains with 297 total lenses, broken down as: 209 code analysis + 18 tool gate + 14 product discovery + 26 deployment/server audit + 13 open-source readiness + 17 content quality.
 
 ---
 
@@ -39,7 +39,7 @@ The current lens inventory spans 30 domains with 296 total lenses, broken down a
 
 Traditional monolithic LLM code review asks a single prompt to cover all concerns — security, performance, architecture, testing, accessibility, and more — simultaneously. This approach suffers from **attention dilution**: each concern receives shallow treatment because the model's context window and focus are spread thin across every domain at once.
 
-LBA takes the opposite approach. By assigning one prompt per concern (296 total), each lens can devote its full context window and specialization depth to a single domain. The advantages of this decomposition include:
+LBA takes the opposite approach. By assigning one prompt per concern (297 total), each lens can devote its full context window and specialization depth to a single domain. The advantages of this decomposition include:
 
 | Dimension | Monolithic Review | Lens-Based Auditing |
 |-----------|-------------------|---------------------|
@@ -108,10 +108,10 @@ Mode isolation is implemented through three mechanisms:
 
 | Mode | Purpose | Visible Lenses |
 |------|---------|---------------|
-| **audit** | Find real issues in existing code | 226 (code + toolgate domains) |
-| **feature** | Identify missing capabilities | 226 |
-| **bugfix** | Find bugs backed by evidence | 226 |
-| **custom** | Change impact analysis | 226 |
+| **audit** | Find real issues in existing code | 227 (code + toolgate domains) |
+| **feature** | Identify missing capabilities | 227 |
+| **bugfix** | Find bugs backed by evidence | 227 |
+| **custom** | Change impact analysis | 227 |
 | **discover** | Brainstorm product ideas | 14 (discovery domain only) |
 | **deploy** | Read-only live server inspection | 26 (deployment domain only) |
 | **opensource** | Public release risk assessment | 13 (open-source readiness only) |

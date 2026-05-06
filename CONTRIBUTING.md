@@ -118,7 +118,7 @@ RepoLens organizes its 30 domains into default-mode domains (available in audit/
 | toolgate | Tool Gate | 18 |
 | kubernetes | Kubernetes | 7 |
 | llm-security | LLM Security | 5 |
-| iac | Infrastructure as Code | 4 |
+| iac | Infrastructure as Code | 5 |
 
 ### Mode-Specific Domains (4)
 
