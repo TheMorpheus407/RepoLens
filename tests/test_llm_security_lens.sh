@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tests for issues #73, #74, #75, and #76: llm-security lens integration.
+# Tests for issues #73, #74, #75, #76, and #77: llm-security lens integration.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,6 +22,7 @@ OUTPUT_LENS_FILE="$LENS_DIR/output-sanitization.md"
 PROMPT_INJECTION_LENS_FILE="$LENS_DIR/prompt-injection.md"
 AGENT_ISOLATION_LENS_FILE="$LENS_DIR/agent-isolation.md"
 COST_CONTROL_LENS_FILE="$LENS_DIR/cost-control.md"
+CREDENTIAL_EXPOSURE_LENS_FILE="$LENS_DIR/credential-exposure.md"
 DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
 COLORS_FILE="$SCRIPT_DIR/config/label-colors.json"
 
@@ -70,13 +71,14 @@ assert_file_exists() {
 }
 
 echo ""
-echo "=== Test Suite: llm-security lenses (issues #73, #74, #75, and #76) ==="
+echo "=== Test Suite: llm-security lenses (issues #73, #74, #75, #76, and #77) ==="
 echo ""
 
 assert_file_exists "output-sanitization lens prompt exists" "$OUTPUT_LENS_FILE"
 assert_file_exists "prompt-injection lens prompt exists" "$PROMPT_INJECTION_LENS_FILE"
 assert_file_exists "agent-isolation lens prompt exists" "$AGENT_ISOLATION_LENS_FILE"
 assert_file_exists "cost-control lens prompt exists" "$COST_CONTROL_LENS_FILE"
+assert_file_exists "credential-exposure lens prompt exists" "$CREDENTIAL_EXPOSURE_LENS_FILE"
 
 lens_content=""
 if [[ -f "$OUTPUT_LENS_FILE" ]]; then
@@ -96,6 +98,11 @@ fi
 cost_control_content=""
 if [[ -f "$COST_CONTROL_LENS_FILE" ]]; then
   cost_control_content="$(cat "$COST_CONTROL_LENS_FILE")"
+fi
+
+credential_exposure_content=""
+if [[ -f "$CREDENTIAL_EXPOSURE_LENS_FILE" ]]; then
+  credential_exposure_content="$(cat "$CREDENTIAL_EXPOSURE_LENS_FILE")"
 fi
 
 echo ""
@@ -228,34 +235,73 @@ for term in \
 done
 
 echo ""
-echo "Test 13: llm-security domain is registered once"
+echo "Test 13: credential-exposure frontmatter is complete"
+assert_contains "id frontmatter" "id: credential-exposure" "$credential_exposure_content"
+assert_contains "domain frontmatter" "domain: llm-security" "$credential_exposure_content"
+assert_contains "name frontmatter" "name: LLM Agent Credential Exposure" "$credential_exposure_content"
+assert_contains "role frontmatter" "role: LLM Credential Isolation Specialist" "$credential_exposure_content"
+
+echo ""
+echo "Test 14: credential-exposure body has required sections"
+assert_contains "expert focus section" "## Your Expert Focus" "$credential_exposure_content"
+assert_contains "hunt section" "### What You Hunt For" "$credential_exposure_content"
+assert_contains "investigate section" "### How You Investigate" "$credential_exposure_content"
+
+echo ""
+echo "Test 15: credential-exposure covers LLM credential exposure risks"
+for term in \
+  "LLM API Keys" \
+  "ANTHROPIC_API_KEY" \
+  "OPENAI_API_KEY" \
+  "AZURE_OPENAI_KEY" \
+  "GOOGLE_API_KEY" \
+  "Agent processes inheriting the full parent environment" \
+  "DATABASE_URL" \
+  "OAuth client secrets" \
+  "AWS access keys" \
+  "Shared and Unscoped Credentials" \
+  "spend caps" \
+  "rotation" \
+  "Credentials Leaking Through LLM Conversation Logs" \
+  "tool output" \
+  "redaction" \
+  "Tool and Function Calling" \
+  "connection_string" \
+  "proxy/gateway" \
+  "prompt injection"; do
+  assert_contains "prompt mentions $term" "$term" "$credential_exposure_content"
+done
+
+echo ""
+echo "Test 16: llm-security domain is registered once"
 domain_count="$(jq '[.domains[] | select(.id == "llm-security")] | length' "$DOMAINS_FILE")"
 assert_eq "one llm-security domain" "1" "$domain_count"
 
 echo ""
-echo "Test 14: llm-security domain is mode-less default audit coverage"
+echo "Test 17: llm-security domain is mode-less default audit coverage"
 domain_mode="$(jq -r '.domains[] | select(.id == "llm-security") | .mode // "null"' "$DOMAINS_FILE")"
 assert_eq "no mode field" "null" "$domain_mode"
 
 echo ""
-echo "Test 15: llm-security domain contains all lenses"
+echo "Test 18: llm-security domain contains all lenses"
 domain_lenses="$(jq -r '.domains[] | select(.id == "llm-security") | .lenses | join(",")' "$DOMAINS_FILE")"
-assert_eq "registered lens list" "output-sanitization,prompt-injection,agent-isolation,cost-control" "$domain_lenses"
+assert_eq "registered lens list" "output-sanitization,prompt-injection,agent-isolation,cost-control,credential-exposure" "$domain_lenses"
 
 echo ""
-echo "Test 16: llm-security label color is configured"
+echo "Test 19: llm-security label color is configured"
 label_color="$(jq -r '."llm-security" // empty' "$COLORS_FILE")"
 assert_eq "llm-security label color" "b91c1c" "$label_color"
 
 echo ""
-echo "Test 17: Audit-like mode resolution includes all llm-security lenses"
+echo "Test 20: Audit-like mode resolution includes all llm-security lenses"
 audit_lenses="$(jq -r --arg mode "audit" \
   '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
 for expected_lens in \
   "llm-security/output-sanitization" \
   "llm-security/prompt-injection" \
   "llm-security/agent-isolation" \
-  "llm-security/cost-control"; do
+  "llm-security/cost-control" \
+  "llm-security/credential-exposure"; do
   if grep -qxF "$expected_lens" <<< "$audit_lenses"; then
     PASS=$((PASS + 1))
     TOTAL=$((TOTAL + 1))
@@ -268,7 +314,7 @@ for expected_lens in \
 done
 
 echo ""
-echo "Test 18: Exclusive modes do not include llm-security lenses"
+echo "Test 21: Exclusive modes do not include llm-security lenses"
 for mode in discover deploy opensource content; do
   mode_lenses="$(jq -r --arg mode "$mode" \
     '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
@@ -276,7 +322,8 @@ for mode in discover deploy opensource content; do
     "llm-security/output-sanitization" \
     "llm-security/prompt-injection" \
     "llm-security/agent-isolation" \
-    "llm-security/cost-control"; do
+    "llm-security/cost-control" \
+    "llm-security/credential-exposure"; do
     if grep -qxF "$excluded_lens" <<< "$mode_lenses"; then
       FAIL=$((FAIL + 1))
       TOTAL=$((TOTAL + 1))
