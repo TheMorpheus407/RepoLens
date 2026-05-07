@@ -128,7 +128,7 @@ These domains have a `"mode"` field in `config/domains.json` that restricts them
 |---|---|---|---|
 | discovery | Product Discovery | `discover` | 14 |
 | deployment | Deployment | `deploy` | 26 |
-| android | Android | `deploy` | 3 |
+| android | Android | `deploy` | 4 |
 | open-source-readiness | Open Source Readiness | `opensource` | 13 |
 | content-quality | Content Quality | `content` | 17 |
 
