@@ -151,7 +151,7 @@
       "name": "Android",
       "order": 31,
       "mode": "deploy",
-      "lenses": ["apk-overview"]
+      "lenses": ["apk-overview", "secrets-in-apk"]
     },
     {
       "id": "open-source-readiness",

@@ -5,7 +5,7 @@
 [![CI](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/TheMorpheus407/RepoLens?style=social)](https://github.com/TheMorpheus407/RepoLens)
 
-**Multi-lens code audit tool.** Runs 298 specialist lenses across 31 domains against any git repository, live server, or Android APK and creates remote issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, infrastructure auditing, and APK auditing — all with deep specialization.
+**Multi-lens code audit tool.** Runs 299 specialist lenses across 31 domains against any git repository, live server, or Android APK and creates remote issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, infrastructure auditing, and APK auditing — all with deep specialization.
 
 > [!IMPORTANT]
 > **RepoLens runs AI agents with shell access against your repository, and a full audit can cost hundreds of dollars in API charges.** It is NOT a sandboxed security tool, comes with NO warranty, and you use it entirely at your own risk. **Read [Warnings & Limits](#warnings--limits) before your first run** — especially the cost and security sections.
@@ -131,7 +131,7 @@ RepoLens is a power tool. Before you point it at anything you care about — or 
 ### Cost — RepoLens can be very expensive
 
 > [!CAUTION]
-> A default full audit runs **227 audit-visible lenses across 26 code/toolgate domains**. RepoLens has 298 lenses across 31 domains in total, but `discover`, `deploy`, `opensource`, and `content` lenses are mode-specific and do not run in the default audit mode. Each audit lens loops until the agent emits `DONE` three times in a row. That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
+> A default full audit runs **227 audit-visible lenses across 26 code/toolgate domains**. RepoLens has 299 lenses across 31 domains in total, but `discover`, `deploy`, `opensource`, and `content` lenses are mode-specific and do not run in the default audit mode. Each audit lens loops until the agent emits `DONE` three times in a row. That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
 
 **Before launching a full audit:**
 
@@ -199,7 +199,7 @@ RepoLens supports 8 modes. Each mode controls which domains/lenses are visible a
 | `feature`    | 3×          | 26 code/toolgate domains (227 lenses)      | Feature gap discovery — identifies missing capabilities                       |
 | `bugfix`     | 3×          | 26 code/toolgate domains (227 lenses)      | Bug hunting — finds real bugs and defects                                     |
 | `discover`   | 1×          | `discovery` domain (14 lenses)             | Product discovery — brainstorming for product strategy                        |
-| `deploy`     | 1×          | `deployment` domain (26 lenses) or `android` domain (1 lens) | Server or Android APK audit — inspects a live server or APK target            |
+| `deploy`     | 1×          | `deployment` domain (26 lenses) or `android` domain (2 lenses) | Server or Android APK audit — inspects a live server or APK target          |
 | `custom`     | 1×          | 26 code/toolgate domains (227 lenses)      | Change impact analysis — identifies what needs adapting after a change        |
 | `opensource` | 1×          | `open-source-readiness` domain (13 lenses) | Open-source readiness — checks if a repo can go public safely                 |
 | `content`    | 1×          | `content-quality` domain (17 lenses)       | Content audit & creation — audits or creates content from `--source` material |
@@ -325,7 +325,7 @@ Raw OpenAPI/Swagger schemas are preferred over docs pages. If no service exposes
 | `REPOLENS_AGENT_TIMEOUT`  | `6000`   | Per-invocation agent timeout in seconds. Every agent call is wrapped with `timeout(1)` at this cap — if an agent hangs (stuck network, auth prompt, quota check in flight), the invocation is killed, the iteration is logged with `[ERROR] agent timed out after Ns`, and the lens loop continues. Lower (e.g. `600`) for quick smoke runs; raise further for deep research agents on large repos.                                                                                                                          |
 | `REPOLENS_CHILD_MAX_WAIT` | `144000` | Per-child deadline in seconds for parallel-mode workers. `wait_all` polls each background lens with `kill -0` + `sleep 1` and, if a child exceeds this deadline, sends SIGTERM (10s grace) then SIGKILL, logs `[lens_id] exceeded REPOLENS_CHILD_MAX_WAIT=Ns`, and continues reaping the remaining children. Outer safety net — the agent-level `REPOLENS_AGENT_TIMEOUT` handles the inner loop. Should be ≥ `MAX_ITERATIONS_PER_LENS × REPOLENS_AGENT_TIMEOUT` plus a buffer for non-agent I/O (forge queries, file locks). |
 
-## Domains & Lenses (298 total across 31 domains)
+## Domains & Lenses (299 total across 31 domains)
 
 ### Code Analysis Domains (used by `audit`, `feature`, `bugfix`, `custom`)
 
@@ -364,7 +364,7 @@ Raw OpenAPI/Swagger schemas are preferred over docs pages. If no service exposes
 | ------------------------- | ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Product Discovery**     | `discover`   | 14 lenses | Product gaps, integration opportunities, UX improvements, monetization, developer experience, automation, data insights, scale readiness, community, competitive edge, accessibility, content/education, AI augmentation, workflow orchestration     |
 | **Deployment**            | `deploy`     | 26 lenses | Service health, TLS, DNS, NTP, network security, load balancing, reverse proxy, disk/memory/CPU, containers, database, queues, secrets, SSH, hardening, logs, monitoring, backups, disaster recovery, config drift, dependencies, updates, cron jobs |
-| **Android**               | `deploy`     | 1 lens    | APK overview, package metadata, and device-aware Android audit context                                                                                                                                                                             |
+| **Android**               | `deploy`     | 2 lenses  | APK overview, package metadata, APK secrets, credentials, internal URLs, and device-aware Android audit context                                                                                                                                    |
 | **Open Source Readiness** | `opensource` | 13 lenses | Secret leaks, license compliance, dependency licensing, internal exposure, git history secrets, community readiness, documentation gaps, monetization exposure, PII, build reproducibility, security posture, code attribution, trademarks           |
 | **Content Quality**       | `content`    | 17 lenses | Content inventory, metadata, staleness, accessibility, linking, duplication, completeness, consistency, code examples, PII, multimedia, versioning, audience targeting, localization, topic extraction, planning, exercise design                    |
 
