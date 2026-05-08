@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tests for issue #129: --logs path plumbing and empty logs domain skeleton.
+# Tests for issue #129/#130: --logs path plumbing and logs domain lens registration.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -152,20 +152,21 @@ assert_exit_code "logs directory dry-run exits zero" 0 "$dir_rc"
 assert_contains "logs directory absolute path logged" "Logs: $LOG_DIR" "$dir_output"
 
 echo ""
-echo "Test 6: Empty logs domain dry-run exits cleanly"
-empty_dry_output="$(run_repolens "${RUN_PREFIX}-empty-dry" --domain logs --dry-run)"
-empty_dry_rc=$?
-assert_exit_code "empty logs domain dry-run exits zero" 0 "$empty_dry_rc"
-assert_contains "empty dry-run shows zero lenses" "Lenses:       0" "$empty_dry_output"
-assert_contains "empty dry-run completes" "Dry run complete" "$empty_dry_output"
+echo "Test 6: Logs domain dry-run includes error-storms lens"
+logs_dry_output="$(run_repolens "${RUN_PREFIX}-logs-dry" --domain logs --dry-run)"
+logs_dry_rc=$?
+assert_exit_code "logs domain dry-run exits zero" 0 "$logs_dry_rc"
+assert_contains "logs dry-run shows one lens" "Lenses:       1" "$logs_dry_output"
+assert_contains "logs dry-run lists error-storms" "logs/error-storms" "$logs_dry_output"
+assert_contains "logs dry-run completes" "Dry run complete" "$logs_dry_output"
 
 echo ""
-echo "Test 7: Empty logs domain non-dry run exits before agent execution"
-empty_run_output="$(run_repolens "${RUN_PREFIX}-empty-run" --domain logs)"
-empty_run_rc=$?
-assert_exit_code "empty logs domain run exits zero" 0 "$empty_run_rc"
-assert_contains "empty run message" "No lenses to run for domain 'logs'." "$empty_run_output"
-assert_not_contains "fake agent was not executed" "DONE" "$empty_run_output"
+echo "Test 7: Logs domain non-dry run executes registered lens"
+logs_run_output="$(run_repolens "${RUN_PREFIX}-logs-run" --domain logs)"
+logs_run_rc=$?
+assert_exit_code "logs domain run exits zero" 0 "$logs_run_rc"
+assert_not_contains "logs run is not treated as empty" "No lenses to run for domain 'logs'." "$logs_run_output"
+assert_contains "logs run completes error-storms" "[logs/error-storms] DONE x3" "$logs_run_output"
 
 echo ""
 echo "Test 8: Invalid domain still fails"
@@ -188,7 +189,9 @@ logs_lens_count="$(jq -r '.domains[] | select(.id == "logs") | .lenses | length'
 logs_mode="$(jq -r '.domains[] | select(.id == "logs") | .mode // "null"' "$SCRIPT_DIR/config/domains.json")"
 duplicate_orders="$(jq -r '.domains[].order' "$SCRIPT_DIR/config/domains.json" | sort -n | uniq -d)"
 assert_eq "logs domain order is 28" "28" "$logs_order"
-assert_eq "logs domain starts empty" "0" "$logs_lens_count"
+assert_eq "logs domain has one lens" "1" "$logs_lens_count"
+logs_lens_id="$(jq -r '.domains[] | select(.id == "logs") | .lenses[0]' "$SCRIPT_DIR/config/domains.json")"
+assert_eq "logs domain registers error-storms" "error-storms" "$logs_lens_id"
 assert_eq "logs domain has no mode field" "null" "$logs_mode"
 assert_eq "domain order values are unique" "" "$duplicate_orders"
 

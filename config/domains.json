@@ -177,7 +177,7 @@
       "id": "logs",
       "name": "Runtime Log Analysis",
       "order": 28,
-      "lenses": []
+      "lenses": ["error-storms"]
     },
     {
       "id": "kubernetes",
