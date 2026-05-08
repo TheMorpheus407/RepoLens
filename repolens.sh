@@ -166,6 +166,10 @@ Environment:
                            with the remaining children. Should be >=
                            MAX_ITERATIONS_PER_LENS * resolved agent timeout plus
                            a buffer for non-agent I/O.
+  REPOLENS_CLEANUP_GRACE   Interrupt cleanup grace in seconds (default: 5).
+                           On Ctrl-C or TERM, tracked parallel workers receive
+                           SIGTERM, are polled for this grace period, then any
+                           remaining workers are SIGKILL'd before cleanup returns.
 EOF
 
   # Dynamic section: list modes, domains, and lenses from config

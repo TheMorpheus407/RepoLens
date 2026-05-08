@@ -27,6 +27,8 @@ _REPOLENS_CHILD_PIDS=()
 _REPOLENS_CHILD_LENS_IDS=()
 _REPOLENS_SEM_DIR=""
 _REPOLENS_MAX_PARALLEL=8
+_REPOLENS_CLEANUP_IN_PROGRESS=0
+_REPOLENS_CLEANUP_FORCE_KILL=0
 
 # init_parallel <sem_dir> <max_parallel>
 #   Creates semaphore directory, sets max parallel count.
@@ -35,21 +37,95 @@ init_parallel() {
   local sem_dir="$1" max_parallel="${2:-8}"
   _REPOLENS_SEM_DIR="$sem_dir"
   _REPOLENS_MAX_PARALLEL="$max_parallel"
+  _REPOLENS_CLEANUP_IN_PROGRESS=0
+  _REPOLENS_CLEANUP_FORCE_KILL=0
   mkdir -p "$_REPOLENS_SEM_DIR"
   trap '_cleanup_children' INT TERM
 }
 
 # _cleanup_children
-#   Kill all tracked child processes. Called on signal.
+#   Kill all tracked child processes with bounded TERM-to-KILL cleanup.
 _cleanup_children() {
-  local pid
+  local pid cleanup_grace waited remaining sigkill_count total_children
+  local tracked_pids=("${_REPOLENS_CHILD_PIDS[@]}")
+
   echo ""
-  log_warn "Interrupt received. Stopping ${#_REPOLENS_CHILD_PIDS[@]} child processes..."
-  for pid in "${_REPOLENS_CHILD_PIDS[@]}"; do
-    kill "$pid" 2>/dev/null
+
+  if [[ "$_REPOLENS_CLEANUP_IN_PROGRESS" == "1" ]]; then
+    _REPOLENS_CLEANUP_FORCE_KILL=1
+    log_warn "Cleanup already in progress; forcing SIGKILL for remaining children."
+    for pid in "${tracked_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null
+      fi
+    done
+    _REPOLENS_CHILD_PIDS=()
+    _REPOLENS_CHILD_LENS_IDS=()
+    return 0
+  fi
+
+  _REPOLENS_CLEANUP_IN_PROGRESS=1
+  _REPOLENS_CLEANUP_FORCE_KILL=0
+  total_children="${#tracked_pids[@]}"
+  sigkill_count=0
+
+  cleanup_grace="${REPOLENS_CLEANUP_GRACE:-5}"
+  if [[ ! "$cleanup_grace" =~ ^[0-9]+$ ]]; then
+    log_warn "Invalid REPOLENS_CLEANUP_GRACE='$cleanup_grace'; using default 5s."
+    cleanup_grace=5
+  else
+    cleanup_grace=$((10#$cleanup_grace))
+  fi
+
+  log_warn "Interrupt received. Stopping ${total_children} child processes..."
+  for pid in "${tracked_pids[@]}"; do
+    kill -TERM "$pid" 2>/dev/null
   done
-  wait 2>/dev/null
-  log_warn "All children stopped."
+
+  waited=0
+  while (( waited < cleanup_grace )); do
+    remaining=0
+    for pid in "${tracked_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        remaining=$((remaining + 1))
+      else
+        wait "$pid" 2>/dev/null || true
+      fi
+    done
+    (( remaining == 0 || _REPOLENS_CLEANUP_FORCE_KILL == 1 )) && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  for pid in "${tracked_pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null
+      sigkill_count=$((sigkill_count + 1))
+    else
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+
+  waited=0
+  while (( waited < 2 )); do
+    remaining=0
+    for pid in "${tracked_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        remaining=$((remaining + 1))
+      else
+        wait "$pid" 2>/dev/null || true
+      fi
+    done
+    (( remaining == 0 )) && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  _REPOLENS_CHILD_PIDS=()
+  _REPOLENS_CHILD_LENS_IDS=()
+  _REPOLENS_CLEANUP_IN_PROGRESS=0
+  _REPOLENS_CLEANUP_FORCE_KILL=0
+  log_warn "Stopped ${total_children} children (${sigkill_count} SIGKILL'd)"
 }
 
 # sem_acquire
