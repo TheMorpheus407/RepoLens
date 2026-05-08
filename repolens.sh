@@ -169,6 +169,10 @@ Environment:
                            with the remaining children. Should be >=
                            MAX_ITERATIONS_PER_LENS * resolved agent timeout plus
                            a buffer for rate-limit sleep and non-agent I/O.
+  REPOLENS_HEARTBEAT_INTERVAL
+                           Parallel-worker heartbeat interval in seconds
+                           (default: 60). Logs currently running lenses with
+                           elapsed runtime; set to 0 to disable.
   REPOLENS_CLEANUP_GRACE   Interrupt cleanup grace in seconds (default: 5).
                            On Ctrl-C or TERM, tracked parallel workers receive
                            SIGTERM, are polled for this grace period, then any
@@ -1459,7 +1463,7 @@ if $PARALLEL; then
       break
     fi
     parallel_count=$((parallel_count + 1))
-    spawn_lens "${lens_entry#*/}" run_lens "$lens_entry"
+    spawn_lens "$lens_entry" run_lens "$lens_entry"
   done
 
   if ! wait_all; then
