@@ -98,6 +98,7 @@ Options:
   --source <file>         Source material for content creation (PDF, text, markdown — agent reads directly)
   --logs <path>           Runtime log file or directory for the 'logs' domain (path string only — agent reads it)
   --focus <lens-id>       Run a single lens (e.g., "injection", "dead-code")
+  --lens <lens-id>        Alias for --focus
   --domain <domain-id>    Run all lenses in one domain (e.g., "security")
   --parallel              Run lenses in parallel (one agent process per lens)
   --max-parallel <n>      Max concurrent agents in parallel mode (default: 8)
@@ -325,8 +326,8 @@ while [[ $# -gt 0 ]]; do
       MODE="$2"
       shift 2
       ;;
-    --focus)
-      [[ $# -ge 2 ]] || die "Option --focus requires an argument."
+    --focus|--lens)
+      [[ $# -ge 2 ]] || die "Option $1 requires an argument."
       FOCUS="$2"
       shift 2
       ;;
