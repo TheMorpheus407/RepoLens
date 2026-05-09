@@ -107,6 +107,8 @@ Options:
   --max-issues <n>        Stop after creating n total issues (dry-run quality check)
   --depth <n>             DONE streak depth per lens. Defaults: 3 for audit/feature/bugfix,
                            1 otherwise. Must be between 1 and 19.
+  --rounds <n>            Cross-lens rounds (default: 1; capped per mode —
+                           deploy/opensource/content/discover locked to 1)
   --local                 Write findings as local markdown files instead of creating remote issues
   --output <path>         Output directory for local markdown files (requires --local, default: logs/<run-id>/issues/)
   --forge <provider>      gh (GitHub) | tea (Gitea) | fj (Forgejo/Codeberg) — overrides auto-detection from origin
@@ -182,6 +184,8 @@ Environment:
                            a buffer for rate-limit sleep and non-agent I/O.
   DONE_STREAK_REQUIRED     DEPRECATED alias for --depth. Used only when --depth
                            is unset; must be between 1 and 19.
+  REPOLENS_ROUNDS          Fallback for --rounds when the CLI flag is unset.
+                           Must be a positive integer within the mode cap.
   REPOLENS_HEARTBEAT_INTERVAL
                            Per-lens heartbeat file interval in seconds
                            (default: 15), and parallel-worker log heartbeat
@@ -300,6 +304,8 @@ SPEC_FILE=""
 MAX_ISSUES=""
 DEPTH=""
 DEPTH_SET=false
+ROUNDS=""
+ROUNDS_SET=false
 CHANGE_STATEMENT=""
 SOURCE_FILE=""
 LOGS_PATH=""
@@ -370,6 +376,12 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "Option --depth requires a positive integer argument."
       DEPTH="$2"
       DEPTH_SET=true
+      shift 2
+      ;;
+    --rounds)
+      [[ $# -ge 2 ]] || die "Option --rounds requires a positive integer argument."
+      ROUNDS="$2"
+      ROUNDS_SET=true
       shift 2
       ;;
     --change)
@@ -458,6 +470,16 @@ case "$MODE" in
   audit|feature|bugfix|discover|deploy|custom|opensource|content) ;;
   *) die "Invalid mode: $MODE (expected 'audit', 'feature', 'bugfix', 'discover', 'deploy', 'custom', 'opensource', or 'content')" ;;
 esac
+
+if $ROUNDS_SET; then
+  validate_rounds "$MODE" "$ROUNDS" "--rounds"
+elif [[ ${REPOLENS_ROUNDS+x} ]]; then
+  ROUNDS="$REPOLENS_ROUNDS"
+  validate_rounds "$MODE" "$ROUNDS" "REPOLENS_ROUNDS"
+else
+  ROUNDS=1
+  validate_rounds "$MODE" "$ROUNDS" "--rounds"
+fi
 
 AGENT_TIMEOUT_SECS="$(resolve_agent_timeout "$MODE")"
 AGENT_KILL_GRACE_SECS="$(resolve_agent_kill_grace)"
@@ -1374,6 +1396,7 @@ if $DRY_RUN; then
   echo "Mode:         $MODE"
   echo "Agent:        $AGENT"
   echo "Project:      $PROJECT_PATH"
+  echo "Rounds:      $ROUNDS"
   echo "Lenses:       $TOTAL_LENSES"
   if $LOCAL_MODE; then
     echo "Output:       local markdown ($OUTPUT_DIR)"

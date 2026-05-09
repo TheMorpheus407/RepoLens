@@ -68,11 +68,37 @@ declare -A MODE_DEFAULT_DEPTH=(
   [content]=1
 )
 
+declare -A ROUNDS_CAP_BY_MODE=(
+  [audit]=10
+  [feature]=10
+  [bugfix]=10
+  [custom]=10
+  [bugreport]=10
+  [deploy]=1
+  [opensource]=1
+  [content]=1
+  [discover]=1
+)
+
 mode_default_depth() {
   local mode="$1"
   local depth="${MODE_DEFAULT_DEPTH[$mode]:-}"
   [[ -n "$depth" ]] || die "Internal error: unsupported mode '$mode' for depth default"
   printf '%s\n' "$depth"
+}
+
+validate_rounds() {
+  local mode="$1"
+  local value="$2"
+  local source="${3:---rounds}"
+  local cap="${ROUNDS_CAP_BY_MODE[$mode]:-}"
+
+  [[ -n "$cap" ]] || die "Internal error: unsupported mode '$mode' for rounds cap"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "$source must be a positive integer, got: $value"
+
+  if (( value > cap )); then
+    die "$source $value exceeds cap for mode '$mode' (max: $cap)"
+  fi
 }
 
 agent_timeout_default_for_mode() {

@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- `--rounds <n>` now accepts a validated cross-lens round count, honors `REPOLENS_ROUNDS` as a fallback with CLI precedence, applies per-mode caps (`audit`, `feature`, `bugfix`, and `custom` up to `10`; `deploy`, `opensource`, `content`, and `discover` locked to `1`), and shows the resolved value in `--dry-run` ([#140](https://github.com/TheMorpheus407/RepoLens/issues/140))
 - `logs/state-machine-violations` lens for detecting illegal, skipped, regressed, incompatible, or cross-component lifecycle states in runtime logs supplied through `--logs` ([#139](https://github.com/TheMorpheus407/RepoLens/issues/139))
 - `repolens.sh status [run-id]` now renders the newest or named `logs/<run-id>/status.json` snapshot with human-readable progress, raw `--json`, `--watch`, `--stale-after`, `--no-color`, stale worker exit code `2`, and no normal `--project` / `--agent` requirement ([#122](https://github.com/TheMorpheus407/RepoLens/issues/122))
 - Aggregated run status snapshots under `logs/<run-id>/status.json` now expose whole-run state, queued/active/completed lenses, issue totals, completion percentage, and final `finished`/`interrupted` state for operators and monitoring tools; configure refreshes with `REPOLENS_STATUS_INTERVAL` (default `10`) ([#121](https://github.com/TheMorpheus407/RepoLens/issues/121))
