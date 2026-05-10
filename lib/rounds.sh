@@ -29,6 +29,11 @@
 #   budgets. Keep GLOBAL_ISSUES_CREATED cumulative across rounds until that
 #   contract changes.
 
+declare -A META_ORCH_TEMPLATE_BY_MODE=(
+  [discover]="meta_orchestrator_discover.md"
+  [content]="meta_orchestrator_content.md"
+)
+
 _rounds_valid_array_name() {
   local name="$1"
   [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
@@ -328,7 +333,7 @@ run_meta_orchestrator() {
   local prev_arg="$1" next_arg="$2"
   local run_id="${RUN_ID:-}" repo_root prev_round_dir next_round_dir
   local round next_round digest_path dispatch_path hypotheses_path
-  local prompt_path output_path template_file project_path prompt vars
+  local prompt_path output_path template_name template_file project_path prompt vars
   local agent_rc=0
 
   if [[ "$prev_arg" == */* ]]; then
@@ -356,7 +361,8 @@ run_meta_orchestrator() {
   hypotheses_path="$next_round_dir/hypotheses.md"
   prompt_path="$next_round_dir/meta-orchestrator-prompt.md"
   output_path="$next_round_dir/meta-orchestrator-output.txt"
-  template_file="${BASE_PROMPTS_DIR:-$repo_root/prompts/_base}/meta_orchestrator.md"
+  template_name="$(_rounds_meta_template_name_for_mode "${MODE:-}")"
+  template_file="${BASE_PROMPTS_DIR:-$repo_root/prompts/_base}/$template_name"
   project_path="${PROJECT_PATH:-$repo_root}"
 
   if ! mkdir -p "$next_round_dir"; then
@@ -400,6 +406,16 @@ run_meta_orchestrator() {
   _rounds_meta_parse_output "$output_path" "$dispatch_path" "$hypotheses_path" || return $?
   log_info "[round $round] Meta-orchestrator dispatch written to $dispatch_path"
   return 0
+}
+
+_rounds_meta_template_name_for_mode() {
+  local mode="${1:-}"
+
+  if [[ -n "$mode" && -n "${META_ORCH_TEMPLATE_BY_MODE[$mode]+x}" ]]; then
+    printf '%s\n' "${META_ORCH_TEMPLATE_BY_MODE[$mode]}"
+  else
+    printf '%s\n' "meta_orchestrator.md"
+  fi
 }
 
 _rounds_repo_root() {
