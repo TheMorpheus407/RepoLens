@@ -177,7 +177,7 @@
       "id": "logs",
       "name": "Runtime Log Analysis",
       "order": 28,
-      "lenses": ["error-storms", "error-cascades", "retry-loops", "recursive-growth", "resource-leaks", "resource-exhaustion", "log-gaps", "missing-heartbeats", "silent-failures", "state-machine-violations", "lifecycle-violations", "process-orphans", "latency-degradation"]
+      "lenses": ["error-storms", "error-cascades", "retry-loops", "recursive-growth", "resource-leaks", "resource-exhaustion", "log-gaps", "missing-heartbeats", "silent-failures", "state-machine-violations", "lifecycle-violations", "process-orphans", "latency-degradation", "clock-skew"]
     },
     {
       "id": "kubernetes",
