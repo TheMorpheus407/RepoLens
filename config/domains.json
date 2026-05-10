@@ -521,7 +521,8 @@
         "latency-degradation",
         "clock-skew",
         "timeout-clusters",
-        "deadlock-symptoms"
+        "deadlock-symptoms",
+        "data-loss-signals"
       ]
     },
     {
