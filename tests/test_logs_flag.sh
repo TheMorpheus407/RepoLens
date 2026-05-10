@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tests for issue #129/#130/#139/#141/#144/#146/#148/#150/#151: --logs path plumbing and logs domain lens registration.
+# Tests for issue #129/#130/#139/#141/#144/#146/#148/#150/#151/#153: --logs path plumbing and logs domain lens registration.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -157,7 +157,7 @@ echo "Test 6: Logs domain dry-run includes registered logs lenses"
 logs_dry_output="$(run_repolens "${RUN_PREFIX}-logs-dry" --domain logs --dry-run)"
 logs_dry_rc=$?
 assert_exit_code "logs domain dry-run exits zero" 0 "$logs_dry_rc"
-assert_contains "logs dry-run shows fourteen lenses" "Lenses:       14" "$logs_dry_output"
+assert_contains "logs dry-run shows fifteen lenses" "Lenses:       15" "$logs_dry_output"
 assert_contains "logs dry-run lists error-storms" "logs/error-storms" "$logs_dry_output"
 assert_contains "logs dry-run lists error-cascades" "logs/error-cascades" "$logs_dry_output"
 assert_contains "logs dry-run lists retry-loops" "logs/retry-loops" "$logs_dry_output"
@@ -172,6 +172,7 @@ assert_contains "logs dry-run lists lifecycle-violations" "logs/lifecycle-violat
 assert_contains "logs dry-run lists process-orphans" "logs/process-orphans" "$logs_dry_output"
 assert_contains "logs dry-run lists latency-degradation" "logs/latency-degradation" "$logs_dry_output"
 assert_contains "logs dry-run lists clock-skew" "logs/clock-skew" "$logs_dry_output"
+assert_contains "logs dry-run lists timeout-clusters" "logs/timeout-clusters" "$logs_dry_output"
 assert_contains "logs dry-run completes" "Dry run complete" "$logs_dry_output"
 
 echo ""
@@ -194,6 +195,7 @@ assert_contains "logs run completes lifecycle-violations" "[logs/lifecycle-viola
 assert_contains "logs run completes process-orphans" "[logs/process-orphans] DONE x3" "$logs_run_output"
 assert_contains "logs run completes latency-degradation" "[logs/latency-degradation] DONE x3" "$logs_run_output"
 assert_contains "logs run completes clock-skew" "[logs/clock-skew] DONE x3" "$logs_run_output"
+assert_contains "logs run completes timeout-clusters" "[logs/timeout-clusters] DONE x3" "$logs_run_output"
 
 echo ""
 echo "Test 8: Invalid domain still fails"
@@ -216,9 +218,9 @@ logs_lens_count="$(jq -r '.domains[] | select(.id == "logs") | .lenses | length'
 logs_mode="$(jq -r '.domains[] | select(.id == "logs") | .mode // "null"' "$SCRIPT_DIR/config/domains.json")"
 duplicate_orders="$(jq -r '.domains[].order' "$SCRIPT_DIR/config/domains.json" | sort -n | uniq -d)"
 assert_eq "logs domain order is 28" "28" "$logs_order"
-assert_eq "logs domain has fourteen lenses" "14" "$logs_lens_count"
+assert_eq "logs domain has fifteen lenses" "15" "$logs_lens_count"
 logs_lens_ids="$(jq -r '.domains[] | select(.id == "logs") | .lenses | join(",")' "$SCRIPT_DIR/config/domains.json")"
-assert_eq "logs domain registers expected lenses" "error-storms,error-cascades,retry-loops,recursive-growth,resource-leaks,resource-exhaustion,log-gaps,missing-heartbeats,silent-failures,state-machine-violations,lifecycle-violations,process-orphans,latency-degradation,clock-skew" "$logs_lens_ids"
+assert_eq "logs domain registers expected lenses" "error-storms,error-cascades,retry-loops,recursive-growth,resource-leaks,resource-exhaustion,log-gaps,missing-heartbeats,silent-failures,state-machine-violations,lifecycle-violations,process-orphans,latency-degradation,clock-skew,timeout-clusters" "$logs_lens_ids"
 assert_eq "logs domain has no mode field" "null" "$logs_mode"
 assert_eq "domain order values are unique" "" "$duplicate_orders"
 
