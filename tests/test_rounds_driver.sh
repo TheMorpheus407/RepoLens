@@ -14,7 +14,9 @@
 # limitations under the License.
 
 # Tests for issue #143: lib/rounds.sh provides the round-aware outer
-# driver without wiring it into repolens.sh yet.
+# driver. As of issue #169, the driver is wired into repolens.sh; these
+# tests exercise the library entry point directly to keep the contract
+# under unit-level coverage.
 #
 # shellcheck disable=SC2034  # Test globals are read by the sourced rounds module.
 
