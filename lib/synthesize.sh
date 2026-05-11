@@ -212,6 +212,7 @@ validate_manifest() {
     def severities: ["critical","high","medium","low"];
     def granularities: ["independent","cluster"];
     def cross_link_types: ["comment","reopen-suggestion"];
+    def verification_statuses: ["verified","stale","wrong","unknown"];
 
     to_entries[] as $e
     | $e.key as $i
@@ -226,6 +227,7 @@ validate_manifest() {
         if ($v.lens // "" | is_nonempty_string | not) then "entry \($i): missing or empty lens" else empty end,
         if (severities | index($v.severity // "")) == null then "entry \($i): invalid severity \($v.severity // null | tostring)" else empty end,
         if (granularities | index($v.granularity // "")) == null then "entry \($i): invalid granularity \($v.granularity // null | tostring)" else empty end,
+        if ($v | has("verification_status")) and (verification_statuses | index($v.verification_status // "")) == null then "entry \($i): invalid verification_status \($v.verification_status // null | tostring)" else empty end,
         if ($v.source_finding_paths | type) != "array" then "entry \($i): source_finding_paths must be an array"
           elif ($v.source_finding_paths | length) == 0 then "entry \($i): source_finding_paths must be non-empty"
           elif ([ $v.source_finding_paths[] | is_nonempty_string ] | all | not) then "entry \($i): source_finding_paths entries must be non-empty strings"

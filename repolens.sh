@@ -46,6 +46,8 @@ source "$SCRIPT_DIR/lib/parallel.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/rounds.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/verify.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/hosted.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/android.sh"
@@ -115,6 +117,9 @@ Options:
                            1 otherwise. Must be between 1 and 19.
   --rounds <n>            Cross-lens rounds (default: 1; capped per mode —
                            deploy/opensource/content/discover locked to 1)
+  --no-verifier           Skip the post-rounds verifier step. Defaults: ON for
+                           --mode bugreport (evidence accuracy is critical when
+                           filing bug reports); OFF for every other mode.
   --local                 Write findings as local markdown files instead of creating remote issues
   --output <path>         Output directory for local markdown files (requires --local, default: logs/<run-id>/issues/)
   --forge <provider>      gh (GitHub) | tea (Gitea) | fj (Forgejo/Codeberg) — overrides auto-detection from origin
@@ -197,6 +202,8 @@ Environment:
                            is unset; must be between 1 and 19.
   REPOLENS_ROUNDS          Fallback for --rounds when the CLI flag is unset.
                            Must be a positive integer within the mode cap.
+  REPOLENS_NO_VERIFIER     Fallback for --no-verifier. Set to "true"/"1" to
+                           disable the verifier when the CLI flag is not used.
   REPOLENS_HEARTBEAT_INTERVAL
                            Per-lens heartbeat file interval in seconds
                            (default: 15), and parallel-worker log heartbeat
@@ -318,6 +325,8 @@ DEPTH=""
 DEPTH_SET=false
 ROUNDS=""
 ROUNDS_SET=false
+NO_VERIFIER=""
+NO_VERIFIER_SET=false
 CHANGE_STATEMENT=""
 BUG_REPORT=""
 BUG_REPORT_SET=false
@@ -398,6 +407,11 @@ while [[ $# -gt 0 ]]; do
       ROUNDS="$2"
       ROUNDS_SET=true
       shift 2
+      ;;
+    --no-verifier)
+      NO_VERIFIER=true
+      NO_VERIFIER_SET=true
+      shift
       ;;
     --change)
       [[ $# -ge 2 ]] || die "Option --change requires a statement string."
@@ -534,6 +548,27 @@ elif [[ ${REPOLENS_ROUNDS+x} ]]; then
 else
   ROUNDS="$(mode_default_rounds "$MODE")"
   validate_rounds "$MODE" "$ROUNDS" "--rounds"
+fi
+
+# --- Resolve --no-verifier ---
+# Verifier runs once after run_rounds completes and before the synthesizer.
+# Default ON only for bugreport mode, where evidence accuracy is critical and
+# the cost of filing a bug report on bad evidence is high. Every other mode
+# defaults OFF; lens-level DONE x3 already provides per-lens self-verification
+# and the verifier roughly doubles agent spend on a run-wide basis.
+if $NO_VERIFIER_SET; then
+  : # explicit CLI flag wins
+elif [[ -n "${REPOLENS_NO_VERIFIER:-}" ]]; then
+  case "${REPOLENS_NO_VERIFIER,,}" in
+    1|true|yes|on) NO_VERIFIER=true ;;
+    0|false|no|off|"") NO_VERIFIER=false ;;
+    *) die "REPOLENS_NO_VERIFIER must be a boolean (true/false), got: $REPOLENS_NO_VERIFIER" ;;
+  esac
+else
+  case "$MODE" in
+    bugreport) NO_VERIFIER=false ;;
+    *) NO_VERIFIER=true ;;
+  esac
 fi
 
 CURRENT_ROUND_INDEX=""
@@ -1909,6 +1944,20 @@ run_lens() {
 RUN_ROUNDS_RC=0
 run_rounds "$ROUNDS" LENS_LIST
 RUN_ROUNDS_RC=$?
+
+# --- Verifier (post-rounds, pre-synthesizer) ---
+# Re-reads every finding's cited code locations and emits
+# logs/<run-id>/final/verification.json so the synthesizer can skip WRONG
+# findings and downrank STALE ones. Verifier failures are non-fatal: a missing
+# verification.json simply means the synthesizer proceeds without filtering.
+if [[ "$RUN_ROUNDS_RC" -eq 0 && "${NO_VERIFIER:-true}" != "true" ]]; then
+  log_info "Verifier: re-reading cited code locations for evidence accuracy"
+  if run_verifier "$RUN_ID"; then
+    log_info "Verifier: verification.json promoted"
+  else
+    log_warn "Verifier: failed — synthesizer will proceed without verification filtering"
+  fi
+fi
 
 # --- Finalize ---
 finalize_summary "$SUMMARY_FILE"
