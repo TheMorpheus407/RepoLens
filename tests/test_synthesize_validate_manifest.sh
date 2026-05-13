@@ -164,6 +164,46 @@ validate_manifest "$clean_path" 2>"$TMPDIR/clean.err"
 status=$?
 assert_success "clean manifest returns 0" "$status"
 
+# Case: uppercase/bracketed severity is normalized in-place
+uppercase_sev="$TMPDIR/uppercase-severity.json"
+cat > "$uppercase_sev" <<'JSON'
+[
+  {
+    "cluster_id": "x::y",
+    "title": "[HIGH] Fix upload validation",
+    "severity": "HIGH",
+    "domain": "code",
+    "lens": "input-validation",
+    "root_cause_category": "missing-validation",
+    "source_finding_paths": ["logs/run-1/rounds/round-1/lens-outputs/code/input-validation.md"],
+    "dedup_against_existing": [],
+    "proposed_labels": ["bug"],
+    "cross_link_actions": [],
+    "granularity": "independent",
+    "body": "body"
+  },
+  {
+    "cluster_id": "x::z",
+    "title": "[MEDIUM] Fix upload validation elsewhere",
+    "severity": "[MEDIUM]",
+    "domain": "code",
+    "lens": "input-validation",
+    "root_cause_category": "missing-validation",
+    "source_finding_paths": ["logs/run-1/rounds/round-1/lens-outputs/code/input-validation-2.md"],
+    "dedup_against_existing": [],
+    "proposed_labels": ["bug"],
+    "cross_link_actions": [],
+    "granularity": "independent",
+    "body": "body"
+  }
+]
+JSON
+validate_manifest "$uppercase_sev" 2>"$TMPDIR/uppercase-severity.err"
+status=$?
+assert_success "uppercase and bracketed severity returns 0" "$status"
+assert_eq "uppercase severity is stored canonical" "high" "$(jq -r '.[0].severity' "$uppercase_sev")"
+assert_eq "bracketed severity is stored canonical" "medium" "$(jq -r '.[1].severity' "$uppercase_sev")"
+
 # Case: missing required body field
 missing_body="$TMPDIR/missing-body.json"
 cat > "$missing_body" <<'JSON'

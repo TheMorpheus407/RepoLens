@@ -15,6 +15,13 @@
 
 # RepoLens - round-aware lens execution driver
 
+if ! declare -F severity_normalize >/dev/null 2>&1; then
+  _rounds_core_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/core.sh"
+  # shellcheck source=/dev/null
+  [[ -f "$_rounds_core_lib" ]] && source "$_rounds_core_lib"
+  unset _rounds_core_lib
+fi
+
 # run_rounds <rounds_total> <lens_list_array_name>
 #   Runs the current per-lens dispatch path for rounds 1..rounds_total.
 #   The second argument is the name of a Bash array, for example LENS_LIST.
@@ -1157,7 +1164,7 @@ build_round_digest() {
       continue
     fi
 
-    severity="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "severity")"
+    severity="$(severity_normalize "$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "severity")")"
     domain="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "domain")"
     lens="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "lens")"
 

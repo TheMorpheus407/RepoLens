@@ -246,7 +246,7 @@ Each markdown file must contain YAML frontmatter followed by the finding body:
 \`\`\`markdown
 ---
 title: \"[SEVERITY] Finding title\"
-severity: HIGH|MEDIUM|LOW|INFO
+severity: critical|high|medium|low
 domain: <domain>
 lens: <lens-id>
 labels:

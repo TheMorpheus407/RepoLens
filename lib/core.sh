@@ -30,6 +30,29 @@ warn() {
   echo "WARN: $*" >&2
 }
 
+# severity_normalize <value>
+#   Canonicalizes structured severity values. Display-only title prefixes may
+#   remain uppercase, but data fields use critical|high|medium|low.
+severity_normalize() {
+  local value="${1:-}"
+
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  if [[ "$value" == \[*\] ]]; then
+    value="${value#\[}"
+    value="${value%\]}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+  fi
+
+  value="${value,,}"
+  case "$value" in
+    critical|high|medium|low) printf '%s\n' "$value" ;;
+    *) printf '' ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Dependency check
 # ---------------------------------------------------------------------------

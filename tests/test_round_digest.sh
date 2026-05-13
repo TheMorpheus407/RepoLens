@@ -332,7 +332,7 @@ write_finding "$lens_dir/003-unit-test-gaps.md" LOW testing unit-test-gaps test-
 write_finding "$lens_dir/004-error-path-tests.md" MEDIUM testing error-path-tests test-coverage "tests/error_test.rb"
 write_finding "$lens_dir/005-ci-pipeline.md" LOW devops ci-pipeline build-configuration ".github/workflows/ci.yml"
 write_finding "$lens_dir/006-env-config.md" MEDIUM devops env-config build-configuration ".env.example"
-write_finding "$lens_dir/007-logging.md" INFO observability logging input-validation "lib/logging.sh"
+write_finding "$lens_dir/007-logging.md" LOW observability logging input-validation "lib/logging.sh"
 cat > "$lens_dir/not-a-finding.txt" <<'EOF'
 ---
 severity: HIGH
@@ -485,9 +485,10 @@ write_finding "$lens_dir/002-good.md" MEDIUM security auth-session input-validat
 write_finding "$lens_dir/003-good.md" LOW testing unit-test-gaps test-coverage "tests/api_test.rb"
 write_finding "$lens_dir/004-good.md" MEDIUM testing error-path-tests test-coverage "tests/error_test.rb"
 write_finding "$lens_dir/005-good.md" LOW devops ci-pipeline build-configuration ".github/workflows/ci.yml"
-write_finding "$lens_dir/006-good.md" INFO observability logging input-validation "lib/logging.sh"
-write_malformed_finding "$lens_dir/007-bad-frontmatter.md"
-write_missing_required_key_finding "$lens_dir/008-missing-lens.md"
+write_finding "$lens_dir/006-good.md" LOW observability logging input-validation "lib/logging.sh"
+write_finding "$lens_dir/007-invalid-severity.md" INFO observability structured-logging input-validation "lib/structured_logging.sh"
+write_malformed_finding "$lens_dir/008-bad-frontmatter.md"
+write_missing_required_key_finding "$lens_dir/009-missing-lens.md"
 
 run_build_round_digest "$round_dir"
 rc=$?
@@ -501,10 +502,12 @@ for lens in injection auth-session unit-test-gaps error-path-tests ci-pipeline l
   assert_contains "digest keeps valid lens id $lens" "$lens" "$digest_content"
 done
 assert_not_contains "malformed lens is skipped from digest" "broken-frontmatter" "$digest_content"
+assert_not_contains "invalid INFO severity is skipped from digest" "structured-logging" "$digest_content"
 assert_not_contains "frontmatter missing required lens key is skipped" "Missing lens finding" "$digest_content"
 warnings="$(join_by " " "${LOG_WARN_MESSAGES[@]:-}")"
 assert_nonempty "malformed frontmatter emits a warning" "$warnings"
-assert_contains "warning identifies malformed file" "007-bad-frontmatter.md" "$warnings"
+assert_contains "warning identifies malformed file" "008-bad-frontmatter.md" "$warnings"
+assert_contains "warning identifies invalid severity file" "007-invalid-severity.md" "$warnings"
 assert_contains "warning identifies missing required keys" "severity, domain, and lens are required" "$warnings"
 
 echo ""

@@ -18,6 +18,13 @@
 # This module is sourceable; it defines functions only and has no top-level
 # side effects beyond loading shared helpers.
 
+if ! declare -F severity_normalize >/dev/null 2>&1; then
+  _synthesize_core_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/core.sh"
+  # shellcheck source=/dev/null
+  [[ -f "$_synthesize_core_lib" ]] && source "$_synthesize_core_lib"
+  unset _synthesize_core_lib
+fi
+
 # _synthesize_repo_root
 #   Resolves the repository root from this file's location. Used to locate
 #   prompts/_base/synthesize.md and to compute default LOG_BASE values when
@@ -94,10 +101,12 @@ _synthesize_extract_json_array() {
 #   collapses non-alphanumeric runs to single spaces, and trims.
 _synthesize_normalize_title() {
   local title="${1:-}"
-  title="${title,,}"
-  if [[ "$title" =~ ^\[[a-z]+\][[:space:]]*(.*)$ ]]; then
-    title="${BASH_REMATCH[1]}"
+  if [[ "$title" =~ ^\[([A-Za-z]+)\][[:space:]]*(.*)$ ]]; then
+    if [[ -n "$(severity_normalize "${BASH_REMATCH[1]}")" ]]; then
+      title="${BASH_REMATCH[2]}"
+    fi
   fi
+  title="${title,,}"
   local out="" ch i len="${#title}"
   for (( i = 0; i < len; i++ )); do
     ch="${title:i:1}"
@@ -112,6 +121,34 @@ _synthesize_normalize_title() {
     out="${out//  / }"
   done
   printf '%s' "$out"
+}
+
+_synthesize_normalize_manifest_severities() {
+  local manifest="$1" tmp next idx severity normalized
+  tmp="${manifest}.severity.$$"
+  next="${tmp}.next"
+
+  if ! jq '.' "$manifest" > "$tmp"; then
+    rm -f "$tmp" "$next"
+    return 1
+  fi
+
+  while IFS=$'\t' read -r idx severity; do
+    normalized="$(severity_normalize "$severity")"
+    [[ -n "$normalized" ]] || continue
+    if ! jq --argjson idx "$idx" --arg severity "$normalized" \
+        '.[$idx].severity = $severity' "$tmp" > "$next"; then
+      rm -f "$tmp" "$next"
+      return 1
+    fi
+    mv "$next" "$tmp"
+  done < <(jq -r 'to_entries[] | select(.value | type == "object") | [.key, (.value.severity // "")] | @tsv' "$manifest")
+
+  if ! mv "$tmp" "$manifest"; then
+    rm -f "$tmp" "$next"
+    return 1
+  fi
+  rm -f "$next"
 }
 
 # _synthesize_title_ngrams <normalized_title>
@@ -206,6 +243,11 @@ validate_manifest() {
 
   if (( entry_count == 0 )); then
     return 0
+  fi
+
+  if ! _synthesize_normalize_manifest_severities "$manifest"; then
+    echo "validate_manifest: failed to normalize manifest severity values" >&2
+    return 1
   fi
 
   local schema_errors

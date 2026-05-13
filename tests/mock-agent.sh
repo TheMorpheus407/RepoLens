@@ -150,7 +150,7 @@ emit_lens_findings() {
     cat > "$file" <<EOF
 ---
 title: "[LOW] ${title}"
-severity: LOW
+severity: low
 domain: ${domain}
 lens: ${lens}
 labels:
