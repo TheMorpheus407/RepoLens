@@ -82,6 +82,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Infrastructure
 
+- Docker-backed remote deploy integration coverage now runs in CI with `REPOLENS_TEST_DOCKER=1`, exercising the `--remote` deploy path against a disposable SSH container ([#202](https://github.com/TheMorpheus407/RepoLens/issues/202)).
 - GitHub Actions CI workflow: ShellCheck linting and test suite (`make check`) run on every push to `master` and pull request
 - CI status badge in README
 - `.github/CODEOWNERS` for automatic reviewer assignment on pull requests

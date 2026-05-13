@@ -630,6 +630,8 @@ bash tests/run-all.sh
 
 Either entry point discovers and runs all `tests/test_*.sh` scripts, reports per-suite results, and exits non-zero if any suite fails. Individual suites can also be run standalone, e.g. `bash tests/test_streak_ansi.sh`.
 
+Set `REPOLENS_TEST_DOCKER=1` to also run integration tests requiring Docker.
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.

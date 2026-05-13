@@ -33,3 +33,27 @@ jobs:
         run: make check
         env:
           GH_TOKEN: ${{ github.token }}
+
+  docker-integration:
+    name: Docker Integration (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: remote-deploy-e2e
+            command: bash tests/test_remote_deploy_e2e.sh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Run Docker integration suite
+        run: ${{ matrix.command }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOLENS_TEST_DOCKER: 1

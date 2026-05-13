@@ -246,9 +246,11 @@ make check
 
 Tests live in the `tests/` directory and follow the `test_*.sh` naming pattern. Each test script is a standalone bash script that validates a specific aspect of the project (documentation, configuration, lens structure, etc.).
 
+Some integration tests are opt-in because they require Docker. Set `REPOLENS_TEST_DOCKER=1` when running `make check` or an individual test script to include those Docker-backed suites.
+
 When adding a new lens, run `make check` to verify your lens file is correctly structured and registered.
 
-CI runs ShellCheck and the full test suite automatically on every pull request and push to `master`. You will see the results as a status check on your PR.
+CI runs ShellCheck, the default test suite, and the Docker integration suite automatically on every pull request and push to `master`. You will see the results as status checks on your PR.
 
 ## Reporting Bugs
 
