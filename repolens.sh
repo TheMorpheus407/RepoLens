@@ -1318,6 +1318,36 @@ log_info "Lens wall-clock budget: ${LENS_MAX_WALL_SECS}s"
 if [[ "$MODE" == "deploy" && "${TARGET_TYPE:-server}" == "android" && -n "${ANDROID_APK_PATH:-}" ]]; then
   log_info "Android deploy APK path: $(android_apk_display_path "$ANDROID_APK_PATH")"
 fi
+
+run_remote_preflight() {
+  [[ -n "${REMOTE_TARGET:-}" ]] || return 0
+
+  local remote_dir="$LOG_BASE/.remote"
+  local preflight_log="$remote_dir/preflight.log"
+  local ssh_args=(-o BatchMode=yes -o ConnectTimeout=5)
+  local ssh_target="$REMOTE_HOST"
+
+  mkdir -p "$remote_dir"
+  if [[ -n "${REMOTE_KEY:-}" ]]; then
+    ssh_args+=(-i "$REMOTE_KEY")
+  fi
+  if [[ -n "${REMOTE_PORT:-}" ]]; then
+    ssh_args+=(-p "$REMOTE_PORT")
+  fi
+  if [[ -n "${REMOTE_USER:-}" ]]; then
+    ssh_target="${REMOTE_USER}@${REMOTE_HOST}"
+  fi
+
+  if ssh "${ssh_args[@]}" "$ssh_target" 'hostname && uname -a' > "$preflight_log" 2>&1; then
+    log_info "Remote preflight captured: $preflight_log"
+    return 0
+  fi
+
+  local preflight_rc=$?
+  log_warn "Remote preflight failed for $REMOTE_TARGET (exit $preflight_rc); see $preflight_log"
+  return "$preflight_rc"
+}
+
 [[ "$MODE" == "custom" ]] && log_info "Custom mode: change impact analysis (DONE streak: 1)"
 [[ "$MODE" == "opensource" ]] && log_info "Open source mode: readiness audit (DONE streak: 1)"
 [[ "$MODE" == "content" ]] && log_info "Content mode: content audit & creation (DONE streak: 1)"
@@ -1979,6 +2009,7 @@ fi
 confirm_autonomous_mode
 confirm_deploy_authorization
 confirm_run
+run_remote_preflight || true
 maybe_build_android_apk_after_gates
 
 # --- Ensure forge labels ---
@@ -2040,9 +2071,9 @@ fi
 # --- Initialize summary ---
 if [[ ! -f "$SUMMARY_FILE" ]] || [[ -z "$RESUME_RUN_ID" ]]; then
   if $LOCAL_MODE; then
-    init_summary "$SUMMARY_FILE" "$RUN_ID" "$PROJECT_PATH" "$MODE" "$AGENT" "$SPEC_FILE" "$MAX_ISSUES" "local" "$OUTPUT_DIR"
+    init_summary "$SUMMARY_FILE" "$RUN_ID" "$PROJECT_PATH" "$MODE" "$AGENT" "$SPEC_FILE" "$MAX_ISSUES" "local" "$OUTPUT_DIR" "${REMOTE_TARGET:-}" "${REMOTE_LABEL:-}"
   else
-    init_summary "$SUMMARY_FILE" "$RUN_ID" "$PROJECT_PATH" "$MODE" "$AGENT" "$SPEC_FILE" "$MAX_ISSUES"
+    init_summary "$SUMMARY_FILE" "$RUN_ID" "$PROJECT_PATH" "$MODE" "$AGENT" "$SPEC_FILE" "$MAX_ISSUES" "github" "" "${REMOTE_TARGET:-}" "${REMOTE_LABEL:-}"
   fi
 fi
 
@@ -2059,7 +2090,7 @@ if $HOSTED && $PARALLEL; then
   PARALLEL=false
 fi
 
-start_status_updater "$RUN_ID" "$LOG_BASE" "$HEARTBEAT_DIR" "$completed_lenses_file" "$SUMMARY_FILE" "$PROJECT_PATH" "$FORGE_REPO_SLUG" "$MODE" "$AGENT" "$PARALLEL" "$MAX_PARALLEL"
+start_status_updater "$RUN_ID" "$LOG_BASE" "$HEARTBEAT_DIR" "$completed_lenses_file" "$SUMMARY_FILE" "$PROJECT_PATH" "$FORGE_REPO_SLUG" "$MODE" "$AGENT" "$PARALLEL" "$MAX_PARALLEL" "${REMOTE_TARGET:-}" "${REMOTE_LABEL:-}"
 
 # --- Run a single lens ---
 run_lens() {

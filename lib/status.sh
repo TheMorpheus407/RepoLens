@@ -129,6 +129,7 @@ resolve_status_stale_error_seconds() {
 write_status_snapshot() {
   local state="$1" run_id="$2" log_base="$3" heartbeat_dir="$4" completed_file="$5" summary_file="$6"
   local project="$7" repo="$8" mode="$9" agent="${10}" parallel="${11}" max_parallel="${12}" lenses_file="${13}"
+  local remote_target="${14:-}" remote_label="${15:-}"
   local status_file="$log_base/status.json"
   local tmp_file="${status_file}.tmp.${BASHPID}"
   local active_tmp completed_tmp lenses_tmp
@@ -144,6 +145,14 @@ write_status_snapshot() {
   fi
   if [[ -z "$started_at" ]]; then
     started_at="$now_iso"
+  fi
+  if [[ -f "$summary_file" ]]; then
+    if [[ -z "$remote_target" ]]; then
+      remote_target="$(jq -r '.remote_target // empty' "$summary_file" 2>/dev/null || true)"
+    fi
+    if [[ -z "$remote_label" ]]; then
+      remote_label="$(jq -r '.remote_label // empty' "$summary_file" 2>/dev/null || true)"
+    fi
   fi
 
   issues_created=0
@@ -224,6 +233,8 @@ write_status_snapshot() {
     --arg repo "$repo" \
     --arg mode "$mode" \
     --arg agent "$agent" \
+    --arg remote_target "$remote_target" \
+    --arg remote_label "$remote_label" \
     --argjson parallel "$parallel" \
     --argjson max_parallel "$max_parallel" \
     --arg started_at "$started_at" \
@@ -254,6 +265,8 @@ write_status_snapshot() {
           repo: $repo,
           mode: $mode,
           agent: $agent,
+          remote_target: (if $remote_target == "" then null else $remote_target end),
+          remote_label: (if $remote_label == "" then null else $remote_label end),
           parallel: $parallel,
           max_parallel: $max_parallel,
           started_at: $started_at,
@@ -511,13 +524,14 @@ status_updater_loop() {
 start_status_updater() {
   local run_id="$1" log_base="$2" heartbeat_dir="$3" completed_file="$4" summary_file="$5"
   local project="$6" repo="$7" mode="$8" agent="$9" parallel="${10}" max_parallel="${11}"
+  local remote_target="${12:-}" remote_label="${13:-}"
   local interval
 
   STATUS_LENSES_FILE="$log_base/.status-lenses"
   printf '%s\n' "${LENS_LIST[@]}" > "$STATUS_LENSES_FILE"
 
   interval="$(resolve_status_interval)"
-  write_status_snapshot "running" "$run_id" "$log_base" "$heartbeat_dir" "$completed_file" "$summary_file" "$project" "$repo" "$mode" "$agent" "$parallel" "$max_parallel" "$STATUS_LENSES_FILE" || true
+  write_status_snapshot "running" "$run_id" "$log_base" "$heartbeat_dir" "$completed_file" "$summary_file" "$project" "$repo" "$mode" "$agent" "$parallel" "$max_parallel" "$STATUS_LENSES_FILE" "$remote_target" "$remote_label" || true
 
   bash -c '
     source "$1"
@@ -528,6 +542,7 @@ start_status_updater() {
   ' "repolens-status-updater:$run_id" "$SCRIPT_DIR/lib/status.sh" "$SCRIPT_DIR/lib/logging.sh" \
     "$interval" "$$" "$run_id" "$log_base" "$heartbeat_dir" "$completed_file" "$summary_file" \
     "$project" "$repo" "$mode" "$agent" "$parallel" "$max_parallel" "$STATUS_LENSES_FILE" \
+    "$remote_target" "$remote_label" \
     >/dev/null 2>&1 &
 
   STATUS_UPDATER_PID="$!"
@@ -548,7 +563,7 @@ stop_status_updater() {
     write_status_snapshot \
       "$final_state" "${RUN_ID:-}" "${LOG_BASE:-}" "${HEARTBEAT_DIR:-}" "${completed_lenses_file:-}" \
       "${SUMMARY_FILE:-}" "${PROJECT_PATH:-}" "${FORGE_REPO_SLUG:-}" "${MODE:-}" "${AGENT:-}" \
-      "${PARALLEL:-}" "${MAX_PARALLEL:-}" "${STATUS_LENSES_FILE:-}" || true
+      "${PARALLEL:-}" "${MAX_PARALLEL:-}" "${STATUS_LENSES_FILE:-}" "${REMOTE_TARGET:-}" "${REMOTE_LABEL:-}" || true
   fi
 
   if [[ -n "${HEARTBEAT_DIR:-}" ]]; then
@@ -779,6 +794,7 @@ status_render_human() {
   local meta=()
   local run_id project repo mode agent parallel max_parallel started_at updated_at total_lenses
   local completed_count active_count queued_count issues_created project_display parallel_display
+  local remote_target remote_label
   local stale_red color_reset
   local rows=()
   local row lens_key iteration age_seconds heartbeat_age_seconds lens_display marker
@@ -789,6 +805,8 @@ status_render_human() {
     (.repo // ""),
     (.mode // ""),
     (.agent // ""),
+    (.remote_target // ""),
+    (.remote_label // ""),
     ((.parallel // false) | tostring),
     ((.max_parallel // 0) | tostring),
     (.started_at // ""),
@@ -800,7 +818,7 @@ status_render_human() {
     ((.counts.issues_created // 0) | tostring)
   ' "$status_file") || return 1
 
-  if (( ${#meta[@]} < 14 )); then
+  if (( ${#meta[@]} < 16 )); then
     printf 'Invalid status.json: missing expected fields in %s\n' "$(status_sanitize_display "$status_file")" >&2
     return 1
   fi
@@ -810,15 +828,17 @@ status_render_human() {
   repo="$(status_sanitize_display "${meta[2]}")"
   mode="$(status_sanitize_display "${meta[3]}")"
   agent="$(status_sanitize_display "${meta[4]}")"
-  parallel="$(status_sanitize_display "${meta[5]}")"
-  max_parallel="$(status_sanitize_display "${meta[6]}")"
-  started_at="$(status_sanitize_display "${meta[7]}")"
-  updated_at="$(status_sanitize_display "${meta[8]}")"
-  total_lenses="$(status_sanitize_display "${meta[9]}")"
-  completed_count="$(status_sanitize_display "${meta[10]}")"
-  active_count="$(status_sanitize_display "${meta[11]}")"
-  queued_count="$(status_sanitize_display "${meta[12]}")"
-  issues_created="$(status_sanitize_display "${meta[13]}")"
+  remote_target="$(status_sanitize_display "${meta[5]}")"
+  remote_label="$(status_sanitize_display "${meta[6]}")"
+  parallel="$(status_sanitize_display "${meta[7]}")"
+  max_parallel="$(status_sanitize_display "${meta[8]}")"
+  started_at="$(status_sanitize_display "${meta[9]}")"
+  updated_at="$(status_sanitize_display "${meta[10]}")"
+  total_lenses="$(status_sanitize_display "${meta[11]}")"
+  completed_count="$(status_sanitize_display "${meta[12]}")"
+  active_count="$(status_sanitize_display "${meta[13]}")"
+  queued_count="$(status_sanitize_display "${meta[14]}")"
+  issues_created="$(status_sanitize_display "${meta[15]}")"
 
   project_display="$repo"
   [[ -n "$project_display" ]] || project_display="$project"
@@ -843,6 +863,13 @@ status_render_human() {
 
   printf 'RepoLens run %s\n' "${run_id:-unknown}"
   printf '  project:   %s  (%s, %s, %s)\n' "$project_display" "${mode:-unknown}" "${agent:-unknown}" "$parallel_display"
+  if [[ -n "$remote_target" ]]; then
+    if [[ -n "$remote_label" ]]; then
+      printf '  Remote target: %s (%s)\n' "$remote_target" "$remote_label"
+    else
+      printf '  Remote target: %s\n' "$remote_target"
+    fi
+  fi
   printf '  started:   %s  (%s ago)\n' "$(status_format_iso_utc "$started_at")" "$(status_relative_from_iso "$started_at")"
   printf '  updated:   %s  (%s ago)\n' "$(status_format_iso_utc "$updated_at")" "$(status_relative_from_iso "$updated_at")"
   printf '  progress:  %s/%s completed  |  %s active  |  %s queued  |  %s issues created\n' \

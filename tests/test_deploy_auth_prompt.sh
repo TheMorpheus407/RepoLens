@@ -117,6 +117,16 @@ printf 'DONE\n'
 exit 0
 SH
 chmod +x "$FAKE_BIN/codex"
+SSH_CALL_LOG="$TMPDIR/ssh-calls.log"
+export SSH_CALL_LOG
+cat > "$FAKE_BIN/ssh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SSH_CALL_LOG"
+printf '%s\n' "remote-preflight-host"
+printf '%s\n' "Linux remote-preflight 6.1.0-test #1 SMP"
+exit 0
+SH
+chmod +x "$FAKE_BIN/ssh"
 export PATH="$FAKE_BIN:$PATH"
 
 PLAIN_DIR="$TMPDIR/plain-server-target"
@@ -190,6 +200,8 @@ if [[ "$HAVE_SCRIPT" -eq 1 ]]; then
   assert_contains "legal warning final jurisdiction line is unchanged" "and similar legislation in other jurisdictions." "$out1"
   assert_before "remote target appears before deploy authorization question" "Remote target: ubuntu@host.example.com:22" "I confirm I am authorized" "$out1"
   assert_before "wrapper preview appears before deploy authorization question" "Local commands will be wrapped in:" "I confirm I am authorized" "$out1"
+  ssh_calls_after_cancel="$(cat "$SSH_CALL_LOG" 2>/dev/null || true)"
+  assert_not_contains "cancelled deploy authorization does not invoke ssh preflight" "hostname && uname -a" "$ssh_calls_after_cancel"
 fi
 
 echo ""

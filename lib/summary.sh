@@ -15,12 +15,13 @@
 
 # RepoLens — JSON summary generation
 
-# init_summary <summary_file> <run_id> <project_path> <mode> <agent> [spec_file] [max_issues] [output_mode] [output_dir]
+# init_summary <summary_file> <run_id> <project_path> <mode> <agent> [spec_file] [max_issues] [output_mode] [output_dir] [remote_target] [remote_label]
 #   Creates initial summary.json skeleton
 init_summary() {
   local file="$1" run_id="$2" project="$3" mode="$4" agent="$5"
   local spec_file="${6:-}" max_issues="${7:-}"
   local output_mode="${8:-github}" output_dir="${9:-}"
+  local remote_target="${10:-}" remote_label="${11:-}"
   local spec_json="null"
   if [[ -n "$spec_file" ]]; then
     spec_json="$(jq -n --arg p "$spec_file" '$p')"
@@ -35,12 +36,22 @@ init_summary() {
   fi
   local output_mode_json
   output_mode_json="$(jq -n --arg m "$output_mode" '$m')"
+  local remote_target_json="null"
+  if [[ -n "$remote_target" ]]; then
+    remote_target_json="$(jq -n --arg v "$remote_target" '$v')"
+  fi
+  local remote_label_json="null"
+  if [[ -n "$remote_label" ]]; then
+    remote_label_json="$(jq -n --arg v "$remote_label" '$v')"
+  fi
   cat > "$file" <<ENDJSON
 {
   "run_id": "$run_id",
   "project": "$project",
   "mode": "$mode",
   "agent": "$agent",
+  "remote_target": $remote_target_json,
+  "remote_label": $remote_label_json,
   "spec": $spec_json,
   "max_issues": $max_issues_json,
   "output_mode": $output_mode_json,
