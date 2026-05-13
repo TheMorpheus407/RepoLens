@@ -397,7 +397,7 @@ run_meta_orchestrator() {
   printf '%s\n' "$prompt" > "$prompt_path" || return 1
 
   log_info "[round $round] Running meta-orchestrator for round $next_round"
-  run_agent "$AGENT" "$prompt" "$project_path" "${AGENT_TIMEOUT_SECS:-600}" "${AGENT_KILL_GRACE_SECS:-30}" > "$output_path" 2>&1 || agent_rc=$?
+  run_agent "$AGENT" "$prompt" "$project_path" "${AGENT_TIMEOUT_SECS:-}" "${AGENT_KILL_GRACE_SECS:-30}" > "$output_path" 2>&1 || agent_rc=$?
   if (( agent_rc != 0 )); then
     _rounds_meta_warn "Meta-orchestrator exited with status $agent_rc"
     return "$agent_rc"
@@ -1399,22 +1399,27 @@ run_rounds() {
       CURRENT_ROUND_INDEX="$round"
       CURRENT_ROUND_TOTAL="$rounds_total"
       if [[ -n "$round_custom_lenses_dir" && -d "$round_custom_lenses_dir" ]]; then
+        # shellcheck disable=SC2034 # Read by prompt rendering during the round.
         CURRENT_ROUND_CUSTOM_LENSES_DIR="$round_custom_lenses_dir"
       fi
 
       if (( round > 1 )); then
         previous_hypotheses_path="$(round_hypotheses_path "${RUN_ID:-}" "$((round - 1))")" || return $?
         current_hypotheses_path="$(round_hypotheses_path "${RUN_ID:-}" "$round")" || return $?
+        # shellcheck disable=SC2034 # Read by prompt rendering during the round.
         prior_digest_path="$(_rounds_build_prior_digest_context "${RUN_ID:-}" "$round")" && PRIOR_ROUND_DIGEST_FILE="$prior_digest_path"
         if [[ -f "$current_hypotheses_path" ]]; then
+          # shellcheck disable=SC2034 # Read by prompt rendering during the round.
           HYPOTHESES_TO_VERIFY_FILE="$current_hypotheses_path"
         elif [[ -f "$previous_hypotheses_path" ]]; then
+          # shellcheck disable=SC2034 # Read by prompt rendering during the round.
           HYPOTHESES_TO_VERIFY_FILE="$previous_hypotheses_path"
         fi
       fi
     fi
 
     if ${LOCAL_MODE:-false} && ! ${OUTPUT_DIR_SET:-false}; then
+      # shellcheck disable=SC2034 # Read by prompt rendering during the round.
       CURRENT_ROUND_OUTPUT_DIR="$(round_lens_outputs_dir "${RUN_ID:-}" "$round")" || return $?
     fi
 

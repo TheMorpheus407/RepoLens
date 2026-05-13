@@ -653,17 +653,38 @@ status_sanitize_display() {
 status_available_runs() {
   local limit="${1:-10}"
   local logs_dir="${SCRIPT_DIR:-.}/logs"
-  local dir count=0
+  local dir newest_dir newest_status status_file count=0
+  local -a pending=()
 
   [[ -d "$logs_dir" ]] || return 0
 
   for dir in "$logs_dir"/*; do
     [[ -d "$dir" && -f "$dir/status.json" ]] || continue
-    printf '%s\n' "$(status_sanitize_display "${dir##*/}")"
+    pending+=("$dir")
+  done
+
+  while (( ${#pending[@]} > 0 )); do
+    newest_dir=""
+    newest_status=""
+    local -a remaining=()
+    for dir in "${pending[@]}"; do
+      status_file="$dir/status.json"
+      if [[ -z "$newest_status" || "$status_file" -nt "$newest_status" ]]; then
+        [[ -n "$newest_dir" ]] && remaining+=("$newest_dir")
+        newest_dir="$dir"
+        newest_status="$status_file"
+      else
+        remaining+=("$dir")
+      fi
+    done
+
+    [[ -n "$newest_dir" ]] || break
+    printf '%s\n' "$(status_sanitize_display "${newest_dir##*/}")"
     count=$((count + 1))
     if (( count >= limit )); then
       break
     fi
+    pending=("${remaining[@]}")
   done
 }
 

@@ -182,25 +182,39 @@ Examples:
 
 Environment:
   REPOLENS_AGENT_TIMEOUT   Global per-invocation timeout override in seconds.
-                           Wins over every mode-specific value.
+                           Wins over every mode-specific value; agent-specific
+                           values below win over this global value.
+  REPOLENS_AGENT_TIMEOUT_CLAUDE
+                           Claude per-invocation timeout override.
+  REPOLENS_AGENT_TIMEOUT_CODEX
+                           Codex per-invocation timeout override.
+  REPOLENS_AGENT_TIMEOUT_OPENCODE
+                           OpenCode per-invocation timeout override; also used
+                           for opencode/<model>.
+  REPOLENS_AGENT_TIMEOUT_SPARK
+                           Codex Spark per-invocation timeout override; also
+                           applies to the sparc alias when SPARC is unset.
+  REPOLENS_AGENT_TIMEOUT_SPARC
+                           SPARC alias timeout override; also applies to spark
+                           when SPARK is unset.
   REPOLENS_AGENT_TIMEOUT_AUDIT
-                           Audit default: 600.
+                           Audit default: 1800.
   REPOLENS_AGENT_TIMEOUT_FEATURE
-                           Feature default: 600.
+                           Feature default: 1800.
   REPOLENS_AGENT_TIMEOUT_BUGFIX
-                           Bugfix default: 600.
+                           Bugfix default: 1800.
   REPOLENS_AGENT_TIMEOUT_DISCOVER
-                           Discover default: 600.
+                           Discover default: 1800.
   REPOLENS_AGENT_TIMEOUT_DEPLOY
                            Deploy default: 1800.
   REPOLENS_AGENT_TIMEOUT_CUSTOM
-                           Custom/change-impact default: 600.
+                           Custom/change-impact default: 1800.
   REPOLENS_AGENT_TIMEOUT_OPENSOURCE
-                           Open-source readiness default: 600.
+                           Open-source readiness default: 1800.
   REPOLENS_AGENT_TIMEOUT_CONTENT
-                           Content default: 600.
+                           Content default: 1800.
   REPOLENS_AGENT_TIMEOUT_BUGREPORT
-                           Bug report default: 600.
+                           Bug report default: 1800.
   REPOLENS_BUG_REPORT_PATH Fallback for --bug-report when the CLI flag is unset.
                            Path to a text file read verbatim as the bug report.
   REPOLENS_AGENT_KILL_GRACE
@@ -209,6 +223,9 @@ Environment:
   REPOLENS_LENS_MAX_WALL   Per-lens wall-clock budget in seconds (default: 3600).
                            Each agent invocation is capped to the remaining
                            lens budget; exhausted lenses stop with max-wall.
+                           Raw worst-case wall time is timeout * iterations:
+                           with defaults, 30 min * 20 = 10 hours before this
+                           wall budget is applied.
   REPOLENS_RATE_LIMIT_MAX_SLEEP
                            Maximum parsed agent rate-limit wait in seconds
                            before falling back to abort behavior (default: 21600).
@@ -217,8 +234,8 @@ Environment:
                            wait_all polls each background lens and SIGTERM/KILLs
                            any child that exceeds this deadline, then continues
                            with the remaining children. Should be >=
-                           MAX_ITERATIONS_PER_LENS * resolved agent timeout plus
-                           a buffer for rate-limit sleep and non-agent I/O.
+                           the lens wall budget plus a buffer for rate-limit
+                           sleep and non-agent I/O.
   DONE_STREAK_REQUIRED     DEPRECATED alias for --depth. Used only when --depth
                            is unset; must be between 1 and 19.
   REPOLENS_ROUNDS          Fallback for --rounds when the CLI flag is unset.
@@ -689,7 +706,7 @@ CURRENT_ROUND_OUTPUT_DIR=""
 PRIOR_ROUND_DIGEST_FILE=""
 HYPOTHESES_TO_VERIFY_FILE=""
 
-AGENT_TIMEOUT_SECS="$(resolve_agent_timeout "$MODE")"
+AGENT_TIMEOUT_SECS="$(resolve_agent_timeout "$MODE" "$AGENT")"
 AGENT_KILL_GRACE_SECS="$(resolve_agent_kill_grace)"
 LENS_MAX_WALL_SECS="$(resolve_lens_max_wall)"
 if [[ ! "$AGENT_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then

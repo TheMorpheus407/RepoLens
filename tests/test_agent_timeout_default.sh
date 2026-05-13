@@ -13,16 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Unit and fast integration coverage for per-mode agent timeout resolution.
+# Unit and fast integration coverage for per-mode and per-agent timeout resolution.
 #
-# Contract for issue #110:
-#   1. resolve_agent_timeout <mode> exposes the effective per-invocation
+# Contract for issue #110 and issue #184:
+#   1. resolve_agent_timeout <mode> [agent] exposes the effective per-invocation
 #      timeout without invoking a real agent.
 #   2. Precedence is:
-#        REPOLENS_AGENT_TIMEOUT
+#        REPOLENS_AGENT_TIMEOUT_<AGENT>
+#        > REPOLENS_AGENT_TIMEOUT
 #        > REPOLENS_AGENT_TIMEOUT_<MODE>
-#        > hardcoded per-mode default.
-#   3. Deploy defaults longer than audit.
+#        > hardcoded default.
+#   3. Built-in defaults are 1800s unless explicitly overridden.
 #   4. The resolved value is what the orchestrator passes to timeout(1)
 #      and reports in timeout logs.
 #
@@ -56,18 +57,6 @@ assert_eq() {
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: $desc (expected='$expected' actual='$actual')"
-  fi
-}
-
-assert_gt() {
-  local desc="$1" left="$2" right="$3"
-  TOTAL=$((TOTAL + 1))
-  if [[ "$left" =~ ^[0-9]+$ && "$right" =~ ^[0-9]+$ && "$left" -gt "$right" ]]; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $desc"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $desc (expected '$left' to be greater than '$right')"
   fi
 }
 
@@ -125,9 +114,15 @@ assert_contains() {
 
 clear_timeout_env() {
   unset REPOLENS_AGENT_TIMEOUT
+  unset REPOLENS_AGENT_TIMEOUT_CLAUDE
+  unset REPOLENS_AGENT_TIMEOUT_CODEX
+  unset REPOLENS_AGENT_TIMEOUT_OPENCODE
+  unset REPOLENS_AGENT_TIMEOUT_SPARK
+  unset REPOLENS_AGENT_TIMEOUT_SPARC
   unset REPOLENS_AGENT_TIMEOUT_AUDIT
   unset REPOLENS_AGENT_TIMEOUT_FEATURE
   unset REPOLENS_AGENT_TIMEOUT_BUGFIX
+  unset REPOLENS_AGENT_TIMEOUT_BUGREPORT
   unset REPOLENS_AGENT_TIMEOUT_DISCOVER
   unset REPOLENS_AGENT_TIMEOUT_DEPLOY
   unset REPOLENS_AGENT_TIMEOUT_CUSTOM
@@ -139,8 +134,13 @@ clear_timeout_env() {
 
 resolve_timeout() {
   local mode="$1"
+  local agent="${2:-}"
   if declare -F resolve_agent_timeout >/dev/null 2>&1; then
-    resolve_agent_timeout "$mode"
+    if [[ -n "$agent" ]]; then
+      resolve_agent_timeout "$mode" "$agent"
+    else
+      resolve_agent_timeout "$mode"
+    fi
   else
     printf '%s\n' "__missing_resolve_agent_timeout__"
   fi
@@ -174,18 +174,10 @@ else
 fi
 
 if assert_function_exists "lib/core.sh exposes resolve_agent_timeout" "resolve_agent_timeout"; then
-  for mode in audit feature bugfix discover custom opensource content; do
+  for mode in audit feature bugfix bugreport discover deploy custom opensource content; do
     clear_timeout_env
-    assert_eq "Default timeout for $mode is 600s" "600" "$(resolve_timeout "$mode")"
+    assert_eq "Default timeout for $mode is 1800s" "1800" "$(resolve_timeout "$mode")"
   done
-
-  clear_timeout_env
-  assert_eq "Default timeout for deploy is 1800s" "1800" "$(resolve_timeout deploy)"
-
-  clear_timeout_env
-  audit_default="$(resolve_timeout audit)"
-  deploy_default="$(resolve_timeout deploy)"
-  assert_gt "Deploy default is longer than audit default" "$deploy_default" "$audit_default"
 else
   echo "  SKIP: resolver default matrix waits for resolve_agent_timeout"
 fi
@@ -197,7 +189,7 @@ if declare -F resolve_agent_timeout >/dev/null 2>&1; then
   clear_timeout_env
   export REPOLENS_AGENT_TIMEOUT_DEPLOY=42
   assert_eq "Deploy mode-specific override is honored" "42" "$(resolve_timeout deploy)"
-  assert_eq "Deploy override does not affect audit" "600" "$(resolve_timeout audit)"
+  assert_eq "Deploy override does not affect audit" "1800" "$(resolve_timeout audit)"
 
   clear_timeout_env
   export REPOLENS_AGENT_TIMEOUT_AUDIT=31
@@ -208,11 +200,12 @@ if declare -F resolve_agent_timeout >/dev/null 2>&1; then
     "audit:REPOLENS_AGENT_TIMEOUT_AUDIT:31" \
     "feature:REPOLENS_AGENT_TIMEOUT_FEATURE:32" \
     "bugfix:REPOLENS_AGENT_TIMEOUT_BUGFIX:33" \
-    "discover:REPOLENS_AGENT_TIMEOUT_DISCOVER:34" \
-    "deploy:REPOLENS_AGENT_TIMEOUT_DEPLOY:35" \
-    "custom:REPOLENS_AGENT_TIMEOUT_CUSTOM:36" \
-    "opensource:REPOLENS_AGENT_TIMEOUT_OPENSOURCE:37" \
-    "content:REPOLENS_AGENT_TIMEOUT_CONTENT:38"; do
+    "bugreport:REPOLENS_AGENT_TIMEOUT_BUGREPORT:34" \
+    "discover:REPOLENS_AGENT_TIMEOUT_DISCOVER:35" \
+    "deploy:REPOLENS_AGENT_TIMEOUT_DEPLOY:36" \
+    "custom:REPOLENS_AGENT_TIMEOUT_CUSTOM:37" \
+    "opensource:REPOLENS_AGENT_TIMEOUT_OPENSOURCE:38" \
+    "content:REPOLENS_AGENT_TIMEOUT_CONTENT:39"; do
     IFS=: read -r mode env_var timeout_value <<<"$mode_case"
     clear_timeout_env
     export "$env_var=$timeout_value"
@@ -223,7 +216,7 @@ if declare -F resolve_agent_timeout >/dev/null 2>&1; then
   export REPOLENS_AGENT_TIMEOUT=99
   export REPOLENS_AGENT_TIMEOUT_DEPLOY=42
   export REPOLENS_AGENT_TIMEOUT_AUDIT=31
-  for mode in audit feature bugfix discover deploy custom opensource content; do
+  for mode in audit feature bugfix bugreport discover deploy custom opensource content; do
     assert_eq "Global override wins for $mode" "99" "$(resolve_timeout "$mode")"
   done
 
@@ -237,6 +230,50 @@ if declare -F resolve_agent_timeout >/dev/null 2>&1; then
   assert_eq "Empty deploy mode override falls back to deploy default" "1800" "$(resolve_timeout deploy)"
 else
   echo "  SKIP: resolver precedence matrix waits for resolve_agent_timeout"
+fi
+
+echo ""
+echo "=== REPOLENS_AGENT_TIMEOUT per-agent overrides ==="
+
+if declare -F resolve_agent_timeout >/dev/null 2>&1; then
+  for agent_case in \
+    "claude:REPOLENS_AGENT_TIMEOUT_CLAUDE:11" \
+    "codex:REPOLENS_AGENT_TIMEOUT_CODEX:12" \
+    "spark:REPOLENS_AGENT_TIMEOUT_SPARK:13" \
+    "sparc:REPOLENS_AGENT_TIMEOUT_SPARC:14" \
+    "opencode:REPOLENS_AGENT_TIMEOUT_OPENCODE:15" \
+    "opencode/qwen3-coder:REPOLENS_AGENT_TIMEOUT_OPENCODE:16"; do
+    IFS=: read -r agent env_var timeout_value <<<"$agent_case"
+    clear_timeout_env
+    export "$env_var=$timeout_value"
+    assert_eq "$env_var override is honored for agent $agent" "$timeout_value" "$(resolve_timeout audit "$agent")"
+  done
+
+  clear_timeout_env
+  export REPOLENS_AGENT_TIMEOUT_SPARK=21
+  assert_eq "SPARK override applies to sparc alias" "21" "$(resolve_timeout audit sparc)"
+
+  clear_timeout_env
+  export REPOLENS_AGENT_TIMEOUT_SPARC=22
+  assert_eq "SPARC override applies to spark alias" "22" "$(resolve_timeout audit spark)"
+
+  clear_timeout_env
+  export REPOLENS_AGENT_TIMEOUT_CODEX=12
+  export REPOLENS_AGENT_TIMEOUT=99
+  export REPOLENS_AGENT_TIMEOUT_AUDIT=31
+  assert_eq "Agent-specific override wins over global and mode-specific timeout" "12" "$(resolve_timeout audit codex)"
+
+  clear_timeout_env
+  export REPOLENS_AGENT_TIMEOUT_CODEX=""
+  export REPOLENS_AGENT_TIMEOUT=99
+  assert_eq "Empty agent-specific override falls back to global timeout" "99" "$(resolve_timeout audit codex)"
+
+  clear_timeout_env
+  export REPOLENS_AGENT_TIMEOUT_CODEX=""
+  export REPOLENS_AGENT_TIMEOUT_AUDIT=31
+  assert_eq "Empty agent-specific override falls back to mode-specific timeout" "31" "$(resolve_timeout audit codex)"
+else
+  echo "  SKIP: per-agent resolver matrix waits for resolve_agent_timeout"
 fi
 
 echo ""
@@ -338,6 +375,7 @@ for mode_var in \
   REPOLENS_AGENT_TIMEOUT_AUDIT \
   REPOLENS_AGENT_TIMEOUT_FEATURE \
   REPOLENS_AGENT_TIMEOUT_BUGFIX \
+  REPOLENS_AGENT_TIMEOUT_BUGREPORT \
   REPOLENS_AGENT_TIMEOUT_DISCOVER \
   REPOLENS_AGENT_TIMEOUT_DEPLOY \
   REPOLENS_AGENT_TIMEOUT_CUSTOM \
@@ -352,14 +390,34 @@ assert_match \
   'REPOLENS_AGENT_TIMEOUT_DEPLOY.*1800|1800.*REPOLENS_AGENT_TIMEOUT_DEPLOY'
 
 assert_match \
-  "README documents audit's 600s default" \
+  "README documents audit's 1800s default" \
   "$README" \
-  'REPOLENS_AGENT_TIMEOUT_AUDIT.*600|600.*REPOLENS_AGENT_TIMEOUT_AUDIT'
+  'REPOLENS_AGENT_TIMEOUT_AUDIT.*1800|1800.*REPOLENS_AGENT_TIMEOUT_AUDIT'
 
 assert_match \
-  "README documents global override precedence" \
+  "README documents agent-specific timeout precedence over global override" \
   "$README" \
-  'REPOLENS_AGENT_TIMEOUT.*[Ww]ins over|[Gg]lobal.*[Ww]ins over'
+  'agent-specific|Agent-specific'
+
+for agent_var in \
+  REPOLENS_AGENT_TIMEOUT_CLAUDE \
+  REPOLENS_AGENT_TIMEOUT_CODEX \
+  REPOLENS_AGENT_TIMEOUT_OPENCODE \
+  REPOLENS_AGENT_TIMEOUT_SPARK \
+  REPOLENS_AGENT_TIMEOUT_SPARC; do
+  assert_match "README documents $agent_var" "$README" "$agent_var"
+  assert_match "repolens.sh usage documents $agent_var" "$REPO" "$agent_var"
+done
+
+assert_match \
+  "README documents concrete 30 min x 20 worst-case math" \
+  "$README" \
+  '30[[:space:]]*min.*20.*10[[:space:]]*hours|1800.*20.*36000'
+
+assert_match \
+  "repolens.sh usage documents concrete 30 min x 20 worst-case math" \
+  "$REPO" \
+  '30[[:space:]]*min.*20.*10[[:space:]]*hours|1800.*20.*36000'
 
 echo ""
 echo "=== Resolved timeout reaches agent invocation and timeout log ==="
@@ -405,11 +463,21 @@ exit 0
 SH
   chmod +x "$FAKE_BIN/codex"
 
+  clear_timeout_env
+  : > "$TIMEOUT_MARKER"
+  PATH="$FAKE_BIN:$PATH" \
+    FAKE_TIMEOUT_MARKER="$TIMEOUT_MARKER" \
+    REPOLENS_AGENT_TIMEOUT_CODEX=7 \
+    run_agent codex "Prompt text" "$PROJECT" >/dev/null 2>&1
+  run_agent_timeout_args="$(head -1 "$TIMEOUT_MARKER" 2>/dev/null || true)"
+  assert_eq "run_agent without explicit timeout honors agent-specific Codex override" "--kill-after=30s 7s" "$run_agent_timeout_args"
+
+  : > "$TIMEOUT_MARKER"
   OUT_FILE="$TMPDIR/run.log"
   clear_timeout_env
   PATH="$FAKE_BIN:$PATH" \
     FAKE_TIMEOUT_MARKER="$TIMEOUT_MARKER" \
-    REPOLENS_AGENT_TIMEOUT_DEPLOY=2 \
+    REPOLENS_AGENT_TIMEOUT_CODEX=2 \
     REPOLENS_AGENT_KILL_GRACE=2 \
     bash "$REPO" \
       --project "$PROJECT" \
@@ -430,7 +498,7 @@ SH
   assert_eq "Kill grace is passed to timeout(1)" "--kill-after=2s 2s" "$first_timeout_args"
   assert_contains "Startup log includes configured kill grace" "Agent timeout kill grace: 2s" "$log_contents"
   assert_contains "Startup log includes lens wall budget" "Lens wall-clock budget: 3600s" "$log_contents"
-  assert_contains "Timeout log uses deploy mode-specific timeout" "agent timed out after 2s" "$log_contents"
+  assert_contains "Timeout log uses Codex agent-specific timeout" "agent timed out after 2s" "$log_contents"
 
   TOTAL=$((TOTAL + 1))
   if [[ "$exit_code" -eq 0 ]]; then

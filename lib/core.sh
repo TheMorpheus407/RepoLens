@@ -124,17 +124,36 @@ validate_rounds() {
 agent_timeout_default_for_mode() {
   local mode="$1"
   case "$mode" in
-    deploy) printf '%s\n' 1800 ;;
-    audit|feature|bugfix|bugreport|discover|custom|opensource|content) printf '%s\n' 600 ;;
+    audit|feature|bugfix|bugreport|discover|deploy|custom|opensource|content) printf '%s\n' 1800 ;;
     *) die "Internal error: unsupported mode '$mode' for timeout default" ;;
   esac
 }
 
 resolve_agent_timeout() {
   local mode="$1"
+  local agent="${2:-}"
   local mode_upper="${mode^^}"
   mode_upper="${mode_upper//-/_}"
   local mode_var="REPOLENS_AGENT_TIMEOUT_${mode_upper}"
+  local agent_vars=()
+  local agent_var=""
+
+  case "$agent" in
+    claude) agent_vars=(REPOLENS_AGENT_TIMEOUT_CLAUDE) ;;
+    codex) agent_vars=(REPOLENS_AGENT_TIMEOUT_CODEX) ;;
+    spark) agent_vars=(REPOLENS_AGENT_TIMEOUT_SPARK REPOLENS_AGENT_TIMEOUT_SPARC) ;;
+    sparc) agent_vars=(REPOLENS_AGENT_TIMEOUT_SPARC REPOLENS_AGENT_TIMEOUT_SPARK) ;;
+    opencode|opencode/*) agent_vars=(REPOLENS_AGENT_TIMEOUT_OPENCODE) ;;
+    "") ;;
+    *) ;;
+  esac
+
+  for agent_var in "${agent_vars[@]}"; do
+    if [[ -n "${!agent_var:-}" ]]; then
+      printf '%s\n' "${!agent_var}"
+      return
+    fi
+  done
 
   if [[ -n "${REPOLENS_AGENT_TIMEOUT:-}" ]]; then
     printf '%s\n' "$REPOLENS_AGENT_TIMEOUT"
@@ -172,8 +191,12 @@ run_agent() {
   local agent="$1"
   local prompt="$2"
   local project_path="$3"
-  local timeout_secs="${4:-${REPOLENS_AGENT_TIMEOUT:-600}}"
+  local timeout_secs="${4:-}"
   local kill_grace_secs="${5:-${REPOLENS_AGENT_KILL_GRACE:-30}}"
+
+  if [[ -z "$timeout_secs" ]]; then
+    timeout_secs="$(resolve_agent_timeout "${MODE:-audit}" "$agent")"
+  fi
 
   [[ -d "$project_path" ]] || die "Project path does not exist: $project_path"
   if [[ ! "$kill_grace_secs" =~ ^[0-9]+$ || "$kill_grace_secs" -le 0 ]]; then

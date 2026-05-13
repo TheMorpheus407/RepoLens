@@ -279,7 +279,32 @@ status=$?
 assert_failure "callback failure returns non-zero" "$status"
 assert_file_missing "callback failure: no consumable pack" "$TRIAGE_DIR/context-pack.md"
 
-# Case 6: missing AGENT
+# Case 6: direct agent dispatch leaves unset timeout blank for run_agent resolution
+unset _TRIAGE_AGENT_CALLBACK
+unset AGENT_TIMEOUT_SECS
+AGENT="codex"
+RUN_AGENT_ARGS_FILE="$TMPDIR/triage-run-agent-args.txt"
+run_agent() {
+  printf '%s\n%s\n' "${4-}" "${5-}" > "$RUN_AGENT_ARGS_FILE"
+  cat <<'PACK'
+# Triage context pack
+
+## Mentioned files
+- sample.go
+
+## Initial hypothesis tree
+1. Direct agent path.
+DONE
+PACK
+}
+rm -f "$TRIAGE_DIR/context-pack.md"
+run_triage "$RUN_ID" >"$TMPDIR/direct-agent.out" 2>"$TMPDIR/direct-agent.err"
+status=$?
+assert_success "direct agent dispatch returns 0" "$status"
+assert_eq "direct agent dispatch passes empty timeout when AGENT_TIMEOUT_SECS is unset" "" "$(sed -n '1p' "$RUN_AGENT_ARGS_FILE")"
+assert_eq "direct agent dispatch keeps default kill grace" "30" "$(sed -n '2p' "$RUN_AGENT_ARGS_FILE")"
+
+# Case 7: missing AGENT
 unset AGENT
 _TRIAGE_AGENT_CALLBACK=_triage_callback_ok
 rm -f "$TRIAGE_DIR/context-pack.md"
@@ -289,7 +314,7 @@ assert_failure "missing AGENT returns non-zero" "$status"
 assert_contains "missing AGENT error message" "AGENT" "$(cat "$TMPDIR/noagent.err")"
 AGENT="claude"
 
-# Case 7: missing PROJECT_PATH
+# Case 8: missing PROJECT_PATH
 saved_path="$PROJECT_PATH"
 PROJECT_PATH="$TMPDIR/does-not-exist"
 run_triage "$RUN_ID" >"$TMPDIR/nopath.out" 2>"$TMPDIR/nopath.err"
@@ -297,7 +322,7 @@ status=$?
 assert_failure "missing PROJECT_PATH returns non-zero" "$status"
 PROJECT_PATH="$saved_path"
 
-# Case 8: missing run_id
+# Case 9: missing run_id
 run_triage "" >"$TMPDIR/norun.out" 2>"$TMPDIR/norun.err"
 status=$?
 assert_failure "missing run_id returns non-zero" "$status"

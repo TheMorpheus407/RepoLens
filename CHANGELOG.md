@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
-- Agent invocation timeouts now resolve per mode instead of using one 6000-second default: audit, feature, bugfix, discover, custom, opensource, and content default to 600 seconds; deploy defaults to 1800 seconds; `REPOLENS_AGENT_TIMEOUT` still overrides all mode-specific `REPOLENS_AGENT_TIMEOUT_<MODE>` values ([#110](https://github.com/TheMorpheus407/RepoLens/issues/110))
+- Agent invocation timeouts now use a layered resolver instead of one 6000-second fallback: agent-specific overrides (`REPOLENS_AGENT_TIMEOUT_CLAUDE`, `REPOLENS_AGENT_TIMEOUT_CODEX`, `REPOLENS_AGENT_TIMEOUT_OPENCODE`, `REPOLENS_AGENT_TIMEOUT_SPARK`, and `REPOLENS_AGENT_TIMEOUT_SPARC`) win over `REPOLENS_AGENT_TIMEOUT`, which wins over mode-specific `REPOLENS_AGENT_TIMEOUT_<MODE>` values; every supported mode now defaults to 1800 seconds. `opencode/<model>` uses the OpenCode override, and the Spark/SPARC aliases fall back to each other when only one alias variable is set ([#110](https://github.com/TheMorpheus407/RepoLens/issues/110), [#184](https://github.com/TheMorpheus407/RepoLens/issues/184))
 
 ### Added
 

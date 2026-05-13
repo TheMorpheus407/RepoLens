@@ -175,7 +175,7 @@ run_triage() {
       return 1
     }
   else
-    agent_output="$(run_agent "$agent" "$prompt_text" "$project_path" "${AGENT_TIMEOUT_SECS:-600}" "${AGENT_KILL_GRACE_SECS:-30}")" || {
+    agent_output="$(run_agent "$agent" "$prompt_text" "$project_path" "${AGENT_TIMEOUT_SECS:-}" "${AGENT_KILL_GRACE_SECS:-30}")" || {
       echo "run_triage: agent invocation failed" >&2
       return 1
     }

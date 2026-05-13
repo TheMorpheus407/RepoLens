@@ -336,7 +336,36 @@ status=$?
 assert_failure "no JSON array returns non-zero" "$status"
 assert_file_missing "no JSON: no consumable manifest" "$FINAL_DIR/verification.json"
 
-# Case 5: missing AGENT
+# Case 5: direct agent dispatch leaves unset timeout blank for run_agent resolution
+unset _VERIFIER_AGENT_CALLBACK
+unset AGENT_TIMEOUT_SECS
+AGENT="codex"
+RUN_AGENT_ARGS_FILE="$TMPDIR/verify-run-agent-args.txt"
+run_agent() {
+  printf '%s\n%s\n' "${4-}" "${5-}" > "$RUN_AGENT_ARGS_FILE"
+  cat <<'JSON'
+[
+  {
+    "finding_id": "0123456789abcdef",
+    "status": "VERIFIED",
+    "notes": "direct agent path",
+    "lens_id": "sample-lens",
+    "domain": "code",
+    "round": 1,
+    "source_finding_path": "logs/test-run-168/rounds/round-1/lens-outputs/sample-lens.md"
+  }
+]
+DONE
+JSON
+}
+rm -f "$FINAL_DIR/verification.json"
+run_verifier "$RUN_ID" >"$TMPDIR/direct-agent.out" 2>"$TMPDIR/direct-agent.err"
+status=$?
+assert_success "direct agent verifier dispatch returns 0" "$status"
+assert_eq "direct verifier dispatch passes empty timeout when AGENT_TIMEOUT_SECS is unset" "" "$(sed -n '1p' "$RUN_AGENT_ARGS_FILE")"
+assert_eq "direct verifier dispatch keeps default kill grace" "30" "$(sed -n '2p' "$RUN_AGENT_ARGS_FILE")"
+
+# Case 6: missing AGENT
 unset AGENT
 _VERIFIER_AGENT_CALLBACK=_verifier_callback_ok
 run_verifier "$RUN_ID" >"$TMPDIR/noagent.out" 2>"$TMPDIR/noagent.err"
@@ -345,7 +374,7 @@ assert_failure "missing AGENT returns non-zero" "$status"
 assert_contains "missing AGENT error message" "AGENT" "$(cat "$TMPDIR/noagent.err")"
 AGENT="claude"
 
-# Case 6: missing PROJECT_PATH
+# Case 7: missing PROJECT_PATH
 saved_path="$PROJECT_PATH"
 PROJECT_PATH="$TMPDIR/does-not-exist"
 run_verifier "$RUN_ID" >"$TMPDIR/nopath.out" 2>"$TMPDIR/nopath.err"
@@ -353,12 +382,12 @@ status=$?
 assert_failure "missing PROJECT_PATH returns non-zero" "$status"
 PROJECT_PATH="$saved_path"
 
-# Case 7: missing run_id
+# Case 8: missing run_id
 run_verifier "" >"$TMPDIR/norun.out" 2>"$TMPDIR/norun.err"
 status=$?
 assert_failure "missing run_id returns non-zero" "$status"
 
-# Case 8: multi-finding file should still drive one verifier invocation (the
+# Case 9: multi-finding file should still drive one verifier invocation (the
 # dispatcher batches all findings into one prompt). The callback gets called
 # exactly once; we count calls via a counter file.
 COUNTER_FILE="$TMPDIR/counter"
