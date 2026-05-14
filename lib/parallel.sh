@@ -33,6 +33,11 @@ _REPOLENS_MAX_PARALLEL=8
 _REPOLENS_CLEANUP_IN_PROGRESS=0
 _REPOLENS_CLEANUP_FORCE_KILL=0
 
+_parallel_agent_abort_pending() {
+  [[ -n "${LOG_BASE:-}" ]] || return 1
+  [[ -f "$LOG_BASE/.rate-limit-abort" || -f "$LOG_BASE/.agent-no-progress-abort" ]]
+}
+
 # init_parallel <sem_dir> <max_parallel>
 #   Creates semaphore directory, sets max parallel count.
 #   Installs signal handlers for clean shutdown.
@@ -222,6 +227,10 @@ sem_acquire() {
   next_heartbeat=$((now + heartbeat_interval))
 
   while true; do
+    if _parallel_agent_abort_pending; then
+      return 1
+    fi
+
     local count
     count="$(find "$_REPOLENS_SEM_DIR" -maxdepth 1 -name '*.token' 2>/dev/null | wc -l)"
     if [[ "$count" -lt "$_REPOLENS_MAX_PARALLEL" ]]; then
@@ -347,7 +356,10 @@ spawn_lens() {
   local callback="$1"
   shift
 
-  sem_acquire
+  sem_acquire || return 1
+  if _parallel_agent_abort_pending; then
+    return 1
+  fi
   sem_token_create "$lens_id"
 
   (

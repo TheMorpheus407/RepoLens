@@ -71,8 +71,16 @@ record_lens() {
   local file="$1" domain="$2" lens_id="$3" iterations="$4" status="$5"
   local issues="${6:-0}"
   local rate_limit_sleep_seconds="${7:-0}"
-  local tmp="${file}.tmp"
+  local lock_dir="${file}.lock"
+  local tmp
   local lenses_increment=1
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    sleep 0.05
+  done
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  }
   if [[ "$status" == "skipped" ]]; then
     lenses_increment=0
   fi
@@ -85,6 +93,10 @@ record_lens() {
      .totals.lenses_run += $lr |
      .totals.iterations_total += $i |
      .totals.issues_created += $iss' "$file" > "$tmp" && mv "$tmp" "$file"
+  local rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  rmdir "$lock_dir" 2>/dev/null || true
+  return "$rc"
 }
 
 # set_stop_reason <summary_file> <reason>
@@ -92,14 +104,59 @@ record_lens() {
 set_stop_reason() {
   local file="$1" reason="${2:-}"
   [[ -n "$reason" ]] || return 0
-  local tmp="${file}.tmp"
+  local lock_dir="${file}.lock"
+  local tmp
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    sleep 0.05
+  done
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  }
   jq --arg r "$reason" '.stopped_reason = $r' "$file" > "$tmp" && mv "$tmp" "$file"
+  local rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  rmdir "$lock_dir" 2>/dev/null || true
+  return "$rc"
+}
+
+# clear_stop_reason <summary_file>
+#   Clears the stopped_reason field in summary.json
+clear_stop_reason() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  local lock_dir="${file}.lock"
+  local tmp
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    sleep 0.05
+  done
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  }
+  jq '.stopped_reason = null' "$file" > "$tmp" && mv "$tmp" "$file"
+  local rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  rmdir "$lock_dir" 2>/dev/null || true
+  return "$rc"
 }
 
 # finalize_summary <summary_file>
 #   Sets completed_at timestamp
 finalize_summary() {
   local file="$1"
-  local tmp="${file}.tmp"
+  local lock_dir="${file}.lock"
+  local tmp
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    sleep 0.05
+  done
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  }
   jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.completed_at = $t' "$file" > "$tmp" && mv "$tmp" "$file"
+  local rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  rmdir "$lock_dir" 2>/dev/null || true
+  return "$rc"
 }

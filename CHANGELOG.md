@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Persistent agent failures that do not match the rate-limit detector now stop early through a no-progress circuit breaker instead of burning the full per-lens iteration cap. Configure it with `REPOLENS_NO_PROGRESS_LIMIT` and `REPOLENS_NO_PROGRESS_MIN_BYTES`; affected lenses remain resumable with status `agent-no-progress`, and systemic failures report `stopped_reason=agent-degraded` ([#212](https://github.com/TheMorpheus407/RepoLens/issues/212)).
 - Agent rate-limit messages with parseable resume times now sleep within `REPOLENS_RATE_LIMIT_MAX_SLEEP`, retry the same lens once, and record `rate_limit_sleep_seconds`; unparseable, stale, too-far, or repeated rate limits still abort cleanly ([#115](https://github.com/TheMorpheus407/RepoLens/issues/115))
 - Concurrent runs against the same repository now coordinate remote label setup, create only missing labels when supported, and reuse fresh matching bootstrap results while preserving normal issue-count behavior ([#186](https://github.com/TheMorpheus407/RepoLens/issues/186))
 - Ctrl-C/TERM cleanup during parallel runs now returns after a bounded grace period, force-stopping unresponsive workers instead of waiting indefinitely. Configure the grace period with `REPOLENS_CLEANUP_GRACE` ([#114](https://github.com/TheMorpheus407/RepoLens/issues/114))

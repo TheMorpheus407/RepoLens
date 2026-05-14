@@ -86,6 +86,8 @@ Runs started with `--max-issues` use an effective 1× streak so the issue budget
 
 A safety cap of 20 iterations per lens prevents fast runaway loops regardless of DONE detection and regardless of `--depth`. A separate per-lens wall-clock budget, `REPOLENS_LENS_MAX_WALL` (default 3600 seconds), prevents slow or timing-out iterations from occupying a sequential run or parallel worker slot for `MAX_ITERATIONS_PER_LENS × resolved agent timeout`; lenses stopped by that budget are recorded with summary status `max-wall`.
 
+RepoLens also stops a lens early when the agent repeatedly makes no observable progress. By default, three consecutive degraded iterations stop that lens with summary status `agent-no-progress`. Degraded iterations are non-zero agent exits or near-empty outputs without `DONE`, issue URLs, or newly created local findings. The failed lens remains resumable, and a run with five such lens failures records the run-level stop reason as `agent-degraded` so operators can distinguish a systemic agent/backend problem from one difficult lens.
+
 ---
 
 ## Parallel Agent Execution Model

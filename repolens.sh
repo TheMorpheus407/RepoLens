@@ -927,6 +927,15 @@ if [[ ! "$RATE_LIMIT_MAX_SLEEP_SECS" =~ ^[0-9]+$ ]]; then
 fi
 RATE_LIMIT_MAX_SLEEP_SECS=$((10#$RATE_LIMIT_MAX_SLEEP_SECS))
 
+REPOLENS_NO_PROGRESS_MIN_BYTES="${REPOLENS_NO_PROGRESS_MIN_BYTES:-512}"
+if [[ ! "$REPOLENS_NO_PROGRESS_MIN_BYTES" =~ ^[0-9]+$ ]]; then
+  die "REPOLENS_NO_PROGRESS_MIN_BYTES must be a non-negative integer byte count"
+fi
+REPOLENS_NO_PROGRESS_MIN_BYTES=$((10#$REPOLENS_NO_PROGRESS_MIN_BYTES))
+if (( REPOLENS_NO_PROGRESS_MIN_BYTES > 1048576 )); then
+  die "REPOLENS_NO_PROGRESS_MIN_BYTES must be <= 1048576"
+fi
+
 # --- Validate --change requirement ---
 if [[ "$MODE" == "custom" && -z "$CHANGE_STATEMENT" ]]; then
   die "Mode 'custom' requires --change \"your change statement\""
@@ -1226,6 +1235,15 @@ fi
 # --- Safety cap: maximum iterations per lens ---
 MAX_ITERATIONS_PER_LENS=20
 
+REPOLENS_NO_PROGRESS_LIMIT="${REPOLENS_NO_PROGRESS_LIMIT:-3}"
+if [[ ! "$REPOLENS_NO_PROGRESS_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+  die "REPOLENS_NO_PROGRESS_LIMIT must be a positive integer"
+fi
+REPOLENS_NO_PROGRESS_LIMIT=$((10#$REPOLENS_NO_PROGRESS_LIMIT))
+if (( REPOLENS_NO_PROGRESS_LIMIT > MAX_ITERATIONS_PER_LENS )); then
+  die "REPOLENS_NO_PROGRESS_LIMIT must be <= MAX_ITERATIONS_PER_LENS=$MAX_ITERATIONS_PER_LENS"
+fi
+
 validate_done_depth() {
   local source="$1"
   local value="$2"
@@ -1305,6 +1323,9 @@ fi
 
 # --- Generate or resume run ID ---
 if [[ -n "$RESUME_RUN_ID" ]]; then
+  if [[ "$RESUME_RUN_ID" == *"/"* || "$RESUME_RUN_ID" == "." || "$RESUME_RUN_ID" == ".." ]]; then
+    die "Invalid run id '$(status_sanitize_display "$RESUME_RUN_ID")'. Run ids must be direct logs/ children."
+  fi
   RUN_ID="$RESUME_RUN_ID"
 else
   RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')"
@@ -1317,6 +1338,10 @@ mkdir -p "$LOG_BASE"
 HEARTBEAT_DIR="$LOG_BASE/.heartbeat"
 mkdir -p "$HEARTBEAT_DIR"
 SUMMARY_FILE="$LOG_BASE/summary.json"
+if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.agent-no-progress-abort" ]]; then
+  rm -f "$LOG_BASE/.agent-no-progress-abort"
+  clear_stop_reason "$SUMMARY_FILE"
+fi
 if [[ -n "$REMOTE_TARGET" ]]; then
   REMOTE_RUN_DIR="$LOG_BASE/.remote"
   mkdir -p "$REMOTE_RUN_DIR"
@@ -2365,6 +2390,7 @@ run_lens() {
   local exit_status="completed"
   local rate_limit_retry_attempted=false
   local rate_limit_sleep_seconds=0
+  local no_progress_count=0
   local lens_start_epoch
   lens_start_epoch="$(date +%s)"
 
@@ -2488,6 +2514,41 @@ run_lens() {
     [[ "$iter_issues" -gt 0 ]] && log_info "[$domain/$lens_id] $iter_issues issue(s) created this iteration ($lens_issues lens total)"
     prev_lens_issues="$lens_issues"
 
+    local done_detected=false
+    if check_done "$output_file"; then
+      done_detected=true
+    fi
+
+    local output_bytes output_issue_urls degraded_iteration
+    output_bytes="$(wc -c < "$output_file" | tr -d '[:space:]')"
+    [[ "$output_bytes" =~ ^[0-9]+$ ]] || output_bytes=0
+    output_issue_urls="$(count_issues_in_output "$output_file")"
+    [[ "$output_issue_urls" =~ ^[0-9]+$ ]] || output_issue_urls=0
+
+    degraded_iteration=false
+    if [[ "$agent_rc" -ne 0 ]] || (( output_bytes < REPOLENS_NO_PROGRESS_MIN_BYTES )); then
+      degraded_iteration=true
+    fi
+
+    if $degraded_iteration \
+        && ! $done_detected \
+        && (( output_issue_urls == 0 )) \
+        && (( iter_issues == 0 )); then
+      no_progress_count=$((no_progress_count + 1))
+      log_warn "[$domain/$lens_id] No-progress iteration $no_progress_count/$REPOLENS_NO_PROGRESS_LIMIT (agent_rc=$agent_rc, output_bytes=$output_bytes)"
+      if (( no_progress_count >= REPOLENS_NO_PROGRESS_LIMIT )); then
+        log_warn "[$domain/$lens_id] No-progress circuit breaker tripped after $no_progress_count consecutive degraded iterations"
+        : > "$LOG_BASE/.agent-no-progress-abort"
+        exit_status="agent-no-progress"
+        break
+      fi
+    else
+      if (( no_progress_count > 0 )); then
+        log_info "[$domain/$lens_id] No-progress streak reset."
+      fi
+      no_progress_count=0
+    fi
+
     # Check global issue budget
     if [[ -n "$MAX_ISSUES" ]]; then
       local projected=$((GLOBAL_ISSUES_CREATED + lens_issues))
@@ -2514,7 +2575,7 @@ run_lens() {
     fi
 
     # Check for DONE
-    if check_done "$output_file"; then
+    if $done_detected; then
       done_streak=$((done_streak + 1))
       log_info "[$domain/$lens_id] DONE detected ($done_streak/$DONE_STREAK_REQUIRED consecutive)"
       if [[ "$done_streak" -ge "$DONE_STREAK_REQUIRED" ]]; then
@@ -2532,10 +2593,10 @@ run_lens() {
   # Update global counter
   GLOBAL_ISSUES_CREATED=$((GLOBAL_ISSUES_CREATED + lens_issues))
 
-  # Record result. Rate-limited lenses are recorded but NOT marked completed,
+  # Record result. Terminal agent guard lenses are recorded but NOT marked completed,
   # so --resume will re-run them on the next invocation.
   record_lens "$SUMMARY_FILE" "$domain" "$lens_id" "$iteration" "$exit_status" "$lens_issues" "$rate_limit_sleep_seconds"
-  if [[ "$exit_status" != "rate-limited" ]]; then
+  if [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" ]]; then
     mark_lens_completed "$lens_entry"
   fi
 
@@ -2669,7 +2730,7 @@ jq '.' "$SUMMARY_FILE"
 # If the rate-limit detector fired, exit non-zero so CI / operators see the
 # run as failed. The summary is already finalized with stopped_reason and
 # per-lens statuses, so --resume picks up seamlessly.
-if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+if [[ -f "$LOG_BASE/.rate-limit-abort" || -f "$LOG_BASE/.agent-no-progress-abort" ]]; then
   exit 1
 fi
 

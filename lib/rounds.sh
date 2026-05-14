@@ -1290,6 +1290,28 @@ _rounds_record_skipped_lenses() {
   done
 }
 
+_rounds_agent_abort_reason() {
+  if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+    printf '%s\n' "rate-limited"
+    return 0
+  fi
+
+  if [[ -f "$LOG_BASE/.agent-no-progress-abort" ]]; then
+    local no_progress_lenses=0
+    if [[ -f "${SUMMARY_FILE:-}" ]]; then
+      no_progress_lenses="$(jq '[.lenses[]? | select(.status == "agent-no-progress")] | length' "$SUMMARY_FILE" 2>/dev/null || printf 0)"
+    fi
+    if [[ "$no_progress_lenses" =~ ^[0-9]+$ && "$no_progress_lenses" -ge 5 ]]; then
+      printf '%s\n' "agent-degraded"
+    else
+      printf '%s\n' "agent-no-progress"
+    fi
+    return 0
+  fi
+
+  return 1
+}
+
 _rounds_build_prior_digest_context() {
   local run_id="$1" current_round="$2"
   local prior_digest context_path context_dir previous_round digest_path
@@ -1332,7 +1354,7 @@ run_rounds() {
   local round_completed_lenses_file round_completed_lenses_dir round_rc
   local current_round_dir prior_digest_path previous_hypotheses_path current_hypotheses_path
   local dispatch_path dispatched_lenses_output dispatched_custom_output
-  local round_custom_lenses_dir dispatch_has_entries
+  local round_custom_lenses_dir dispatch_has_entries abort_reason
 
   if [[ ! "$rounds_total" =~ ^[1-9][0-9]*$ ]]; then
     log_warn "Invalid rounds_total: $rounds_total"
@@ -1400,8 +1422,8 @@ run_rounds() {
       fi
     fi
 
-    if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
-      set_stop_reason "$SUMMARY_FILE" "rate-limited"
+    if abort_reason="$(_rounds_agent_abort_reason)"; then
+      set_stop_reason "$SUMMARY_FILE" "$abort_reason"
       return 1
     fi
 
@@ -1466,17 +1488,25 @@ run_rounds() {
 
       parallel_count=0
       for lens_entry in "${active_lens_list[@]}"; do
-        # Skip spawning new lenses if a sibling tripped the rate-limit detector.
+        # Skip spawning new lenses if a sibling tripped an agent abort guard.
         # In-flight children continue; the summary still records skipped lenses
         # so --resume picks them up.
-        if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
-          log_warn "Rate-limit abort detected. Skipping remaining lenses."
+        if abort_reason="$(_rounds_agent_abort_reason)"; then
+          log_warn "Agent abort detected ($abort_reason). Skipping remaining lenses."
           _rounds_record_skipped_lenses "${active_lens_list[@]:$parallel_count}"
-          set_stop_reason "$SUMMARY_FILE" "rate-limited"
+          set_stop_reason "$SUMMARY_FILE" "$abort_reason"
           break
         fi
         parallel_count=$((parallel_count + 1))
-        spawn_lens "$lens_entry" run_lens "$lens_entry"
+        if ! spawn_lens "$lens_entry" run_lens "$lens_entry"; then
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            log_warn "Agent abort detected ($abort_reason). Skipping remaining lenses."
+            _rounds_record_skipped_lenses "${active_lens_list[@]:$((parallel_count - 1))}"
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+            break
+          fi
+          return 1
+        fi
       done
 
       if ! wait_all; then
@@ -1485,18 +1515,18 @@ run_rounds() {
 
       # Children may have tripped the abort after the spawn loop finished.
       # Make sure the stop_reason is recorded even then.
-      if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
-        set_stop_reason "$SUMMARY_FILE" "rate-limited"
+      if abort_reason="$(_rounds_agent_abort_reason)"; then
+        set_stop_reason "$SUMMARY_FILE" "$abort_reason"
       fi
     else
       log_info "Running in sequential mode"
       local_count=0
       for lens_entry in "${active_lens_list[@]}"; do
-        # Check for rate-limit abort from a previous lens in this run.
-        if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
-          log_warn "Rate-limit abort detected. Skipping remaining lenses."
+        # Check for an agent abort from a previous lens in this run.
+        if abort_reason="$(_rounds_agent_abort_reason)"; then
+          log_warn "Agent abort detected ($abort_reason). Skipping remaining lenses."
           _rounds_record_skipped_lenses "${active_lens_list[@]:$local_count}"
-          set_stop_reason "$SUMMARY_FILE" "rate-limited"
+          set_stop_reason "$SUMMARY_FILE" "$abort_reason"
           break
         fi
 
@@ -1514,8 +1544,8 @@ run_rounds() {
       done
     fi
 
-    if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
-      set_stop_reason "$SUMMARY_FILE" "rate-limited"
+    if abort_reason="$(_rounds_agent_abort_reason)"; then
+      set_stop_reason "$SUMMARY_FILE" "$abort_reason"
       _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
       return 1
     fi
