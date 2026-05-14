@@ -46,5 +46,5 @@ narrow content audit category and include a short draft prompt that follows
 `HYPOTHESES_TO_VERIFY:` after the dispatch bullets when it helps the next round.
 
 If fewer than 3 grounded lens rotations survive validation, emit
-`NO_FRESH_ANGLES` instead of padding. Emit `NO_FRESH_ANGLES` as the first or last
-word of the response when content review is saturated.
+`NO_FRESH_ANGLES` instead of padding. Emit `NO_FRESH_ANGLES` on a line by itself
+when content review is saturated.

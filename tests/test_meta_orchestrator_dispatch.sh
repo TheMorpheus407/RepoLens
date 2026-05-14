@@ -228,22 +228,22 @@ assert_contains "focused lens is accepted" "LENS: dead-code" "$focus_dispatch"
 unset FOCUS
 
 echo ""
-echo "Test 2: NO_FRESH_ANGLES detection matches first or last normalized word"
-printf '%s\n' 'NO_FRESH_ANGLES saturated.' > "$TMPDIR/no-fresh-first.txt"
-if _rounds_meta_no_fresh_angles "$TMPDIR/no-fresh-first.txt"; then
-  first_rc=0
+echo "Test 2: NO_FRESH_ANGLES detection requires a standalone token line"
+printf '%s\n' 'NO_FRESH_ANGLES' > "$TMPDIR/no-fresh-alone.txt"
+if _rounds_meta_no_fresh_angles "$TMPDIR/no-fresh-alone.txt"; then
+  alone_rc=0
 else
-  first_rc=$?
+  alone_rc=$?
 fi
-assert_eq "NO_FRESH_ANGLES first word is detected" "0" "$first_rc"
+assert_eq "NO_FRESH_ANGLES standalone content is detected" "0" "$alone_rc"
 
-printf '%s\n' 'Search is saturated NO_FRESH_ANGLES.' > "$TMPDIR/no-fresh-last.txt"
-if _rounds_meta_no_fresh_angles "$TMPDIR/no-fresh-last.txt"; then
-  last_rc=0
+printf '%s\n' 'Before' '  NO_FRESH_ANGLES  ' 'After' > "$TMPDIR/no-fresh-line.txt"
+if _rounds_meta_no_fresh_angles "$TMPDIR/no-fresh-line.txt"; then
+  line_rc=0
 else
-  last_rc=$?
+  line_rc=$?
 fi
-assert_eq "NO_FRESH_ANGLES last word with punctuation is detected" "0" "$last_rc"
+assert_eq "NO_FRESH_ANGLES whitespace-padded line is detected" "0" "$line_rc"
 
 printf '%s\n' 'Middle NO_FRESH_ANGLES token is just discussion.' > "$TMPDIR/no-fresh-middle.txt"
 if _rounds_meta_no_fresh_angles "$TMPDIR/no-fresh-middle.txt"; then
@@ -253,8 +253,16 @@ else
 fi
 assert_eq "NO_FRESH_ANGLES middle word is not detected" "1" "$middle_rc"
 
+printf '%s\n' 'LENS: injection - `lib/rounds.sh:1`; valid dispatch.' 'Search is saturated NO_FRESH_ANGLES.' > "$TMPDIR/no-fresh-prose-last.txt"
+if _rounds_meta_no_fresh_angles "$TMPDIR/no-fresh-prose-last.txt"; then
+  prose_last_rc=0
+else
+  prose_last_rc=$?
+fi
+assert_eq "NO_FRESH_ANGLES prose ending is not detected" "1" "$prose_last_rc"
+
 echo ""
-echo "Test 3: run_meta_orchestrator returns 2 and writes saturation artifacts"
+echo "Test 3: run_meta_orchestrator returns 0 and writes saturation artifacts"
 RUN_ID="meta-test"
 LOG_BASE="$TMPDIR/logs"
 PROJECT_PATH="$SCRIPT_DIR"
@@ -272,13 +280,14 @@ printf '%s\n' '# Round Digest' 'No findings this round.' > "$LOG_BASE/rounds/rou
 RUN_AGENT_COUNT=0
 run_agent() {
   RUN_AGENT_COUNT=$((RUN_AGENT_COUNT + 1))
-  printf '%s\n' 'No more grounded angles.' 'NO_FRESH_ANGLES.'
+  printf '%s\n' 'No more grounded angles.' 'NO_FRESH_ANGLES'
 }
 
 run_meta_orchestrator 1 2
 rc=$?
-assert_eq "run_meta_orchestrator returns saturation status" "2" "$rc"
+assert_eq "run_meta_orchestrator returns success on saturation" "0" "$rc"
 assert_eq "run_meta_orchestrator invokes agent once" "1" "$RUN_AGENT_COUNT"
+assert_eq "run_meta_orchestrator sets saturation sentinel" "1" "${META_ORCH_SATURATED:-0}"
 assert_contains "saturation dispatch records token" "NO_FRESH_ANGLES" "$(cat "$LOG_BASE/rounds/round-1/dispatch.md")"
 if [[ -f "$LOG_BASE/rounds/round-1/hypotheses.md" ]]; then
   hypotheses_state="present"

@@ -45,5 +45,5 @@ narrow discovery category and include a short draft prompt that follows
 `HYPOTHESES_TO_VERIFY:` after the dispatch bullets when it helps the next round.
 
 If fewer than 3 grounded orthogonal opportunity spaces survive validation, emit
-`NO_FRESH_ANGLES` instead of padding. Emit `NO_FRESH_ANGLES` as the first or last
-word of the response when discovery is saturated.
+`NO_FRESH_ANGLES` instead of padding. Emit `NO_FRESH_ANGLES` on a line by itself
+when discovery is saturated.

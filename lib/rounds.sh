@@ -349,6 +349,8 @@ run_meta_orchestrator() {
   local prompt_path output_path template_name template_file project_path prompt vars
   local agent_rc=0
 
+  META_ORCH_SATURATED=0
+
   if [[ "$prev_arg" == */* ]]; then
     prev_round_dir="$prev_arg"
     round="$(_rounds_meta_round_number_from_dir "$prev_round_dir")"
@@ -423,8 +425,9 @@ run_meta_orchestrator() {
 
   if _rounds_meta_no_fresh_angles "$output_path"; then
     _rounds_meta_write_no_fresh_dispatch "$dispatch_path" "$hypotheses_path" || return $?
+    META_ORCH_SATURATED=1
     log_info "[round $round] Meta-orchestrator reported NO_FRESH_ANGLES"
-    return 2
+    return 0
   fi
 
   _rounds_meta_parse_output "$output_path" "$dispatch_path" "$hypotheses_path" || return $?
@@ -779,18 +782,18 @@ _rounds_meta_dispatch_has_entries() {
 }
 
 _rounds_meta_no_fresh_angles() {
-  local output_file="$1" first_norm last_norm
+  local output_file="$1" line trimmed
 
-  if ! declare -F first_word >/dev/null 2>&1 \
-      || ! declare -F last_word >/dev/null 2>&1 \
-      || ! declare -F normalize_word >/dev/null 2>&1; then
-    _rounds_meta_warn "streak helpers are not available for NO_FRESH_ANGLES detection"
-    return 1
-  fi
+  [[ -f "$output_file" ]] || return 1
 
-  first_norm="$(normalize_word "$(first_word "$output_file")")"
-  last_norm="$(normalize_word "$(last_word "$output_file")")"
-  [[ "$first_norm" == "NO_FRESH_ANGLES" || "$last_norm" == "NO_FRESH_ANGLES" ]]
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trimmed="$(_rounds_meta_trim "$line")"
+    if [[ "$trimmed" == "NO_FRESH_ANGLES" ]]; then
+      return 0
+    fi
+  done < "$output_file"
+
+  return 1
 }
 
 _rounds_meta_extract_hypotheses() {
@@ -1586,7 +1589,16 @@ run_rounds() {
     fi
 
     if (( round < rounds_total )); then
-      run_meta_orchestrator "$round" "$((round + 1))" || return $?
+      META_ORCH_SATURATED=0
+      run_meta_orchestrator "$round" "$((round + 1))"
+      round_rc=$?
+      if (( round_rc != 0 )); then
+        return "$round_rc"
+      fi
+      if [[ "${META_ORCH_SATURATED:-0}" == "1" ]]; then
+        log_info "[round $round] Investigation saturated; skipping remaining rounds"
+        break
+      fi
     fi
   done
 }

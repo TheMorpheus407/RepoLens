@@ -115,6 +115,6 @@ If you cannot name 3 fresh angles with file:line grounding, output `NO_FRESH_ANG
 
 ## Termination
 
-- Emit `NO_FRESH_ANGLES` as the first OR last word of the response when the search is saturated.
+- Emit `NO_FRESH_ANGLES` on a line by itself when the search is saturated.
 - Use `NO_FRESH_ANGLES` when the configured task cannot produce 3 fresh, grounded, non-duplicate angles.
 - If `NO_FRESH_ANGLES` applies, do not include a dispatch plan.
