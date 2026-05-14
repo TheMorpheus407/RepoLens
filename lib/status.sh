@@ -19,9 +19,14 @@ STATUS_INTERVAL_DEFAULT=10
 STATUS_STALE_WARN_DEFAULT=120
 STATUS_STALE_ERROR_DEFAULT=600
 STATUS_UPDATER_PID=""
+STATUS_UPDATER_PGID=""
 STATUS_LENSES_FILE=""
 # shellcheck disable=SC2034 # Shared with repolens.sh after this file is sourced.
 REPOLENS_FINAL_STATE="finished"
+
+_STATUS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/locking.sh
+source "$_STATUS_LIB_DIR/locking.sh"
 
 status_log_warn() {
   if declare -F log_warn >/dev/null 2>&1; then
@@ -127,6 +132,26 @@ resolve_status_stale_error_seconds() {
 }
 
 write_status_snapshot() {
+  local state="$1" log_base="$3"
+  local status_file="$log_base/status.json"
+
+  with_file_lock "${status_file}.lock" "${REPOLENS_STATUS_LOCK_TIMEOUT:-30}" \
+    _write_status_snapshot_locked "$@"
+}
+
+cleanup_status_snapshot_temps() {
+  local log_base="$1"
+  [[ -n "$log_base" && -d "$log_base" ]] || return 0
+
+  rm -f \
+    "$log_base"/status.json.tmp.* \
+    "$log_base"/.status.active.* \
+    "$log_base"/.status.completed.* \
+    "$log_base"/.status.lenses.* \
+    2>/dev/null || true
+}
+
+_write_status_snapshot_locked() {
   local state="$1" run_id="$2" log_base="$3" heartbeat_dir="$4" completed_file="$5" summary_file="$6"
   local project="$7" repo="$8" mode="$9" agent="${10}" parallel="${11}" max_parallel="${12}" lenses_file="${13}"
   local remote_target="${14:-}" remote_label="${15:-}"
@@ -135,6 +160,14 @@ write_status_snapshot() {
   local active_tmp completed_tmp lenses_tmp
   local now_iso now_epoch started_at issues_created health
   local heartbeat_file
+
+  if [[ "$state" == "running" && -f "$status_file" ]]; then
+    case "$(jq -r '.state // empty' "$status_file" 2>/dev/null || true)" in
+      finished|finished-empty|failed|interrupted)
+        return 0
+        ;;
+    esac
+  fi
 
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   now_epoch="$(date -u +%s)"
@@ -537,9 +570,10 @@ start_status_updater() {
   printf '%s\n' "${LENS_LIST[@]}" > "$STATUS_LENSES_FILE"
 
   interval="$(resolve_status_interval)"
+  cleanup_status_snapshot_temps "$log_base"
   write_status_snapshot "running" "$run_id" "$log_base" "$heartbeat_dir" "$completed_file" "$summary_file" "$project" "$repo" "$mode" "$agent" "$parallel" "$max_parallel" "$STATUS_LENSES_FILE" "$remote_target" "$remote_label" || true
 
-  bash -c '
+  local updater_cmd=(bash -c '
     source "$1"
     source "$2"
     init_logging "$5" "$6"
@@ -548,22 +582,41 @@ start_status_updater() {
   ' "repolens-status-updater:$run_id" "$SCRIPT_DIR/lib/status.sh" "$SCRIPT_DIR/lib/logging.sh" \
     "$interval" "$$" "$run_id" "$log_base" "$heartbeat_dir" "$completed_file" "$summary_file" \
     "$project" "$repo" "$mode" "$agent" "$parallel" "$max_parallel" "$STATUS_LENSES_FILE" \
-    "$remote_target" "$remote_label" \
-    >/dev/null 2>&1 &
+    "$remote_target" "$remote_label")
 
-  STATUS_UPDATER_PID="$!"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${updater_cmd[@]}" >/dev/null 2>&1 &
+    STATUS_UPDATER_PID="$!"
+    STATUS_UPDATER_PGID="$STATUS_UPDATER_PID"
+  else
+    "${updater_cmd[@]}" >/dev/null 2>&1 &
+    STATUS_UPDATER_PID="$!"
+    STATUS_UPDATER_PGID=""
+  fi
+
 }
 
 stop_status_updater() {
   local final_state="${1:-finished}"
 
   if [[ "${STATUS_UPDATER_PID:-}" =~ ^[0-9]+$ ]]; then
-    if kill -0 "$STATUS_UPDATER_PID" 2>/dev/null; then
+    if [[ "${STATUS_UPDATER_PGID:-}" =~ ^[0-9]+$ ]]; then
+      kill -TERM -- "-$STATUS_UPDATER_PGID" 2>/dev/null || true
+    elif kill -0 "$STATUS_UPDATER_PID" 2>/dev/null; then
       kill "$STATUS_UPDATER_PID" 2>/dev/null || true
     fi
     wait "$STATUS_UPDATER_PID" 2>/dev/null || true
+
+    if [[ "${STATUS_UPDATER_PGID:-}" =~ ^[0-9]+$ ]] && command -v pgrep >/dev/null 2>&1; then
+      local i=0
+      while pgrep -g "$STATUS_UPDATER_PGID" >/dev/null 2>&1 && (( i < 20 )); do
+        sleep 0.05
+        i=$((i + 1))
+      done
+    fi
   fi
   STATUS_UPDATER_PID=""
+  STATUS_UPDATER_PGID=""
 
   if [[ -n "${RUN_ID:-}" && -n "${LOG_BASE:-}" && -n "${HEARTBEAT_DIR:-}" && -n "${completed_lenses_file:-}" && -n "${SUMMARY_FILE:-}" && -n "${STATUS_LENSES_FILE:-}" ]]; then
     write_status_snapshot \

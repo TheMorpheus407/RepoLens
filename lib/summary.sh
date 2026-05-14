@@ -15,6 +15,10 @@
 
 # RepoLens — JSON summary generation
 
+_SUMMARY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/locking.sh
+source "$_SUMMARY_LIB_DIR/locking.sh"
+
 # init_summary <summary_file> <run_id> <project_path> <mode> <agent> [spec_file] [max_issues] [output_mode] [output_dir] [remote_target] [remote_label]
 #   Creates initial summary.json skeleton
 init_summary() {
@@ -71,16 +75,17 @@ record_lens() {
   local file="$1" domain="$2" lens_id="$3" iterations="$4" status="$5"
   local issues="${6:-0}"
   local rate_limit_sleep_seconds="${7:-0}"
-  local lock_dir="${file}.lock"
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _record_lens_locked "$file" "$domain" "$lens_id" "$iterations" "$status" "$issues" "$rate_limit_sleep_seconds"
+}
+
+_record_lens_locked() {
+  local file="$1" domain="$2" lens_id="$3" iterations="$4" status="$5"
+  local issues="${6:-0}"
+  local rate_limit_sleep_seconds="${7:-0}"
   local tmp
   local lenses_increment=1
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    sleep 0.05
-  done
-  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
-    rmdir "$lock_dir" 2>/dev/null || true
-    return 1
-  }
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
   if [[ "$status" == "skipped" ]]; then
     lenses_increment=0
   fi
@@ -95,7 +100,6 @@ record_lens() {
      .totals.issues_created += $iss' "$file" > "$tmp" && mv "$tmp" "$file"
   local rc=$?
   rm -f "$tmp" 2>/dev/null || true
-  rmdir "$lock_dir" 2>/dev/null || true
   return "$rc"
 }
 
@@ -126,17 +130,18 @@ classify_summary_health() {
 #   Classifies a summary and stores the result in summary.json.
 set_summary_health() {
   local file="$1" threshold="${2:-90}"
-  local health lock_dir tmp
+  local health
 
   health="$(classify_summary_health "$file" "$threshold")" || return $?
-  lock_dir="${file}.lock"
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    sleep 0.05
-  done
-  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
-    rmdir "$lock_dir" 2>/dev/null || true
-    return 1
-  }
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _set_summary_health_locked "$file" "$health"
+}
+
+_set_summary_health_locked() {
+  local file="$1" health="$2"
+  local tmp
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
   jq --arg h "$health" '
     .health = $h
     | if $h == "broken" and (.stopped_reason == null or .stopped_reason == "") then
@@ -147,7 +152,6 @@ set_summary_health() {
   ' "$file" > "$tmp" && mv "$tmp" "$file"
   local rc=$?
   rm -f "$tmp" 2>/dev/null || true
-  rmdir "$lock_dir" 2>/dev/null || true
   return "$rc"
 }
 
@@ -156,19 +160,18 @@ set_summary_health() {
 set_stop_reason() {
   local file="$1" reason="${2:-}"
   [[ -n "$reason" ]] || return 0
-  local lock_dir="${file}.lock"
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _set_stop_reason_locked "$file" "$reason"
+}
+
+_set_stop_reason_locked() {
+  local file="$1" reason="$2"
   local tmp
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    sleep 0.05
-  done
-  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
-    rmdir "$lock_dir" 2>/dev/null || true
-    return 1
-  }
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
   jq --arg r "$reason" '.stopped_reason = $r' "$file" > "$tmp" && mv "$tmp" "$file"
   local rc=$?
   rm -f "$tmp" 2>/dev/null || true
-  rmdir "$lock_dir" 2>/dev/null || true
   return "$rc"
 }
 
@@ -177,19 +180,18 @@ set_stop_reason() {
 clear_stop_reason() {
   local file="$1"
   [[ -f "$file" ]] || return 0
-  local lock_dir="${file}.lock"
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _clear_stop_reason_locked "$file"
+}
+
+_clear_stop_reason_locked() {
+  local file="$1"
   local tmp
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    sleep 0.05
-  done
-  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
-    rmdir "$lock_dir" 2>/dev/null || true
-    return 1
-  }
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
   jq '.stopped_reason = null' "$file" > "$tmp" && mv "$tmp" "$file"
   local rc=$?
   rm -f "$tmp" 2>/dev/null || true
-  rmdir "$lock_dir" 2>/dev/null || true
   return "$rc"
 }
 
@@ -197,18 +199,17 @@ clear_stop_reason() {
 #   Sets completed_at timestamp
 finalize_summary() {
   local file="$1"
-  local lock_dir="${file}.lock"
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _finalize_summary_locked "$file"
+}
+
+_finalize_summary_locked() {
+  local file="$1"
   local tmp
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    sleep 0.05
-  done
-  tmp="$(mktemp "${file}.tmp.XXXXXX")" || {
-    rmdir "$lock_dir" 2>/dev/null || true
-    return 1
-  }
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
   jq --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.completed_at = $t' "$file" > "$tmp" && mv "$tmp" "$file"
   local rc=$?
   rm -f "$tmp" 2>/dev/null || true
-  rmdir "$lock_dir" 2>/dev/null || true
   return "$rc"
 }

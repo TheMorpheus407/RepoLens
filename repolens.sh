@@ -2776,7 +2776,9 @@ RUN_HEALTH="$(jq -r '.health // "ok"' "$SUMMARY_FILE" 2>/dev/null || printf 'ok'
 
 case "$RUN_HEALTH" in
   broken)
-    REPOLENS_FINAL_STATE="failed"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
+      REPOLENS_FINAL_STATE="failed"
+    fi
     read -r HEALTH_MAX_ITERATIONS HEALTH_RUN_LENSES HEALTH_ISSUES < <(
       jq -r '
         (.lenses // [] | map(select(.status != "skipped"))) as $run_lenses
@@ -2791,7 +2793,9 @@ case "$RUN_HEALTH" in
     log_error "Run health: BROKEN - ${HEALTH_MAX_ITERATIONS:-0}/${HEALTH_RUN_LENSES:-0} run lenses reached max-iterations with ${HEALTH_ISSUES:-0} findings"
     ;;
   no-findings|empty)
-    REPOLENS_FINAL_STATE="finished-empty"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
+      REPOLENS_FINAL_STATE="finished-empty"
+    fi
     ;;
 esac
 
