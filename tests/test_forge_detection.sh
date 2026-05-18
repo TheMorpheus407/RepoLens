@@ -18,10 +18,11 @@
 #
 # Behavioral contract (from the issue):
 #   detect_forge_provider <remote_url>
-#     prints exactly one of: gh | tea | fj | unknown
+#     prints exactly one of: gh | glab | tea | fj | unknown
 #   Detection rules:
 #     host == github.com         -> gh
 #     host == codeberg.org       -> fj
+#     host matches *gitlab*      -> glab (self-hosted, case-insensitive)
 #     host matches *gitea*       -> tea  (case-insensitive)
 #     anything else / malformed  -> unknown
 #   URL forms supported:
@@ -143,6 +144,19 @@ else
 fi
 
 echo ""
+# --- GitLab: gitlab.com exact match + *gitlab* self-hosted substring ---
+echo "GitLab host (gitlab.com) → glab"
+assert_detect "gitlab.com HTTPS"          "https://gitlab.com/owner/repo.git"        "glab"
+assert_detect "gitlab.com SSH scp-like"   "git@gitlab.com:owner/repo.git"            "glab"
+assert_detect "gitlab.com SSH URL form"   "ssh://git@gitlab.com/owner/repo.git"      "glab"
+
+echo ""
+echo "Self-hosted GitLab (*gitlab* substring) → glab"
+assert_detect "gitlab subdomain HTTPS"    "https://gitlab.example.com/owner/repo.git" "glab"
+assert_detect "gitlab SSH scp-like"       "git@gitlab.mycompany.io:owner/repo.git"    "glab"
+assert_detect "gitlab SSH URL form"       "ssh://git@my.gitlab.net/owner/repo.git"    "glab"
+
+echo ""
 # --- Gitea: 3 URL forms (substring match) ---
 echo "Gitea host (*gitea* substring) → tea"
 assert_detect "gitea subdomain HTTPS"     "https://gitea.example.com/owner/repo.git" "tea"
@@ -153,7 +167,7 @@ echo ""
 # --- Unknown / unsupported hosts ---
 echo "Unsupported / unknown hosts → unknown"
 assert_detect "example.com HTTPS"         "https://example.com/owner/repo.git"       "unknown"
-assert_detect "gitlab.com SSH scp-like"   "git@gitlab.com:owner/repo.git"            "unknown"
+assert_detect "bitbucket.com SSH scp-like" "git@bitbucket.com:owner/repo.git"        "unknown"
 assert_detect "bitbucket.org SSH URL"     "ssh://git@bitbucket.org/owner/repo.git"   "unknown"
 
 echo ""
@@ -181,8 +195,10 @@ echo ""
 # --- Case-insensitivity (RFC 3986 §3.2.2 — hosts are case-insensitive) ---
 echo "Case-insensitivity"
 assert_detect "GitHub.com mixed case"     "https://GitHub.com/owner/repo.git"        "gh"
+assert_detect "GITLAB.COM upper case"     "https://GITLAB.COM/owner/repo.git"        "glab"
 assert_detect "CODEBERG.ORG upper case"   "https://CODEBERG.ORG/owner/repo.git"      "fj"
 assert_detect "GITEA.example.com upper"   "https://GITEA.example.com/owner/repo.git" "tea"
+assert_detect "GITLAB.example.com upper"  "https://GITLAB.example.com/owner/repo.git" "glab"
 
 echo ""
 # --- HTTPS authority variations (port, userinfo) ---

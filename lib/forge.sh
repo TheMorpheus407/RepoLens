@@ -18,11 +18,12 @@
 set -uo pipefail
 
 # detect_forge_provider <remote_url>
-#   Prints exactly one of: gh | tea | fj | unknown
+#   Prints exactly one of: gh | glab | tea | fj | unknown
 #
 #   Detection rules:
 #     host == github.com                  -> gh
 #     host == codeberg.org                -> fj
+#     host matches gitlab.* or *.gitlab.* -> glab  (self-hosted GitLab, case-insensitive)
 #     host matches gitea.* or *.gitea.*   -> tea  (gitea must be a full DNS
 #                                                  label, not a substring)
 #     scheme == http                      -> unknown  (mirrors detect_forge_host's
@@ -62,10 +63,11 @@ detect_forge_provider() {
   # to be a full DNS label (delimited by dots) so substrings like
   # "gitlab.gitea-mirror.com" or "my-gitea-instance.io" do not false-match.
   case "$host_lower" in
-    github.com)         printf 'gh\n' ;;
-    codeberg.org)       printf 'fj\n' ;;
-    gitea.*|*.gitea.*)  printf 'tea\n' ;;
-    *)                  printf 'unknown\n' ;;
+    github.com)               printf 'gh\n' ;;
+    codeberg.org)             printf 'fj\n' ;;
+    gitlab.*|*.gitlab.*)      printf 'glab\n' ;;
+    gitea.*|*.gitea.*)        printf 'tea\n' ;;
+    *)                        printf 'unknown\n' ;;
   esac
   return 0
 }
@@ -256,7 +258,7 @@ _forge_http_base_path() {
 #   On success: returns 0 silently.
 #   On failure: calls die() with a provider-specific install hint (exit 1).
 #
-#   Valid providers: gh | tea | fj
+#   Valid providers: gh | glab | tea | fj
 #   Any other value dies with an "unknown provider" message to guard against
 #   caller typos.
 #
@@ -270,6 +272,10 @@ require_forge_cli() {
       command -v gh >/dev/null 2>&1 \
         || die "gh not found — install from https://cli.github.com"
       ;;
+    glab)
+      command -v glab >/dev/null 2>&1 \
+        || die "glab not found — install from https://gitlab.com/gitlab-org/cli"
+      ;;
     tea)
       command -v tea >/dev/null 2>&1 \
         || die "tea not found — install from https://gitea.com/gitea/tea"
@@ -279,7 +285,7 @@ require_forge_cli() {
         || die "fj not found — install from https://codeberg.org/forgejo-contrib/forgejo-cli"
       ;;
     *)
-      die "require_forge_cli: unknown provider '$provider' (expected gh|tea|fj)"
+      die "require_forge_cli: unknown provider '$provider' (expected gh|glab|tea|fj)"
       ;;
   esac
 }
@@ -297,6 +303,14 @@ forge_prompt_issue_create() {
     gh)
       printf 'gh issue create -R %s --title "$title" --body-file "$body_file" --label %s\n' \
         "$repo" "$label"
+      ;;
+    glab)
+      local glab_host_arg=""
+      local _gh="${FORGE_HOST:-}"
+      if [[ "$_gh" =~ ^https?://([^/:]+) ]]; then _gh="${BASH_REMATCH[1]}"; fi
+      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_arg="-H $_gh "
+      printf 'glab %sissue create -R %s --title "$title" --description "$body" --label %s\n' \
+        "$glab_host_arg" "$repo" "$label"
       ;;
     tea)
       printf 'tea issues create %s --title "$title" --description "$body" --labels %s\n' \
@@ -326,6 +340,14 @@ forge_prompt_label_create() {
     gh)
       printf 'gh label create %s --color %s --force -R %s\n' "$label" "$color" "$repo"
       ;;
+    glab)
+      local glab_host_arg=""
+      local _gh="${FORGE_HOST:-}"
+      if [[ "$_gh" =~ ^https?://([^/:]+) ]]; then _gh="${BASH_REMATCH[1]}"; fi
+      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_arg="-H $_gh "
+      printf 'glab %slabel create -R %s --name %s --color "#%s"\n' \
+        "$glab_host_arg" "$repo" "$label" "${color#\#}"
+      ;;
     tea)
       printf 'tea labels create --name %s --color %s %s\n' \
         "$label" "$color" "$(_forge_prompt_tea_target "$repo" "$project_path")"
@@ -352,6 +374,16 @@ forge_prompt_issue_list() {
   case "${FORGE_PROVIDER:-}" in
     gh)
       printf 'gh issue list -R %s --state %s --limit 100\n' "$repo" "$state"
+      ;;
+    glab)
+      local glab_host_arg=""
+      local _gh="${FORGE_HOST:-}"
+      if [[ "$_gh" =~ ^https?://([^/:]+) ]]; then _gh="${BASH_REMATCH[1]}"; fi
+      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_arg="-H $_gh "
+      # GitLab uses "opened" not "open"
+      local gl_state="$state"
+      [[ "$gl_state" == "open" ]] && gl_state="opened"
+      printf 'glab %sissue list -R %s --state %s --limit 100\n' "$glab_host_arg" "$repo" "$gl_state"
       ;;
     tea)
       printf 'tea issues list %s --state %s --limit 100\n' \
@@ -411,6 +443,16 @@ forge_auth_status() {
       gh auth status >/dev/null 2>&1 \
         || die "gh is not authenticated. Run 'gh auth login'."
       ;;
+    glab)
+      local -a glab_host_flags=()
+      if [[ -n "${FORGE_HOST:-}" ]]; then
+        local _h="${FORGE_HOST}"
+        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
+        [[ -n "$_h" ]] && glab_host_flags=(-H "$_h")
+      fi
+      glab "${glab_host_flags[@]}" auth status >/dev/null 2>&1 \
+        || die "glab is not authenticated. Run 'glab auth login'."
+      ;;
     tea)
       tea login list >/dev/null 2>&1 \
         || die "tea is not authenticated. Run 'tea login add'."
@@ -422,7 +464,7 @@ forge_auth_status() {
         || die "fj is not authenticated. Run 'fj -H $FORGE_HOST auth login' or 'fj -H $FORGE_HOST auth add-key <user>'."
       ;;
     *)
-      die "forge_auth_status: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      die "forge_auth_status: unknown provider '${FORGE_PROVIDER:-}' (expected gh|glab|tea|fj)"
       ;;
   esac
 }
@@ -454,6 +496,17 @@ forge_label_create() {
     gh)
       gh label create "$label" --color "$color" --force -R "$repo" 2>/dev/null || true
       ;;
+    glab)
+      local -a glab_host_flags=()
+      if [[ -n "${FORGE_HOST:-}" ]]; then
+        local _h="${FORGE_HOST}"
+        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
+        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+      fi
+      # GitLab requires # prefix on hex color codes
+      glab "${glab_host_flags[@]}" label create -R "$repo" \
+        --name "$label" --color "#${color#\#}" 2>/dev/null || true
+      ;;
     tea)
       local -a tea_target_flags=()
       if [[ -n "${FORGE_PROJECT_PATH:-}" ]]; then
@@ -473,7 +526,7 @@ forge_label_create() {
       fj -H "$FORGE_HOST" repo labels "$repo" create "$label" "$fj_color" 2>/dev/null || true
       ;;
     *)
-      _forge_warn "forge_label_create: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      _forge_warn "forge_label_create: unknown provider '${FORGE_PROVIDER:-}' (expected gh|glab|tea|fj)"
       return 0
       ;;
   esac
@@ -521,6 +574,7 @@ forge_label_list_names() {
       fi
       return 0
       ;;
+
     tea)
       local -a tea_target_flags=()
       if [[ -n "${FORGE_PROJECT_PATH:-}" ]]; then
@@ -597,6 +651,38 @@ forge_label_list_names() {
         return 1
       fi
       [[ -n "$parsed" ]] && printf '%s\n' "$parsed"
+      return 0
+      ;;
+    glab)
+      local -a glab_host_flags=()
+      if [[ -n "${FORGE_HOST:-}" ]]; then
+        local _h="${FORGE_HOST}"
+        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
+        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+      fi
+      local glab_err glab_out glab_rc
+      glab_err="$(mktemp 2>/dev/null)" || glab_err=""
+      if [[ -n "$glab_err" ]]; then
+        glab_out="$(glab "${glab_host_flags[@]}" label list -R "$repo" --output json 2>"$glab_err")"
+        glab_rc=$?
+      else
+        glab_out="$(glab "${glab_host_flags[@]}" label list -R "$repo" --output json 2>/dev/null)"
+        glab_rc=$?
+      fi
+      if [[ "$glab_rc" -ne 0 ]]; then
+        local first_err=""
+        if [[ -n "$glab_err" && -s "$glab_err" ]]; then
+          first_err="$(head -n1 "$glab_err" 2>/dev/null || true)"
+        fi
+        [[ -n "$glab_err" ]] && rm -f "$glab_err"
+        _forge_warn "forge_label_list_names: glab failed for repo=$repo rc=$glab_rc err=${first_err:-<empty>}"
+        return 1
+      fi
+      [[ -n "$glab_err" ]] && rm -f "$glab_err"
+      if ! printf '%s' "$glab_out" | jq -r '.[].name // empty' 2>/dev/null; then
+        _forge_warn "forge_label_list_names: jq failed to parse glab output for repo=$repo"
+        return 1
+      fi
       return 0
       ;;
     *)
@@ -843,6 +929,46 @@ forge_issue_list_count() {
       printf '%s\n' "$n"
       return 0
       ;;
+    glab)
+      local -a glab_host_flags=()
+      if [[ -n "${FORGE_HOST:-}" ]]; then
+        local _h="${FORGE_HOST}"
+        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
+        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+      fi
+      local glab_err glab_out glab_rc
+      glab_err="$(mktemp 2>/dev/null)" || glab_err=""
+      if [[ -n "$glab_err" ]]; then
+        glab_out="$(glab "${glab_host_flags[@]}" issue list -R "$repo" --label "$label" \
+          --state opened --limit 1000 --output json 2>"$glab_err")"
+        glab_rc=$?
+      else
+        glab_out="$(glab "${glab_host_flags[@]}" issue list -R "$repo" --label "$label" \
+          --state opened --limit 1000 --output json 2>/dev/null)"
+        glab_rc=$?
+      fi
+      if [[ "$glab_rc" -ne 0 ]]; then
+        local first_err=""
+        if [[ -n "$glab_err" && -s "$glab_err" ]]; then
+          first_err="$(head -n1 "$glab_err" 2>/dev/null || true)"
+        fi
+        [[ -n "$glab_err" ]] && rm -f "$glab_err"
+        _forge_warn "forge_issue_list_count: glab failed for repo=$repo label=$label rc=$glab_rc err=${first_err:-<empty>}"
+        return 1
+      fi
+      [[ -n "$glab_err" ]] && rm -f "$glab_err"
+      local n
+      if ! n="$(printf '%s' "$glab_out" | jq 'length' 2>/dev/null)"; then
+        _forge_warn "forge_issue_list_count: jq failed to parse glab output for repo=$repo label=$label"
+        return 1
+      fi
+      if ! [[ "$n" =~ ^[0-9]+$ ]]; then
+        _forge_warn "forge_issue_list_count: unexpected non-integer from jq for repo=$repo label=$label: '$n'"
+        return 1
+      fi
+      printf '%s\n' "$n"
+      return 0
+      ;;
     fj)
       [[ -n "${FORGE_HOST:-}" ]] \
         || die "forge_issue_list_count: fj backend requires FORGE_HOST"
@@ -893,7 +1019,7 @@ forge_issue_list_count() {
       return 1
       ;;
     *)
-      _forge_warn "forge_issue_list_count: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      _forge_warn "forge_issue_list_count: unknown provider '${FORGE_PROVIDER:-}' (expected gh|glab|tea|fj)"
       return 1
       ;;
   esac
@@ -968,6 +1094,35 @@ forge_issue_create() {
       done
 
       _forge_gh_with_rate_limit_retry "forge_issue_create" "$repo" "${argv[@]}"
+      return $?
+      ;;
+    glab)
+      local existing_url
+      existing_url="$(_forge_glab_find_open_issue_by_title "$repo" "$title" 2>/dev/null || true)"
+      if [[ -n "$existing_url" ]]; then
+        printf '%s\n' "$existing_url"
+        return 0
+      fi
+
+      local -a glab_host_flags=()
+      if [[ -n "${FORGE_HOST:-}" ]]; then
+        local _h="${FORGE_HOST}"
+        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
+        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+      fi
+
+      local description
+      description="$(cat "$body_file")"
+
+      local -a argv=(issue create -R "$repo" "${glab_host_flags[@]}" \
+        --title "$title" --description "$description")
+      local lbl
+      for lbl in "${labels[@]}"; do
+        [[ -n "$lbl" ]] || continue
+        argv+=(--label "$lbl")
+      done
+
+      _forge_glab_with_rate_limit_retry "forge_issue_create" "$repo" "${argv[@]}"
       return $?
       ;;
     tea)
@@ -1085,7 +1240,7 @@ forge_issue_create() {
       return 0
       ;;
     *)
-      die "forge_issue_create: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      die "forge_issue_create: unknown provider '${FORGE_PROVIDER:-}' (expected gh|glab|tea|fj)"
       ;;
   esac
 }
@@ -1118,6 +1273,21 @@ forge_issue_comment() {
     gh)
       _forge_gh_with_rate_limit_retry "forge_issue_comment" "$repo" \
         issue comment "$issue_number" -R "$repo" --body-file "$body_file"
+      return $?
+      ;;
+    glab)
+      local -a glab_host_flags=()
+      if [[ -n "${FORGE_HOST:-}" ]]; then
+        local _h="${FORGE_HOST}"
+        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
+        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+      fi
+
+      local message
+      message="$(cat "$body_file")"
+
+      _forge_glab_with_rate_limit_retry "forge_issue_comment" "$repo" \
+        issue note "$issue_number" -R "$repo" "${glab_host_flags[@]}" --message "$message"
       return $?
       ;;
     tea)
@@ -1189,9 +1359,85 @@ forge_issue_comment() {
       return 0
       ;;
     *)
-      die "forge_issue_comment: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      die "forge_issue_comment: unknown provider '${FORGE_PROVIDER:-}' (expected gh|glab|tea|fj)"
       ;;
   esac
+}
+
+# Internal: best-effort exact-title lookup for GitLab open issues.
+# Prints web_url on hit, empty on miss or any failure. Always returns 0.
+_forge_glab_find_open_issue_by_title() {
+  local repo="$1" title="$2"
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local -a host_flags=()
+  if [[ -n "${FORGE_HOST:-}" ]]; then
+    local _h="${FORGE_HOST}"
+    if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
+    [[ -n "$_h" && "$_h" != "gitlab.com" ]] && host_flags=(-H "$_h")
+  fi
+
+  local search_out
+  search_out="$(glab "${host_flags[@]}" issue list -R "$repo" --state opened \
+    --search "$title" --output json --limit 50 2>/dev/null)" || return 0
+  [[ -n "$search_out" ]] || return 0
+
+  local url
+  url="$(printf '%s' "$search_out" \
+    | jq -r --arg t "$title" '.[] | select(.title == $t) | .web_url' 2>/dev/null \
+    | head -n1)" || return 0
+  [[ -n "$url" ]] || return 0
+  printf '%s\n' "$url"
+}
+
+# Internal: invoke `glab <argv...>` with single retry on rate-limit failure.
+# Mirrors _forge_gh_with_rate_limit_retry; see that function for full docs.
+_forge_glab_with_rate_limit_retry() {
+  local fn_name="$1" repo="$2"
+  shift 2
+
+  local attempt=0
+  local max_attempts=2
+  local out err rc
+  while (( attempt < max_attempts )); do
+    attempt=$((attempt + 1))
+    err="$(mktemp 2>/dev/null)" || err=""
+    if [[ -n "$err" ]]; then
+      out="$(glab "$@" 2>"$err")"
+      rc=$?
+    else
+      out="$(glab "$@" 2>/dev/null)"
+      rc=$?
+    fi
+
+    if [[ "$rc" -eq 0 ]]; then
+      [[ -n "$err" ]] && rm -f "$err"
+      printf '%s\n' "$out"
+      return 0
+    fi
+
+    local err_content=""
+    if [[ -n "$err" && -s "$err" ]]; then
+      err_content="$(cat "$err" 2>/dev/null || true)"
+    fi
+    [[ -n "$err" ]] && rm -f "$err"
+
+    if (( attempt < max_attempts )) && _forge_is_rate_limit_error "$err_content"; then
+      local sleep_secs
+      sleep_secs="$(_forge_rate_limit_sleep_secs "$err_content")"
+      sleep "$sleep_secs"
+      continue
+    fi
+
+    local first_err=""
+    if [[ -n "$err_content" ]]; then
+      first_err="$(printf '%s\n' "$err_content" | head -n1)"
+    fi
+    _forge_warn "$fn_name: glab failed for repo=$repo rc=$rc err=${first_err:-<empty>}"
+    return 1
+  done
+
+  return 1
 }
 
 # Internal: best-effort exact-title lookup against open issues on $repo.
