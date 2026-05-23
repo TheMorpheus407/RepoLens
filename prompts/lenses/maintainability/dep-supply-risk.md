@@ -1,5 +1,5 @@
 ---
-id: dependency-management
+id: dep-supply-risk
 domain: maintainability
 name: Dependency Health
 role: Dependency Health Analyst

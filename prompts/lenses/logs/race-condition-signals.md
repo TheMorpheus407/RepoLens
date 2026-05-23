@@ -1,5 +1,5 @@
 ---
-id: race-conditions
+id: race-condition-signals
 domain: logs
 name: Race Condition Symptom Detector
 role: Concurrency Anomaly Analyst

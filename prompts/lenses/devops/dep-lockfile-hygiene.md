@@ -1,5 +1,5 @@
 ---
-id: dependency-management
+id: dep-lockfile-hygiene
 domain: devops
 name: Dependency Management
 role: Dependency Management Analyst

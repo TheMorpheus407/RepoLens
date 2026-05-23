@@ -12,7 +12,7 @@ You are a specialist in **deadlock symptoms** — finding evidence in log output
 You are working with the log corpus at `{{LOGS_PATH}}`. Your job is to identify circular or unbounded waits — situations where the system is **not crashed**, but **also not progressing**.
 
 This lens is distinct from sibling log lenses:
-- `race-conditions` covers timing-dependent wrong-outcome bugs where operations complete.
+- `race-condition-signals` covers timing-dependent wrong-outcome bugs where operations complete.
 - `silent-failures` covers operations that started and never produced any further log line.
 - `orphaned-events` covers acquire/open events with no matching release/close at end of corpus.
 
@@ -83,7 +83,7 @@ Every deadlock-symptom finding MUST include:
 - **Acquisition order**: the resource-acquisition order if available — cite the exact lines that prove the cycle, edge by edge.
 - **Recurrence count** across the corpus, with first-seen and last-seen timestamps.
 - **Source emit-site**: the ``file:line`` of the lock acquisition in source code where it can be traced from the log message, or an explicit note that the emit-site is opaque.
-- **Sibling distinction**: one sentence explaining why this is not `race-conditions`, not `silent-failures`, and not `orphaned-events`.
+- **Sibling distinction**: one sentence explaining why this is not `race-condition-signals`, not `silent-failures`, and not `orphaned-events`.
 - **Recommended fix direction**: point to the lock-ordering rule, timeout addition, lease scoping, lock-free alternative, or back-pressure handling that should prevent recurrence.
 
 ### Threshold
@@ -94,7 +94,7 @@ Every deadlock-symptom finding MUST include:
 
 ### What This Lens Does NOT File
 
-- Wrong-outcome bugs from concurrent interleaving where operations actually completed; route those to `race-conditions`.
+- Wrong-outcome bugs from concurrent interleaving where operations actually completed; route those to `race-condition-signals`.
 - Operations that started and never produced any further log line at all; route those to `silent-failures`.
 - Acquire-without-release at end of corpus with no follow-up activity proving the wait is still ongoing; route those to `orphaned-events`.
 - Generic high-volume error patterns without an indefinite-wait claim; route those to `error-storms`.

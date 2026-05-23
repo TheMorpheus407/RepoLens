@@ -13,13 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tests for issue #157: logs/race-conditions lens registration and prompt contract.
+# Tests for issue #157 (logs/race-condition-signals lens) and issue #237
+# (lens slug rename from race-conditions to race-condition-signals to break
+# the collision with concurrency/race-conditions).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LENS_FILE="$SCRIPT_DIR/prompts/lenses/logs/race-conditions.md"
+LENS_FILE="$SCRIPT_DIR/prompts/lenses/logs/race-condition-signals.md"
 DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
-EXPECTED_LOGS_LENSES="error-storms,error-cascades,retry-loops,recursive-growth,resource-leaks,resource-exhaustion,log-gaps,missing-heartbeats,silent-failures,state-machine-violations,state-corruption,race-conditions,lifecycle-violations,orphaned-events,process-orphans,latency-degradation,clock-skew,timeout-clusters,deadlock-symptoms,data-loss-signals,transaction-anomalies"
+EXPECTED_LOGS_LENSES="error-storms,error-cascades,retry-loops,recursive-growth,resource-leaks,resource-exhaustion,log-gaps,missing-heartbeats,silent-failures,state-machine-violations,state-corruption,race-condition-signals,lifecycle-violations,orphaned-events,process-orphans,latency-degradation,clock-skew,timeout-clusters,deadlock-symptoms,data-loss-signals,transaction-anomalies"
 
 PASS=0
 FAIL=0
@@ -115,10 +117,10 @@ mode_lenses() {
 }
 
 echo ""
-echo "=== Test Suite: logs/race-conditions lens (issue #157) ==="
+echo "=== Test Suite: logs/race-condition-signals lens (issues #157, #237) ==="
 echo ""
 
-assert_file_exists "race-conditions lens prompt exists" "$LENS_FILE"
+assert_file_exists "race-condition-signals lens prompt exists" "$LENS_FILE"
 
 lens_content=""
 if [[ -f "$LENS_FILE" ]]; then
@@ -129,7 +131,7 @@ echo ""
 echo "Test 1: frontmatter is exact"
 frontmatter="$(sed -n '1,6p' "$LENS_FILE" 2>/dev/null)"
 expected_frontmatter="---
-id: race-conditions
+id: race-condition-signals
 domain: logs
 name: Race Condition Symptom Detector
 role: Concurrency Anomaly Analyst
@@ -158,11 +160,11 @@ logs_mode="$(jq -r '.domains[] | select(.id == "logs") | .mode // "null"' "$DOMA
 assert_eq "logs domain registers expected lenses" "$EXPECTED_LOGS_LENSES" "$logs_lenses"
 assert_eq "logs domain stays mode-less" "null" "$logs_mode"
 audit_lenses="$(mode_lenses audit)"
-assert_contains "audit mode includes logs/race-conditions" "logs/race-conditions" "$audit_lenses"
+assert_contains "audit mode includes logs/race-condition-signals" "logs/race-condition-signals" "$audit_lenses"
 
 for mode in discover deploy opensource content; do
   lenses="$(mode_lenses "$mode")"
-  assert_not_contains "$mode mode excludes logs/race-conditions" "logs/race-conditions" "$lenses"
+  assert_not_contains "$mode mode excludes logs/race-condition-signals" "logs/race-condition-signals" "$lenses"
 done
 
 echo ""
@@ -240,9 +242,9 @@ for term in "grep" "awk" "jq" "journalctl"; do
 done
 
 echo ""
-echo "Test 10: domain-qualified focus resolves the duplicate lens ID"
-TMP_ROOT="$SCRIPT_DIR/logs/test-logs-race-conditions.$$"
-RUN_ID="test-logs-race-conditions-$$"
+echo "Test 10: --focus resolves the renamed logs lens"
+TMP_ROOT="$SCRIPT_DIR/logs/test-logs-race-condition-signals.$$"
+RUN_ID="test-logs-race-condition-signals-$$"
 FAKE_BIN="$TMP_ROOT/bin"
 PROJECT_DIR="$TMP_ROOT/project"
 LOG_DIR="$TMP_ROOT/runtime-logs"
@@ -261,14 +263,14 @@ focus_output="$(PATH="$FAKE_BIN:$PATH" bash "$SCRIPT_DIR/repolens.sh" \
   --resume "$RUN_ID" \
   --logs "$LOG_DIR" \
   --domain logs \
-  --focus race-conditions \
+  --focus race-condition-signals \
   --dry-run 2>&1)"
 focus_rc=$?
-assert_eq "domain-qualified focus dry-run exits zero" "0" "$focus_rc"
-assert_contains "domain-qualified focus lists logs/race-conditions" "logs/race-conditions" "$focus_output"
-assert_not_contains "domain-qualified focus excludes concurrency/race-conditions" "concurrency/race-conditions" "$focus_output"
-assert_contains "domain-qualified focus logs absolute logs path" "Logs: $LOG_DIR" "$focus_output"
-assert_contains "domain-qualified focus completes dry run" "Dry run complete" "$focus_output"
+assert_eq "logs --focus race-condition-signals exits zero" "0" "$focus_rc"
+assert_contains "logs --focus selects logs/race-condition-signals" "logs/race-condition-signals" "$focus_output"
+assert_not_contains "logs --focus excludes concurrency/race-conditions" "concurrency/race-conditions" "$focus_output"
+assert_contains "logs --focus emits absolute logs path" "Logs: $LOG_DIR" "$focus_output"
+assert_contains "logs --focus completes dry run" "Dry run complete" "$focus_output"
 
 echo ""
 echo "Results: $PASS/$TOTAL passed, $FAIL failed"

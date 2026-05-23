@@ -283,7 +283,7 @@
         "env-config",
         "deployment-safety",
         "infra-reproducibility",
-        "dependency-management"
+        "dep-lockfile-hygiene"
       ]
     },
     {
@@ -359,7 +359,7 @@
         "config-patterns",
         "error-traceability",
         "modularity",
-        "dependency-management"
+        "dep-supply-risk"
       ]
     },
     {
@@ -572,7 +572,7 @@
         "silent-failures",
         "state-machine-violations",
         "state-corruption",
-        "race-conditions",
+        "race-condition-signals",
         "lifecycle-violations",
         "orphaned-events",
         "process-orphans",
