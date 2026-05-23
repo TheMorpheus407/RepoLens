@@ -156,16 +156,19 @@ Options:
   --min-severity <level>  Only file findings at or above level: critical|high|medium|low
   --depth <n>             DONE streak depth per lens. Defaults: 3 for audit/feature/bugfix,
                            1 otherwise. Must be between 1 and 19.
-  --rounds <n>            Cross-lens rounds (default: 1; only --mode bugreport
+  --rounds <n>            Cross-lens rounds (default: 1, except --mode
+                           bugreport which defaults to 3; only --mode bugreport
                            supports multi-round — all other modes locked to 1)
   --strategy <name>       Bugreport round-1 strategy: fanout (default — all
                            lenses run as the round-1 dispatch) | waves (N
                            triage-seeded GENERIC investigators, width =
                            REPOLENS_WAVE_WIDTH, default 7, clamped to 1..50).
                            Requires --mode bugreport when set to waves.
-  --no-verifier           Skip the post-rounds verifier step. Defaults: ON for
-                           --mode bugreport (evidence accuracy is critical when
-                           filing bug reports); OFF for every other mode.
+  --no-verifier           Skip the post-rounds verifier step. The verifier
+                           runs by default for --mode bugreport (evidence
+                           accuracy is critical when filing bug reports) and
+                           is skipped by default for every other mode. Pass
+                           --no-verifier to also skip it for bugreport.
   --no-triage             Skip the pre-rounds triage step (round-0 context pack
                            for --mode bugreport). Defaults: OFF for --mode
                            bugreport; ON for every other mode (no-op there).
