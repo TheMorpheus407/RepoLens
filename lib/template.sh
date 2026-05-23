@@ -142,7 +142,7 @@ _template_resolve_file_backed_value() {
   local key="$1" value="$2" path
 
   case "$key" in
-    PRIOR_ROUND_DIGEST|HYPOTHESES_TO_VERIFY|BUG_REPORT|TRIAGE_CONTEXT_PACK) ;;
+    PRIOR_ROUND_DIGEST|HYPOTHESES_TO_VERIFY|BUG_REPORT|TRIAGE_CONTEXT_PACK|PRIOR_FINDING_ANCHOR) ;;
     *)
       printf '%s' "$value"
       return 0

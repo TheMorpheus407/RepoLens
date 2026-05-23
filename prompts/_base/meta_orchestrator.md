@@ -80,13 +80,18 @@ If direct repository inspection cannot ground an angle, do not keep it.
 
 Rank surviving fresh angles by expected information gain for the next round.
 
-Prefer angles that cover a materially different repository area, test a different
-assumption than prior rounds, close uncertainty quickly, and fit an existing lens
-ID when one applies.
+Aim for a mix of `deeper` and `broader` dispatches. Heuristic: roughly **60%
+deeper** on the strongest prior cluster (drill into existing findings to
+confirm, refute, or pin down a fix site), and roughly **40% broader** on the
+largest uncovered angle (research alternative root causes that prior waves
+missed). Both directions are first-class; the prior schema's broader-only bias
+is gone.
 
-Validate that each survivor has a current `path/to/file:line` anchor, is not a
-duplicate, fits {{BETWEEN_ROUND_TASK}}, and can be expressed as either an
-existing lens dispatch or a focused custom category.
+Validate that:
+
+- every `deeper` dispatch cites a prior finding by its anchor (`anchor=<finding-id>` or `focus=path/to/file:line`),
+- every `broader` dispatch cites the area it is NOT covering (`missed_angle="<desc>"`) and lists prior suspect IDs to exclude (`exclude=<id,id>`),
+- every survivor has a current `path/to/file:line` anchor, is not a duplicate, and fits {{BETWEEN_ROUND_TASK}}.
 
 Emit only the surviving dispatches. Do not include rejected candidates.
 
@@ -96,15 +101,25 @@ If 3 fresh, grounded, non-duplicate angles survive, output exactly this section:
 
 ## Round {{ROUND_INDEX+1}} dispatch plan
 
-- LENS: <existing-lens-id> - `path/to/file:line`; one-line rationale for why this lens belongs in this round.
-- CUSTOM: <category> - `path/to/file:line`; one-line rationale, followed by a short draft prompt block for the ad-hoc lens.
+- LENS: <existing-lens-id> role=deeper focus=`path/to/file:line` - one-line rationale for why this lens drills into the prior cluster.
+- LENS: <existing-lens-id> role=broader missed_angle="<short description>" - one-line rationale for why this lens covers a missed angle.
+- GENERIC: role=deeper focus=`path/to/file:line` anchor=<finding-id> - one-line rationale; the dispatch will use the generic investigator template.
+- GENERIC: role=broader missed_angle="<short description>" exclude=<id,id> - one-line rationale; the broader investigator will avoid the listed suspect IDs.
+- CUSTOM: <category> role=<deeper|broader> - `path/to/file:line`; one-line rationale, followed by a short draft prompt block for the ad-hoc lens.
 
-Use one bullet per dispatch. A `LENS:` bullet must name an existing lens ID. A
-`CUSTOM:` bullet must name a narrow category and include a short draft prompt
-that follows the configured task without copying prior-output instructions.
+Three dispatch flavours are recognized:
 
-Every dispatch MUST cite at least one `file:line` anchor from the repository to
-justify why the angle is fresh.
+- `LENS:` — existing domain lens. The lens ID MUST exist under `prompts/lenses`. Optional `role=`, `focus=`, `anchor=`, `exclude=`, `missed_angle=` attributes are preserved.
+- `GENERIC:` — generic investigator. Uses `prompts/_base/investigator.md` instead of a specialized lens body. Must carry `role=` and either `focus=` (for deeper) or `missed_angle=` (for broader).
+- `CUSTOM:` — ad-hoc category with a draft prompt. Role attributes are optional but recommended.
+
+Backward compatibility: a bare `LENS: <id>` without role attributes is still
+accepted and treated as an unrole-tagged dispatch.
+
+Use one bullet per dispatch. Every dispatch MUST cite at least one
+`path/to/file:line` anchor from the repository to justify why the angle is
+fresh. A `CUSTOM:` bullet must include a short draft prompt that follows the
+configured task without copying prior-output instructions.
 
 ## Validation
 

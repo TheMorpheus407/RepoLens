@@ -2266,7 +2266,16 @@ start_status_updater "$RUN_ID" "$LOG_BASE" "$HEARTBEAT_DIR" "$completed_lenses_f
 
 # --- Run a single lens ---
 run_lens() {
-  local lens_entry="$1"
+  local lens_tuple="$1"
+  local lens_entry="" lens_role="" lens_focus="" prior_finding_anchor="" exclusion_hints=""
+
+  if declare -F _rounds_meta_tuple_parse >/dev/null 2>&1; then
+    _rounds_meta_tuple_parse "$lens_tuple" lens_entry lens_role lens_focus prior_finding_anchor exclusion_hints
+  else
+    lens_entry="${lens_tuple%%|*}"
+  fi
+  [[ -n "$lens_entry" ]] || lens_entry="$lens_tuple"
+
   local domain="${lens_entry%%/*}"
   local lens_id="${lens_entry#*/}"
   local lens_file="$LENSES_DIR/$domain/$lens_id.md"
@@ -2276,6 +2285,13 @@ run_lens() {
       && -n "${CURRENT_ROUND_CUSTOM_LENSES_DIR:-}" \
       && -f "${CURRENT_ROUND_CUSTOM_LENSES_DIR}/$domain/$lens_id.md" ]]; then
     lens_file="${CURRENT_ROUND_CUSTOM_LENSES_DIR}/$domain/$lens_id.md"
+  fi
+
+  if [[ "$domain" == "generic" ]]; then
+    base_file="$BASE_PROMPTS_DIR/investigator.md"
+    if [[ ! -f "$lens_file" ]]; then
+      lens_file="$base_file"
+    fi
   fi
 
   # Check resume
@@ -2329,6 +2345,10 @@ run_lens() {
   vars+="|FORGE_ISSUE_LIST_CLOSED=$(forge_prompt_issue_list "closed" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   [[ -n "${CURRENT_ROUND_INDEX:-}" ]] && vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX}"
   [[ -n "${CURRENT_ROUND_TOTAL:-}" ]] && vars+="|ROUND_TOTAL=${CURRENT_ROUND_TOTAL}"
+  vars+="|LENS_ROLE=$(template_var_escape "$lens_role")"
+  vars+="|LENS_FOCUS=$(template_var_escape "$lens_focus")"
+  vars+="|PRIOR_FINDING_ANCHOR=$(template_var_escape "$prior_finding_anchor")"
+  vars+="|EXCLUSION_HINTS=$(template_var_escape "$exclusion_hints")"
   if [[ -n "${PRIOR_ROUND_DIGEST_FILE:-}" ]]; then
     vars+="|PRIOR_ROUND_DIGEST=@${PRIOR_ROUND_DIGEST_FILE}"
   fi
