@@ -805,8 +805,18 @@ forge_issue_list_count() {
 #   `_forge_warn` diagnostic — no infinite loops.
 #
 #   gh  -> see above
-#   tea -> dies with "not yet implemented (see #61)"
-#   fj  -> dies with "not yet implemented (see #62)"
+#   tea -> `tea issues create --repo $repo --remote $remote --title $title
+#          --body-file $body_file [--labels csv] --output json`,
+#          parses `.html_url` from the JSON response.
+#   fj  -> `fj -H $FORGE_HOST issue create --repo $repo --title $title
+#          --body-file $body_file --no-template`. Parses the issue URL from
+#          stdout (full `https?://.../issues/<n>` preferred; falls back to
+#          extracting `#<n>` and synthesizing the URL from $FORGE_HOST).
+#          Each label is applied post-create with one
+#          `fj -H $FORGE_HOST issue edit "$repo#<n>" labels --add <label>`
+#          call; label-edit failures are swallowed (best-effort) so the
+#          successful create is not lost on a transient label fault.
+#          Requires $FORGE_HOST.
 #
 #   Required args (repo, title, body_file) missing -> die loudly per the
 #   caller-bug tripwire convention. Unreadable body_file -> die.
@@ -908,7 +918,57 @@ forge_issue_create() {
       return 0
       ;;
     fj)
-      die "forge_issue_create: fj backend not yet implemented (see #62)"
+      [[ -n "${FORGE_HOST:-}" ]] \
+        || die "forge_issue_create: fj backend requires FORGE_HOST"
+
+      local fj_err fj_out fj_rc
+      fj_err="$(mktemp 2>/dev/null)" || fj_err=""
+      if [[ -n "$fj_err" ]]; then
+        fj_out="$(fj -H "$FORGE_HOST" issue create --repo "$repo" \
+          --title "$title" --body-file "$body_file" --no-template 2>"$fj_err")"
+        fj_rc=$?
+      else
+        fj_out="$(fj -H "$FORGE_HOST" issue create --repo "$repo" \
+          --title "$title" --body-file "$body_file" --no-template 2>/dev/null)"
+        fj_rc=$?
+      fi
+      if [[ "$fj_rc" -ne 0 ]]; then
+        local first_err=""
+        if [[ -n "$fj_err" && -s "$fj_err" ]]; then
+          first_err="$(head -n1 "$fj_err" 2>/dev/null || true)"
+        fi
+        [[ -n "$fj_err" ]] && rm -f "$fj_err"
+        _forge_warn "forge_issue_create: fj failed for repo=$repo rc=$fj_rc err=${first_err:-<empty>}"
+        return 1
+      fi
+      [[ -n "$fj_err" ]] && rm -f "$fj_err"
+
+      local html_url="" issue_n=""
+      if [[ "$fj_out" =~ (https?://[^[:space:]]+/issues/([0-9]+)) ]]; then
+        html_url="${BASH_REMATCH[1]}"
+        issue_n="${BASH_REMATCH[2]}"
+      elif [[ "$fj_out" =~ \#([0-9]+) ]]; then
+        issue_n="${BASH_REMATCH[1]}"
+        local host_url="$FORGE_HOST"
+        if [[ "$host_url" != http://* && "$host_url" != https://* ]]; then
+          host_url="https://$host_url"
+        fi
+        html_url="${host_url}/${repo}/issues/${issue_n}"
+      fi
+
+      if [[ -z "$html_url" || -z "$issue_n" ]]; then
+        _forge_warn "forge_issue_create: fj succeeded but URL parse failed for repo=$repo (stdout='${fj_out:0:200}')"
+        return 1
+      fi
+
+      local lbl
+      for lbl in "${labels[@]}"; do
+        [[ -n "$lbl" ]] || continue
+        fj -H "$FORGE_HOST" issue edit "$repo#$issue_n" labels --add "$lbl" 2>/dev/null || true
+      done
+
+      printf '%s\n' "$html_url"
+      return 0
       ;;
     *)
       die "forge_issue_create: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
@@ -922,8 +982,13 @@ forge_issue_create() {
 #   forge_issue_create (single retry on Retry-After / API rate limit).
 #
 #   gh  -> `gh issue comment <issue_number> -R <repo> --body-file <body_file>`
-#   tea -> dies with "not yet implemented (see #61)"
-#   fj  -> dies with "not yet implemented (see #62)"
+#   tea -> `tea issues comment <issue_number> --body-file <body_file>
+#          --repo $FORGE_PROJECT_PATH --remote $FORGE_REMOTE_NAME`
+#          (or --login $FORGE_TEA_LOGIN fallback).
+#   fj  -> `fj -H $FORGE_HOST issue comment <repo> <issue_number>
+#          --body-file <body_file>`. On success, echoes any fj stdout
+#          first line (matches the tea-arm passthrough). Requires
+#          $FORGE_HOST.
 #
 #   Output: comment URL on stdout (gh prints it natively).
 #   Exit:   0 on success, 1 on failure.
@@ -979,7 +1044,35 @@ forge_issue_comment() {
       return 0
       ;;
     fj)
-      die "forge_issue_comment: fj backend not yet implemented (see #62)"
+      [[ -n "${FORGE_HOST:-}" ]] \
+        || die "forge_issue_comment: fj backend requires FORGE_HOST"
+
+      local fj_err fj_out fj_rc
+      fj_err="$(mktemp 2>/dev/null)" || fj_err=""
+      if [[ -n "$fj_err" ]]; then
+        fj_out="$(fj -H "$FORGE_HOST" issue comment "$repo" "$issue_number" \
+          --body-file "$body_file" 2>"$fj_err")"
+        fj_rc=$?
+      else
+        fj_out="$(fj -H "$FORGE_HOST" issue comment "$repo" "$issue_number" \
+          --body-file "$body_file" 2>/dev/null)"
+        fj_rc=$?
+      fi
+      if [[ "$fj_rc" -ne 0 ]]; then
+        local first_err=""
+        if [[ -n "$fj_err" && -s "$fj_err" ]]; then
+          first_err="$(head -n1 "$fj_err" 2>/dev/null || true)"
+        fi
+        [[ -n "$fj_err" ]] && rm -f "$fj_err"
+        _forge_warn "forge_issue_comment: fj failed for repo=$repo issue=$issue_number rc=$fj_rc err=${first_err:-<empty>}"
+        return 1
+      fi
+      [[ -n "$fj_err" ]] && rm -f "$fj_err"
+
+      if [[ -n "$fj_out" ]]; then
+        printf '%s\n' "$fj_out" | head -n1
+      fi
+      return 0
       ;;
     *)
       die "forge_issue_comment: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"

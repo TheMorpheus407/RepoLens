@@ -23,8 +23,9 @@
 #   - Rate-limit retry: single retry on Retry-After / API rate limit stderr.
 #   - tea branch posts comments via `tea issues comment ...`; smoke covered
 #     below, comprehensive cases in tests/test_forge_issue_comment_tea.sh.
-#   - fj branch dies with "not yet implemented" pointing at #62 (tracked
-#     separately by issue #241).
+#   - fj branch posts comments via `fj -H $FORGE_HOST issue comment <repo>
+#     <issue_number> --body-file <body_file>`; smoke covered below,
+#     comprehensive cases in tests/test_forge_issue_comment_fj.sh.
 #   - Missing args / unreadable body_file / unknown provider die loudly.
 #
 # Forge calls are PATH-shadowed with fake stubs; sleep is mocked.
@@ -174,6 +175,21 @@ exit "${REPOLENS_FAKE_TEA_RC:-0}"
 SH
 chmod +x "$FAKE_BIN/tea"
 
+# Fake fj — minimal stub used by the smoke test that the fj arm no
+# longer dies with the #62 stub.
+cat > "$FAKE_BIN/fj" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${REPOLENS_FAKE_FJ_LOG:-/dev/null}"
+if [[ -n "${REPOLENS_FAKE_FJ_STDERR+x}" ]]; then
+  printf '%s\n' "$REPOLENS_FAKE_FJ_STDERR" >&2
+fi
+if [[ -n "${REPOLENS_FAKE_FJ_STDOUT+x}" ]]; then
+  printf '%s\n' "$REPOLENS_FAKE_FJ_STDOUT"
+fi
+exit "${REPOLENS_FAKE_FJ_RC:-0}"
+SH
+chmod +x "$FAKE_BIN/fj"
+
 run_comment() {
   (
     export PATH="$FAKE_BIN:/usr/bin:/bin:$PATH"
@@ -190,6 +206,7 @@ run_comment() {
              REPOLENS_FAKE_GH_COMMENT_RC REPOLENS_FAKE_GH_COMMENT_STDOUT REPOLENS_FAKE_GH_COMMENT_STDERR \
              REPOLENS_FAKE_GH_COMMENT_COUNTER REPOLENS_FAKE_GH_COMMENT_RESPONSES \
              REPOLENS_FAKE_TEA_RC REPOLENS_FAKE_TEA_LOG REPOLENS_FAKE_TEA_STDOUT REPOLENS_FAKE_TEA_STDERR \
+             REPOLENS_FAKE_FJ_RC REPOLENS_FAKE_FJ_LOG REPOLENS_FAKE_FJ_STDOUT REPOLENS_FAKE_FJ_STDERR \
              REPOLENS_FAKE_SLEEP_LOG; do
       [[ -n "${!v+x}" ]] && export "${v?}"
     done
@@ -207,6 +224,7 @@ reset_env() {
   unset REPOLENS_FAKE_GH_COMMENT_RC REPOLENS_FAKE_GH_COMMENT_STDOUT REPOLENS_FAKE_GH_COMMENT_STDERR
   unset REPOLENS_FAKE_GH_COMMENT_COUNTER REPOLENS_FAKE_GH_COMMENT_RESPONSES
   unset REPOLENS_FAKE_TEA_RC REPOLENS_FAKE_TEA_LOG REPOLENS_FAKE_TEA_STDOUT REPOLENS_FAKE_TEA_STDERR
+  unset REPOLENS_FAKE_FJ_RC REPOLENS_FAKE_FJ_LOG REPOLENS_FAKE_FJ_STDOUT REPOLENS_FAKE_FJ_STDERR
   unset FORGE_PROJECT_PATH FORGE_REMOTE_NAME FORGE_TEA_LOGIN
   unset REPOLENS_FAKE_SLEEP_LOG FORGE_PROVIDER_OVERRIDE FORGE_HOST
 }
@@ -361,14 +379,35 @@ assert_contains "tea argv includes the issue number positional" "42" "$logged"
 assert_contains "tea argv includes the body file path" "$body_file" "$logged"
 
 echo ""
-echo "Test 7: fj provider dies with 'not yet implemented' + #62"
+echo "Test 7: fj provider posts a comment via 'fj issue comment'"
+# Issue #241 — replaces the previous "fj die-stub" assertion. The wrapper
+# must no longer die with 'not yet implemented' / '#62'; instead it routes
+# the call through `fj -H $FORGE_HOST issue comment <repo> <n>` and
+# returns 0 on success.
 reset_env
 FORGE_PROVIDER_OVERRIDE=fj
-out="$(run_comment owner/repo 1 "$body_file" 2>&1)"
+FORGE_HOST=codeberg.org
+fj_log="$TMPDIR/t7-fj.log"
+: > "$fj_log"
+REPOLENS_FAKE_FJ_LOG="$fj_log"
+REPOLENS_FAKE_FJ_RC=0
+err_file="$TMPDIR/t7.err"
+out="$(run_comment owner/repo 42 "$body_file" 2>"$err_file")"
 rc=$?
-assert_rc_nonzero "fj dispatch dies" "$rc"
-assert_contains "fj die mentions not yet implemented" "not yet implemented" "$out"
-assert_contains "fj die mentions #62" "#62" "$out"
+stderr_content="$(cat "$err_file")"
+logged="$(cat "$fj_log")"
+assert_rc_zero "fj dispatch succeeds (no longer dies with #62 stub)" "$rc"
+TOTAL=$((TOTAL + 1))
+if [[ "$stderr_content" != *"not yet implemented"* && "$stderr_content" != *"#62"* ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: fj dispatch no longer references 'not yet implemented' or '#62'"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: fj dispatch still mentions die stub (stderr='$stderr_content')"
+fi
+assert_contains "fj was invoked with 'issue comment'" "issue comment" "$logged"
+assert_contains "fj argv includes the issue number positional" "42" "$logged"
+assert_contains "fj argv includes the body file path" "$body_file" "$logged"
 
 echo ""
 echo "Test 8: empty FORGE_PROVIDER dies with 'unknown provider'"

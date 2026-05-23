@@ -24,8 +24,11 @@
 #   - tea branch creates issues via `tea issues create ...` and is exercised
 #     by the smoke test below; comprehensive tea coverage lives in
 #     tests/test_forge_issue_create_tea.sh.
-#   - fj branch dies with "not yet implemented" pointing at #62 (tracked
-#     separately by issue #241).
+#   - fj branch creates issues via `fj -H $FORGE_HOST issue create ...`,
+#     parses the URL (or synthesizes from `#<n>`), and applies labels via
+#     `fj issue edit "<repo>#<n>" labels --add <label>` (one call per label).
+#     Smoke-covered below; comprehensive fj coverage lives in
+#     tests/test_forge_issue_create_fj.sh.
 #
 # Forge calls are PATH-shadowed with fake stubs. No real forge call is made,
 # and the test sleep is mocked so retry tests complete instantly.
@@ -227,6 +230,22 @@ exit "${REPOLENS_FAKE_TEA_RC:-0}"
 SH
 chmod +x "$FAKE_BIN/tea"
 
+# Fake fj — minimal stub used by the smoke test that the fj arm no
+# longer dies with the #62 stub. Logs full argv and lets the caller pick
+# rc / stdout / stderr via env vars (mirrors the tea stub above).
+cat > "$FAKE_BIN/fj" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${REPOLENS_FAKE_FJ_LOG:-/dev/null}"
+if [[ -n "${REPOLENS_FAKE_FJ_STDERR+x}" ]]; then
+  printf '%s\n' "$REPOLENS_FAKE_FJ_STDERR" >&2
+fi
+if [[ -n "${REPOLENS_FAKE_FJ_STDOUT+x}" ]]; then
+  printf '%s\n' "$REPOLENS_FAKE_FJ_STDOUT"
+fi
+exit "${REPOLENS_FAKE_FJ_RC:-0}"
+SH
+chmod +x "$FAKE_BIN/fj"
+
 run_create() {
   (
     export PATH="$FAKE_BIN:/usr/bin:/bin:$PATH"
@@ -247,6 +266,7 @@ run_create() {
              REPOLENS_FAKE_GH_COMMENT_RC REPOLENS_FAKE_GH_COMMENT_STDOUT REPOLENS_FAKE_GH_COMMENT_STDERR \
              REPOLENS_FAKE_GH_COMMENT_COUNTER REPOLENS_FAKE_GH_COMMENT_RESPONSES \
              REPOLENS_FAKE_TEA_RC REPOLENS_FAKE_TEA_LOG REPOLENS_FAKE_TEA_STDOUT REPOLENS_FAKE_TEA_STDERR \
+             REPOLENS_FAKE_FJ_RC REPOLENS_FAKE_FJ_LOG REPOLENS_FAKE_FJ_STDOUT REPOLENS_FAKE_FJ_STDERR \
              REPOLENS_FAKE_SLEEP_LOG; do
       [[ -n "${!v+x}" ]] && export "${v?}"
     done
@@ -267,6 +287,7 @@ reset_env() {
   unset REPOLENS_FAKE_GH_COMMENT_RC REPOLENS_FAKE_GH_COMMENT_STDOUT REPOLENS_FAKE_GH_COMMENT_STDERR
   unset REPOLENS_FAKE_GH_COMMENT_COUNTER REPOLENS_FAKE_GH_COMMENT_RESPONSES
   unset REPOLENS_FAKE_TEA_RC REPOLENS_FAKE_TEA_LOG REPOLENS_FAKE_TEA_STDOUT REPOLENS_FAKE_TEA_STDERR
+  unset REPOLENS_FAKE_FJ_RC REPOLENS_FAKE_FJ_LOG REPOLENS_FAKE_FJ_STDOUT REPOLENS_FAKE_FJ_STDERR
   unset FORGE_PROJECT_PATH FORGE_REMOTE_NAME FORGE_TEA_LOGIN
   unset REPOLENS_FAKE_SLEEP_LOG FORGE_PROVIDER_OVERRIDE FORGE_HOST
 }
@@ -540,14 +561,38 @@ assert_contains "tea argv includes the title" "Title" "$logged"
 assert_contains "tea argv includes the body file path" "$body_file" "$logged"
 
 echo ""
-echo "Test 12: fj provider dies with 'not yet implemented' + #62"
+echo "Test 12: fj provider creates an issue and prints the URL"
+# Issue #241 — replaces the previous "fj die-stub" assertion. The wrapper
+# must no longer die with 'not yet implemented' / '#62'; instead it routes
+# the call through `fj -H $FORGE_HOST issue create` and prints the URL
+# parsed from fj's stdout.
 reset_env
 FORGE_PROVIDER_OVERRIDE=fj
-out="$(run_create owner/repo 'Title' "$body_file" 2>&1)"
+FORGE_HOST=codeberg.org
+fj_log="$TMPDIR/t12-fj.log"
+: > "$fj_log"
+REPOLENS_FAKE_FJ_LOG="$fj_log"
+REPOLENS_FAKE_FJ_RC=0
+REPOLENS_FAKE_FJ_STDOUT='Created issue #5 at https://codeberg.org/owner/repo/issues/5'
+err_file="$TMPDIR/t12.err"
+out="$(run_create owner/repo 'Title' "$body_file" 2>"$err_file")"
 rc=$?
-assert_rc_nonzero "fj dispatch dies" "$rc"
-assert_contains "fj die mentions not yet implemented" "not yet implemented" "$out"
-assert_contains "fj die mentions #62" "#62" "$out"
+stderr_content="$(cat "$err_file")"
+logged="$(cat "$fj_log")"
+assert_rc_zero "fj dispatch succeeds (no longer dies with #62 stub)" "$rc"
+assert_eq "fj wrapper prints the parsed URL" \
+  "https://codeberg.org/owner/repo/issues/5" "$out"
+TOTAL=$((TOTAL + 1))
+if [[ "$stderr_content" != *"not yet implemented"* && "$stderr_content" != *"#62"* ]]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: fj dispatch no longer references 'not yet implemented' or '#62'"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: fj dispatch still mentions die stub (stderr='$stderr_content')"
+fi
+assert_contains "fj was invoked with 'issue create'" "issue create" "$logged"
+assert_contains "fj argv includes the title" "Title" "$logged"
+assert_contains "fj argv includes the body file path" "$body_file" "$logged"
 
 echo ""
 echo "Test 13: empty FORGE_PROVIDER dies with 'unknown provider'"
