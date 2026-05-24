@@ -3069,6 +3069,18 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]
 fi
 
 # --- Finalize ---
+# Emit deduped forge-warning rollup so the operator still sees the suppressed
+# total (issue #246). Parallel workers carry their own _FORGE_WARN_SEEN map and
+# their counts don't cross fork boundaries — what we report here is what the
+# parent process accumulated (baseline calls plus anything that ran serially).
+if declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 && (( ${#_FORGE_WARN_SEEN[@]} > 0 )); then
+  log_info "Forge warning rollup (deduped):"
+  while IFS= read -r _rollup_key; do
+    log_info "  ${_rollup_key} — ${_FORGE_WARN_SEEN[$_rollup_key]} times"
+  done < <(printf '%s\n' "${!_FORGE_WARN_SEEN[@]}" | LC_ALL=C sort)
+  unset _rollup_key
+fi
+
 finalize_summary "$SUMMARY_FILE"
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"
 RUN_HEALTH="$(jq -r '.health // "ok"' "$SUMMARY_FILE" 2>/dev/null || printf 'ok')"

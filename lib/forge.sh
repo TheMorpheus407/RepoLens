@@ -1311,9 +1311,26 @@ _forge_rate_limit_sleep_secs() {
   printf '%s' "$secs"
 }
 
+# Per-(caller, message) suppression map for _forge_warn. Persistent forge
+# failures (auth revoked, wrong slug, rate-limited) repeat identically per
+# lens iteration; without dedup a single root cause spawned ~10k warning
+# lines per run (issue #246), drowning real findings. The re-source guard
+# preserves accumulated counts when lib/forge.sh is re-sourced mid-run.
+# Parallel workers each track their own map (bash arrays don't cross fork
+# boundaries) — that still collapses ~1000× under typical fan-out.
+declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 || declare -gA _FORGE_WARN_SEEN=()
+
 # Internal: delegates to RepoLens log_warn when logging.sh is sourced,
 # otherwise falls back to stderr so wrappers remain usable in standalone tests.
+# Identical (caller, message) tuples are emitted once and silently counted
+# in _FORGE_WARN_SEEN; the rollup at finalize time names the suppressed total.
 _forge_warn() {
+  local key="${FUNCNAME[1]:-_}:$*"
+  local prev="${_FORGE_WARN_SEEN[$key]:-0}"
+  _FORGE_WARN_SEEN[$key]=$((prev + 1))
+  if (( prev > 0 )); then
+    return 0
+  fi
   if declare -F log_warn >/dev/null 2>&1 && [[ -n "${_REPOLENS_LOG_FILE+x}" ]]; then
     log_warn "$*"
   else
