@@ -305,12 +305,12 @@ forge_prompt_issue_create() {
         "$repo" "$label"
       ;;
     glab)
-      local glab_host_arg=""
+      local glab_host_prefix=""
       local _gh="${FORGE_HOST:-}"
       if [[ "$_gh" =~ ^https?://([^/:]+) ]]; then _gh="${BASH_REMATCH[1]}"; fi
-      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_arg="-H $_gh "
-      printf 'glab %sissue create -R %s --title "$title" --description "$body" --label %s\n' \
-        "$glab_host_arg" "$repo" "$label"
+      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_prefix="GITLAB_HOST=$_gh "
+      printf '%sglab issue create -R %s --title "$title" --description "$body" --label %s\n' \
+        "$glab_host_prefix" "$repo" "$label"
       ;;
     tea)
       printf 'tea issues create %s --title "$title" --description "$body" --labels %s\n' \
@@ -341,12 +341,12 @@ forge_prompt_label_create() {
       printf 'gh label create %s --color %s --force -R %s\n' "$label" "$color" "$repo"
       ;;
     glab)
-      local glab_host_arg=""
+      local glab_host_prefix=""
       local _gh="${FORGE_HOST:-}"
       if [[ "$_gh" =~ ^https?://([^/:]+) ]]; then _gh="${BASH_REMATCH[1]}"; fi
-      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_arg="-H $_gh "
-      printf 'glab %slabel create -R %s --name %s --color "#%s"\n' \
-        "$glab_host_arg" "$repo" "$label" "${color#\#}"
+      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_prefix="GITLAB_HOST=$_gh "
+      printf '%sglab label create -R %s --name %s --color "#%s"\n' \
+        "$glab_host_prefix" "$repo" "$label" "${color#\#}"
       ;;
     tea)
       printf 'tea labels create --name %s --color %s %s\n' \
@@ -376,14 +376,14 @@ forge_prompt_issue_list() {
       printf 'gh issue list -R %s --state %s --limit 100\n' "$repo" "$state"
       ;;
     glab)
-      local glab_host_arg=""
+      local glab_host_prefix=""
       local _gh="${FORGE_HOST:-}"
       if [[ "$_gh" =~ ^https?://([^/:]+) ]]; then _gh="${BASH_REMATCH[1]}"; fi
-      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_arg="-H $_gh "
+      [[ -n "$_gh" && "$_gh" != "gitlab.com" ]] && glab_host_prefix="GITLAB_HOST=$_gh "
       # GitLab uses "opened" not "open"
       local gl_state="$state"
       [[ "$gl_state" == "open" ]] && gl_state="opened"
-      printf 'glab %sissue list -R %s --state %s --limit 100\n' "$glab_host_arg" "$repo" "$gl_state"
+      printf '%sglab issue list -R %s --state %s --per-page 100\n' "$glab_host_prefix" "$repo" "$gl_state"
       ;;
     tea)
       printf 'tea issues list %s --state %s --limit 100\n' \
@@ -444,13 +444,12 @@ forge_auth_status() {
         || die "gh is not authenticated. Run 'gh auth login'."
       ;;
     glab)
-      local -a glab_host_flags=()
+      local _glab_host=""
       if [[ -n "${FORGE_HOST:-}" ]]; then
-        local _h="${FORGE_HOST}"
-        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
-        [[ -n "$_h" ]] && glab_host_flags=(-H "$_h")
+        _glab_host="${FORGE_HOST}"
+        if [[ "$_glab_host" =~ ^https?://([^/:]+) ]]; then _glab_host="${BASH_REMATCH[1]}"; fi
       fi
-      glab "${glab_host_flags[@]}" auth status >/dev/null 2>&1 \
+      GITLAB_HOST="$_glab_host" glab auth status >/dev/null 2>&1 \
         || die "glab is not authenticated. Run 'glab auth login'."
       ;;
     tea)
@@ -497,14 +496,14 @@ forge_label_create() {
       gh label create "$label" --color "$color" --force -R "$repo" 2>/dev/null || true
       ;;
     glab)
-      local -a glab_host_flags=()
+      local _glab_host=""
       if [[ -n "${FORGE_HOST:-}" ]]; then
-        local _h="${FORGE_HOST}"
-        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
-        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+        _glab_host="${FORGE_HOST}"
+        if [[ "$_glab_host" =~ ^https?://([^/:]+) ]]; then _glab_host="${BASH_REMATCH[1]}"; fi
+        [[ "$_glab_host" == "gitlab.com" ]] && _glab_host=""
       fi
       # GitLab requires # prefix on hex color codes
-      glab "${glab_host_flags[@]}" label create -R "$repo" \
+      GITLAB_HOST="$_glab_host" glab label create -R "$repo" \
         --name "$label" --color "#${color#\#}" 2>/dev/null || true
       ;;
     tea)
@@ -654,19 +653,19 @@ forge_label_list_names() {
       return 0
       ;;
     glab)
-      local -a glab_host_flags=()
+      local _glab_host=""
       if [[ -n "${FORGE_HOST:-}" ]]; then
-        local _h="${FORGE_HOST}"
-        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
-        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+        _glab_host="${FORGE_HOST}"
+        if [[ "$_glab_host" =~ ^https?://([^/:]+) ]]; then _glab_host="${BASH_REMATCH[1]}"; fi
+        [[ "$_glab_host" == "gitlab.com" ]] && _glab_host=""
       fi
       local glab_err glab_out glab_rc
       glab_err="$(mktemp 2>/dev/null)" || glab_err=""
       if [[ -n "$glab_err" ]]; then
-        glab_out="$(glab "${glab_host_flags[@]}" label list -R "$repo" --output json 2>"$glab_err")"
+        glab_out="$(GITLAB_HOST="$_glab_host" glab label list -R "$repo" --output json 2>"$glab_err")"
         glab_rc=$?
       else
-        glab_out="$(glab "${glab_host_flags[@]}" label list -R "$repo" --output json 2>/dev/null)"
+        glab_out="$(GITLAB_HOST="$_glab_host" glab label list -R "$repo" --output json 2>/dev/null)"
         glab_rc=$?
       fi
       if [[ "$glab_rc" -ne 0 ]]; then
@@ -930,21 +929,21 @@ forge_issue_list_count() {
       return 0
       ;;
     glab)
-      local -a glab_host_flags=()
+      local _glab_host=""
       if [[ -n "${FORGE_HOST:-}" ]]; then
-        local _h="${FORGE_HOST}"
-        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
-        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+        _glab_host="${FORGE_HOST}"
+        if [[ "$_glab_host" =~ ^https?://([^/:]+) ]]; then _glab_host="${BASH_REMATCH[1]}"; fi
+        [[ "$_glab_host" == "gitlab.com" ]] && _glab_host=""
       fi
       local glab_err glab_out glab_rc
       glab_err="$(mktemp 2>/dev/null)" || glab_err=""
       if [[ -n "$glab_err" ]]; then
-        glab_out="$(glab "${glab_host_flags[@]}" issue list -R "$repo" --label "$label" \
-          --state opened --limit 1000 --output json 2>"$glab_err")"
+        glab_out="$(GITLAB_HOST="$_glab_host" glab issue list -R "$repo" --label "$label" \
+          --per-page 100 --output json 2>"$glab_err")"
         glab_rc=$?
       else
-        glab_out="$(glab "${glab_host_flags[@]}" issue list -R "$repo" --label "$label" \
-          --state opened --limit 1000 --output json 2>/dev/null)"
+        glab_out="$(GITLAB_HOST="$_glab_host" glab issue list -R "$repo" --label "$label" \
+          --per-page 100 --output json 2>/dev/null)"
         glab_rc=$?
       fi
       if [[ "$glab_rc" -ne 0 ]]; then
@@ -1104,17 +1103,17 @@ forge_issue_create() {
         return 0
       fi
 
-      local -a glab_host_flags=()
+      local _glab_host=""
       if [[ -n "${FORGE_HOST:-}" ]]; then
-        local _h="${FORGE_HOST}"
-        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
-        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+        _glab_host="${FORGE_HOST}"
+        if [[ "$_glab_host" =~ ^https?://([^/:]+) ]]; then _glab_host="${BASH_REMATCH[1]}"; fi
+        [[ "$_glab_host" == "gitlab.com" ]] && _glab_host=""
       fi
 
       local description
       description="$(cat "$body_file")"
 
-      local -a argv=(issue create -R "$repo" "${glab_host_flags[@]}" \
+      local -a argv=(issue create -R "$repo" \
         --title "$title" --description "$description")
       local lbl
       for lbl in "${labels[@]}"; do
@@ -1122,7 +1121,7 @@ forge_issue_create() {
         argv+=(--label "$lbl")
       done
 
-      _forge_glab_with_rate_limit_retry "forge_issue_create" "$repo" "${argv[@]}"
+      _forge_glab_with_rate_limit_retry "forge_issue_create" "$repo" "$_glab_host" "${argv[@]}"
       return $?
       ;;
     tea)
@@ -1276,18 +1275,18 @@ forge_issue_comment() {
       return $?
       ;;
     glab)
-      local -a glab_host_flags=()
+      local _glab_host=""
       if [[ -n "${FORGE_HOST:-}" ]]; then
-        local _h="${FORGE_HOST}"
-        if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
-        [[ -n "$_h" && "$_h" != "gitlab.com" ]] && glab_host_flags=(-H "$_h")
+        _glab_host="${FORGE_HOST}"
+        if [[ "$_glab_host" =~ ^https?://([^/:]+) ]]; then _glab_host="${BASH_REMATCH[1]}"; fi
+        [[ "$_glab_host" == "gitlab.com" ]] && _glab_host=""
       fi
 
       local message
       message="$(cat "$body_file")"
 
-      _forge_glab_with_rate_limit_retry "forge_issue_comment" "$repo" \
-        issue note "$issue_number" -R "$repo" "${glab_host_flags[@]}" --message "$message"
+      _forge_glab_with_rate_limit_retry "forge_issue_comment" "$repo" "$_glab_host" \
+        issue note "$issue_number" -R "$repo" --message "$message"
       return $?
       ;;
     tea)
@@ -1370,16 +1369,16 @@ _forge_glab_find_open_issue_by_title() {
   local repo="$1" title="$2"
   command -v jq >/dev/null 2>&1 || return 0
 
-  local -a host_flags=()
+  local _glab_host=""
   if [[ -n "${FORGE_HOST:-}" ]]; then
-    local _h="${FORGE_HOST}"
-    if [[ "$_h" =~ ^https?://([^/:]+) ]]; then _h="${BASH_REMATCH[1]}"; fi
-    [[ -n "$_h" && "$_h" != "gitlab.com" ]] && host_flags=(-H "$_h")
+    _glab_host="${FORGE_HOST}"
+    if [[ "$_glab_host" =~ ^https?://([^/:]+) ]]; then _glab_host="${BASH_REMATCH[1]}"; fi
+    [[ "$_glab_host" == "gitlab.com" ]] && _glab_host=""
   fi
 
   local search_out
-  search_out="$(glab "${host_flags[@]}" issue list -R "$repo" --state opened \
-    --search "$title" --output json --limit 50 2>/dev/null)" || return 0
+  search_out="$(GITLAB_HOST="$_glab_host" glab issue list -R "$repo" --state opened \
+    --search "$title" --output json --per-page 50 2>/dev/null)" || return 0
   [[ -n "$search_out" ]] || return 0
 
   local url
@@ -1392,9 +1391,11 @@ _forge_glab_find_open_issue_by_title() {
 
 # Internal: invoke `glab <argv...>` with single retry on rate-limit failure.
 # Mirrors _forge_gh_with_rate_limit_retry; see that function for full docs.
+# Args: <fn_name> <repo> <gitlab_host> <glab-argv...>
+#   gitlab_host: hostname to set via GITLAB_HOST env var; empty string uses glab default.
 _forge_glab_with_rate_limit_retry() {
-  local fn_name="$1" repo="$2"
-  shift 2
+  local fn_name="$1" repo="$2" gitlab_host="${3:-}"
+  shift 3
 
   local attempt=0
   local max_attempts=2
@@ -1403,10 +1404,10 @@ _forge_glab_with_rate_limit_retry() {
     attempt=$((attempt + 1))
     err="$(mktemp 2>/dev/null)" || err=""
     if [[ -n "$err" ]]; then
-      out="$(glab "$@" 2>"$err")"
+      out="$(GITLAB_HOST="$gitlab_host" glab "$@" 2>"$err")"
       rc=$?
     else
-      out="$(glab "$@" 2>/dev/null)"
+      out="$(GITLAB_HOST="$gitlab_host" glab "$@" 2>/dev/null)"
       rc=$?
     fi
 
