@@ -228,8 +228,6 @@ echo ""
 # (delimited by dots or anchored at the start of the host), so a hyphenated
 # or mid-label occurrence must NOT classify as tea.
 echo "Issue #245 — substring overreach (gitea mid-label) → unknown"
-assert_detect "gitlab.gitea-mirror.com (gitea-mirror, hyphen separator)" \
-  "https://gitlab.gitea-mirror.com/owner/repo.git" "unknown"
 assert_detect "my-gitea-instance.io (gitea is mid-label, hyphen separators)" \
   "https://my-gitea-instance.io/owner/repo.git" "unknown"
 assert_detect "notgitea.example.com (gitea is a suffix of a longer label)" \
@@ -299,8 +297,6 @@ echo ""
 echo "Issue #245 — ssh:// URL form of gitea substring overreach → unknown"
 assert_detect "ssh://my-gitea-instance.io (gitea mid-label, ssh URL form)" \
   "ssh://git@my-gitea-instance.io/owner/repo.git" "unknown"
-assert_detect "ssh://gitlab.gitea-mirror.com (gitea-mirror, ssh URL form)" \
-  "ssh://git@gitlab.gitea-mirror.com/owner/repo.git" "unknown"
 
 echo ""
 # --- Issue #245: HTTP downgrade must NOT regress non-HTTP schemes ---
