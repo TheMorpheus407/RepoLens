@@ -6,7 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Added
+- Full support for Gitlab Forge (SaaS and self hosted)
 
 ## [0.2.0] — 2026-05-24
 
