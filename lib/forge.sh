@@ -144,9 +144,10 @@ detect_forge_host() {
 #     ssh://[user@]host[:port]/owner/repo[.git]
 #   Malformed or too-short paths print an empty string and return 0.
 forge_remote_repo_slug() {
-  local url="${1:-}" path owner repo
+  local url="${1:-}" path
   path="$(_forge_remote_path "$url")"
   path="${path#/}"
+  path="${path%.git}"
 
   if [[ -z "$path" ]]; then
     printf '\n'
@@ -155,20 +156,12 @@ forge_remote_repo_slug() {
 
   local -a parts=()
   IFS='/' read -r -a parts <<< "$path"
-  local count="${#parts[@]}"
-  if (( count < 2 )); then
+  if (( ${#parts[@]} < 2 )); then
     printf '\n'
     return 0
   fi
 
-  owner="${parts[$((count - 2))]}"
-  repo="${parts[$((count - 1))]}"
-  if [[ -z "$owner" || -z "$repo" ]]; then
-    printf '\n'
-    return 0
-  fi
-
-  printf '%s/%s\n' "$owner" "$repo"
+  printf '%s\n' "$path"
   return 0
 }
 
