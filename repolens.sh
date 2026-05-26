@@ -2214,6 +2214,22 @@ print_remote_confirmation_context() {
   echo "Local commands will be wrapped in: ssh -S ${socket_display} ${REMOTE_TARGET} '...'"
 }
 
+check_pricing_freshness() {
+  local pricing_file="$1"
+  local updated_at
+  updated_at="$(jq -r '.updated_at // empty' "$pricing_file" 2>/dev/null)"
+  if [[ -z "$updated_at" ]]; then
+    return 0
+  fi
+  local updated_epoch now_epoch days_old
+  updated_epoch="$(date -d "$updated_at" +%s 2>/dev/null)" || return 0
+  now_epoch="$(date +%s)"
+  days_old=$(( (now_epoch - updated_epoch) / 86400 ))
+  if [[ "$days_old" -gt 60 ]]; then
+    log_warn "Pricing data is ${days_old} days old — estimates may be inaccurate"
+  fi
+}
+
 confirm_run() {
   if $AUTO_YES; then
     return 0
@@ -2225,6 +2241,7 @@ confirm_run() {
   fi
 
   local pricing_file="$SCRIPT_DIR/config/agent-pricing.json"
+  check_pricing_freshness "$pricing_file"
   local breakdown min_cost
   breakdown="$(compute_cost_breakdown "$AGENT" "$TOTAL_LENSES" "$DONE_STREAK_REQUIRED" "$PROJECT_PATH" "$pricing_file" "$ROUNDS")"
   min_cost="$(printf "%s\n" "$breakdown" | awk -F= '/^MIN_COST=/ {print $2; exit}')"
@@ -2380,6 +2397,7 @@ if $DRY_RUN; then
   if [[ "$TOTAL_LENSES" -gt 0 ]]; then
     _dry_pricing_file="$SCRIPT_DIR/config/agent-pricing.json"
     if [[ -f "$_dry_pricing_file" ]]; then
+      check_pricing_freshness "$_dry_pricing_file"
       _dry_breakdown="$(compute_cost_breakdown "$AGENT" "$TOTAL_LENSES" "$DONE_STREAK_REQUIRED" "$PROJECT_PATH" "$_dry_pricing_file" "$ROUNDS")"
       _dry_min_cost="$(printf "%s\n" "$_dry_breakdown" | awk -F= '/^MIN_COST=/ {print $2; exit}')"
       _dry_breakdown_lines="$(printf "%s\n" "$_dry_breakdown" | grep -v '^MIN_COST=')"

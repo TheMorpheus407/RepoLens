@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- `config/agent-pricing.json` refreshed to current Anthropic pricing (2026-05-24): corrected `claude-opus-4-6` from $15/$75 to $5/$25 per MTok, added `claude-sonnet-4-6` ($3/$15) and `claude-opus-4-7` ($5/$25), and updated the default model for `--agent claude` from `claude-sonnet-4-5` to `claude-sonnet-4-6`. Cost estimates shown by `--dry-run` and the confirmation prompt are now within ±10% of current published pricing ([#249](https://github.com/TheMorpheus407/RepoLens/issues/249))
+
 ### Added
+
+- Pricing staleness warning: when `config/agent-pricing.json` is more than 60 days old, the confirmation prompt and `--dry-run` output emit `[WARN] Pricing data is N days old — estimates may be inaccurate`. The warning is informational and does not block execution ([#249](https://github.com/TheMorpheus407/RepoLens/issues/249))
 - Full support for Gitlab Forge (SaaS and self hosted)
 
 ## [0.2.0] — 2026-05-24

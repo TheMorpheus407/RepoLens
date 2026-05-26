@@ -1,15 +1,26 @@
 {
   "_comment": "USD per 1M tokens. Update when model pricing changes. 'agent_default_model' maps --agent values to a model id in 'models'. opencode/<model> parses the <model> segment and looks it up in 'models'; unknown models fall back to opencode-default.",
+  "updated_at": "2026-05-24",
   "models": {
     "claude-sonnet-4-5": {
       "label": "Claude Sonnet 4.5",
       "input_per_mtok": 3.00,
       "output_per_mtok": 15.00
     },
+    "claude-sonnet-4-6": {
+      "label": "Claude Sonnet 4.6",
+      "input_per_mtok": 3.00,
+      "output_per_mtok": 15.00
+    },
     "claude-opus-4-6": {
       "label": "Claude Opus 4.6",
-      "input_per_mtok": 15.00,
-      "output_per_mtok": 75.00
+      "input_per_mtok": 5.00,
+      "output_per_mtok": 25.00
+    },
+    "claude-opus-4-7": {
+      "label": "Claude Opus 4.7",
+      "input_per_mtok": 5.00,
+      "output_per_mtok": 25.00
     },
     "claude-haiku-4-5": {
       "label": "Claude Haiku 4.5",
@@ -33,7 +44,7 @@
     }
   },
   "agent_default_model": {
-    "claude": "claude-sonnet-4-5",
+    "claude": "claude-sonnet-4-6",
     "codex": "gpt-5",
     "spark": "spark",
     "sparc": "spark",
