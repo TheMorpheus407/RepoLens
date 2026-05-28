@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Added
 
 - Pricing staleness warning: when `config/agent-pricing.json` is more than 60 days old, the confirmation prompt and `--dry-run` output emit `[WARN] Pricing data is N days old — estimates may be inaccurate`. The warning is informational and does not block execution ([#249](https://github.com/TheMorpheus407/RepoLens/issues/249))
+- Full support for Gitlab Forge (SaaS and self hosted)
 
 ## [0.2.0] — 2026-05-24
 

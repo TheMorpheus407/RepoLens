@@ -261,10 +261,10 @@ mkdir -p "$PROJECT"
   git add README.md
   git commit -q -m init 2>/dev/null
 ) || true
-# Add a gitlab origin so detect_forge_provider returns "unknown" — this
+# Use a bitbucket origin so detect_forge_provider returns "unknown" — this
 # is the most informative fixture because it exercises the
 # "auto-detect yields unknown" die branch.
-git -C "$PROJECT" remote add origin https://gitlab.com/owner/repo.git 2>/dev/null || true
+git -C "$PROJECT" remote add origin https://bitbucket.com/owner/repo.git 2>/dev/null || true
 
 # PATH override: fake gh + claude take precedence. Real git, jq, timeout,
 # bash, etc. still resolve through the system PATH.
@@ -273,8 +273,14 @@ cat > "$FAKE_BIN/fj" <<'SH'
 printf '%s\n' "$*" >> "${REPOLENS_FAKE_FJ_LOG:-/dev/null}"
 exit "${REPOLENS_FAKE_FJ_RC:-0}"
 SH
-
 chmod +x "$FAKE_BIN/fj"
+
+cat > "$FAKE_BIN/glab" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${REPOLENS_FAKE_GLAB_LOG:-/dev/null}"
+exit "${REPOLENS_FAKE_GLAB_RC:-0}"
+SH
+chmod +x "$FAKE_BIN/glab"
 
 # shellcheck disable=SC2031
 export PATH="$FAKE_BIN:$PATH"
@@ -638,6 +644,47 @@ assert_rc_nonzero "--forge fj without an origin remote exits non-zero" "$rc"
 assert_contains "die message explains that fj needs an HTTPS or SSH origin remote for --host" \
   "requires an HTTPS or SSH origin remote" "$out15"
 assert_eq "fj is not invoked when FORGE_HOST cannot be resolved" "" "$fj15"
+
+# Test 16: gitlab.com origin without --forge auto-detects glab.
+# End-to-end through repolens.sh: detect_forge_provider returns "glab",
+# require_forge_cli finds the fake glab stub, fake glab auth passes,
+# --dry-run short-circuits before any agent call. rc=0 confirms the full chain.
+echo ""
+echo "Test 16: gitlab.com origin without --forge → auto-detects glab, exits 0"
+PROJECT_GLAB="$TMPDIR/project_glab"
+mkdir -p "$PROJECT_GLAB"
+(
+  cd "$PROJECT_GLAB"
+  git init -q 2>/dev/null
+  git config user.email test@example.com
+  git config user.name Test
+  echo "# test" > README.md
+  git add README.md
+  git commit -q -m init 2>/dev/null
+) || true
+git -C "$PROJECT_GLAB" remote add origin https://gitlab.com/owner/repo.git 2>/dev/null || true
+
+GLAB_LOG="$TMPDIR/run16-glab.log"
+: > "$GLAB_LOG"
+OUT_FILE="$TMPDIR/run16.log"
+set +e
+REPOLENS_FAKE_GLAB_RC=0 REPOLENS_FAKE_GLAB_LOG="$GLAB_LOG" \
+bash "$SCRIPT_DIR/repolens.sh" \
+  --project "$PROJECT_GLAB" \
+  --agent claude \
+  --domain i18n \
+  --dry-run \
+  --yes \
+  >"$OUT_FILE" 2>&1
+rc=$?
+set -e
+record_run_id "$OUT_FILE"
+out16="$(cat "$OUT_FILE")"
+glab16="$(cat "$GLAB_LOG")"
+assert_rc_zero "gitlab.com origin auto-detects glab, exits 0" "$rc"
+assert_not_contains "no 'Could not detect forge provider' on gitlab.com origin" "Could not detect forge provider" "$out16"
+assert_not_contains "no 'Pass --forge' die on gitlab.com origin" "Pass --forge" "$out16"
+assert_contains "glab auth status was called" "auth status" "$glab16"
 
 # ---------------------------------------------------------------------------
 # Summary
