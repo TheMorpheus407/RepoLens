@@ -1146,6 +1146,61 @@ write_rate_limit_sleep_interrupt_marker() {
   rm -f "$tmp" 2>/dev/null || true
 }
 
+read_rate_limit_abort_earliest_at() {
+  local marker key value earliest_at=""
+
+  [[ -n "${LOG_BASE:-}" ]] || { printf '\n'; return 0; }
+  marker="$LOG_BASE/.rate-limit-abort"
+  [[ -f "$marker" ]] || { printf '\n'; return 0; }
+
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    case "$key" in
+      earliest_at) earliest_at="$value" ;;
+    esac
+  done < "$marker"
+
+  if [[ "$earliest_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    printf '%s\n' "$earliest_at"
+  else
+    printf '\n'
+  fi
+}
+
+write_rate_limit_abort_marker() {
+  local resume_epoch="${1:-}" marker tmp now_epoch earliest_at existing_earliest_at
+
+  [[ -n "${LOG_BASE:-}" ]] || return 0
+  marker="$LOG_BASE/.rate-limit-abort"
+  tmp="${marker}.tmp.${BASHPID}"
+  earliest_at=""
+
+  if [[ "$resume_epoch" =~ ^[0-9]+$ ]]; then
+    now_epoch="$(date +%s 2>/dev/null || printf '0')"
+    if [[ "$now_epoch" =~ ^[0-9]+$ && "$resume_epoch" -ge $((now_epoch - 60)) ]]; then
+      earliest_at="$(date -u -d "@$resume_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+    fi
+  fi
+  if [[ ! "$earliest_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    earliest_at=""
+  fi
+
+  if [[ -z "$earliest_at" ]]; then
+    existing_earliest_at="$(read_rate_limit_abort_earliest_at)"
+    earliest_at="$existing_earliest_at"
+  fi
+
+  {
+    if [[ -n "$earliest_at" ]]; then
+      printf 'earliest_at=%s\n' "$earliest_at"
+    fi
+    if [[ "$resume_epoch" =~ ^[0-9]+$ ]]; then
+      printf 'resume_epoch=%s\n' "$resume_epoch"
+    fi
+    printf 'source=lens-rate-limit\n'
+  } > "$tmp" && mv -f "$tmp" "$marker"
+  rm -f "$tmp" 2>/dev/null || true
+}
+
 rate_limit_abort_stopped_reason() {
   [[ -n "${SUMMARY_FILE:-}" && -f "$SUMMARY_FILE" ]] || return 0
   jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || true
@@ -1584,7 +1639,7 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.agent-no-progress-abort" ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.rate-limit-abort" ]]; then
-  rm -f "$LOG_BASE/.rate-limit-abort"
+  rm -f "$LOG_BASE/.rate-limit-abort" "$LOG_BASE/.rate-limit-abort.tmp."*
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.rate-limit-sleep-interrupt" ]]; then
@@ -2890,55 +2945,54 @@ run_lens() {
         rl_sig="${rl_hit%%|*}"
         rl_snip="${rl_hit#*|}"
 
-        if ! $rate_limit_retry_attempted; then
-          local resume_epoch now_epoch wait_delta sleep_seconds resume_label
-          resume_epoch="$(parse_rate_limit_resume_epoch "$output_file" || true)"
-          if [[ "$resume_epoch" =~ ^[0-9]+$ ]]; then
-            now_epoch="$(date +%s)"
-            if [[ "$resume_epoch" -lt $((now_epoch - 60)) ]]; then
-              resume_epoch=""
-            else
-              wait_delta=$((resume_epoch - now_epoch))
-              if [[ "$wait_delta" -lt 0 ]]; then
-                wait_delta=0
+        local rl_resume_epoch="" rl_abort_resume_epoch="" rl_now_epoch="" wait_delta sleep_seconds resume_label
+        rl_resume_epoch="$(parse_rate_limit_resume_epoch "$output_file" || true)"
+        if [[ "$rl_resume_epoch" =~ ^[0-9]+$ ]]; then
+          rl_now_epoch="$(date +%s)"
+          if [[ "$rl_resume_epoch" -lt $((rl_now_epoch - 60)) ]]; then
+            rl_resume_epoch=""
+          else
+            rl_abort_resume_epoch="$rl_resume_epoch"
+            wait_delta=$((rl_resume_epoch - rl_now_epoch))
+            if [[ "$wait_delta" -lt 0 ]]; then
+              wait_delta=0
+            fi
+
+            if ! $rate_limit_retry_attempted && (( wait_delta <= RATE_LIMIT_MAX_SLEEP_SECS )); then
+              sleep_seconds=$((wait_delta + 60))
+              resume_label="$(date -u -d "@$rl_resume_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$rl_resume_epoch")"
+              log_warn "[$domain/$lens_id] Agent rate-limited. Resume at $resume_label (${sleep_seconds}s from now). Sleeping."
+              rate_limit_retry_attempted=true
+              rate_limit_sleep_seconds=$((rate_limit_sleep_seconds + sleep_seconds))
+              local sleep_rc sleep_signal sleep_stopped_reason
+              if env --help 2>&1 | grep -q -- '--default-signal'; then
+                env --default-signal=INT sleep "$sleep_seconds"
+                sleep_rc=$?
+              else
+                sleep "$sleep_seconds"
+                sleep_rc=$?
               fi
 
-              if [[ "$wait_delta" -le "$RATE_LIMIT_MAX_SLEEP_SECS" ]]; then
-                sleep_seconds=$((wait_delta + 60))
-                resume_label="$(date -u -d "@$resume_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$resume_epoch")"
-                log_warn "[$domain/$lens_id] Agent rate-limited. Resume at $resume_label (${sleep_seconds}s from now). Sleeping."
-                rate_limit_retry_attempted=true
-                rate_limit_sleep_seconds=$((rate_limit_sleep_seconds + sleep_seconds))
-                local sleep_rc sleep_signal sleep_stopped_reason
-                if env --help 2>&1 | grep -q -- '--default-signal'; then
-                  env --default-signal=INT sleep "$sleep_seconds"
-                  sleep_rc=$?
-                else
-                  sleep "$sleep_seconds"
-                  sleep_rc=$?
+              if (( sleep_rc != 0 )); then
+                log_warn "[$domain/$lens_id] Rate-limit sleep interrupted."
+                write_rate_limit_abort_marker "$rl_abort_resume_epoch"
+                if sleep_stopped_reason="$(rate_limit_sleep_stopped_reason "$sleep_rc" 2>/dev/null)"; then
+                  sleep_signal="$(rate_limit_sleep_signal_name "$sleep_rc" 2>/dev/null || printf '%s\n' "UNKNOWN")"
+                  write_rate_limit_sleep_interrupt_marker "$sleep_rc" "$sleep_signal" "$sleep_stopped_reason"
+                  exit "$sleep_rc"
                 fi
 
-                if (( sleep_rc != 0 )); then
-                  log_warn "[$domain/$lens_id] Rate-limit sleep interrupted."
-                  : > "$LOG_BASE/.rate-limit-abort"
-                  if sleep_stopped_reason="$(rate_limit_sleep_stopped_reason "$sleep_rc" 2>/dev/null)"; then
-                    sleep_signal="$(rate_limit_sleep_signal_name "$sleep_rc" 2>/dev/null || printf '%s\n' "UNKNOWN")"
-                    write_rate_limit_sleep_interrupt_marker "$sleep_rc" "$sleep_signal" "$sleep_stopped_reason"
-                    exit "$sleep_rc"
-                  fi
-
-                  log_warn "[$domain/$lens_id] Rate-limit sleep failed with exit $sleep_rc; leaving run pending for resume."
-                  exit_status="rate-limited"
-                  break
-                fi
-                continue
+                log_warn "[$domain/$lens_id] Rate-limit sleep failed with exit $sleep_rc; leaving run pending for resume."
+                exit_status="rate-limited"
+                break
               fi
+              continue
             fi
           fi
         fi
 
         log_error "[$domain/$lens_id] Agent rate-limited / quota exceeded. Aborting run. Matched: $rl_sig. Snippet: $rl_snip"
-        : > "$LOG_BASE/.rate-limit-abort"
+        write_rate_limit_abort_marker "$rl_abort_resume_epoch"
         exit_status="rate-limited"
         break
       fi

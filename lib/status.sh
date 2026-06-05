@@ -25,7 +25,7 @@ STATUS_LENSES_FILE=""
 REPOLENS_FINAL_STATE="finished"
 
 _STATUS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/locking.sh
+# shellcheck source=/dev/null
 source "$_STATUS_LIB_DIR/locking.sh"
 
 status_log_warn() {
@@ -151,6 +151,25 @@ cleanup_status_snapshot_temps() {
     2>/dev/null || true
 }
 
+status_rate_limit_next_action_earliest_at() {
+  local log_base="$1" marker key value earliest_at=""
+
+  marker="$log_base/.rate-limit-abort"
+  [[ -f "$marker" ]] || { printf '\n'; return 0; }
+
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    case "$key" in
+      earliest_at) earliest_at="$value" ;;
+    esac
+  done < "$marker"
+
+  if [[ "$earliest_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    printf '%s\n' "$earliest_at"
+  else
+    printf '\n'
+  fi
+}
+
 _write_status_snapshot_locked() {
   local state="$1" run_id="$2" log_base="$3" heartbeat_dir="$4" completed_file="$5" summary_file="$6"
   local project="$7" repo="$8" mode="$9" agent="${10}" parallel="${11}" max_parallel="${12}" lenses_file="${13}"
@@ -158,7 +177,7 @@ _write_status_snapshot_locked() {
   local status_file="$log_base/status.json"
   local tmp_file="${status_file}.tmp.${BASHPID}"
   local active_tmp completed_tmp lenses_tmp
-  local now_iso now_epoch started_at issues_created health
+  local now_iso now_epoch started_at issues_created health next_action_earliest_at
   local heartbeat_file
 
   if [[ "$state" == "running" && -f "$status_file" && "${REPOLENS_STATUS_ALLOW_RUNNING_OVER_TERMINAL:-false}" != "true" ]]; then
@@ -200,6 +219,10 @@ _write_status_snapshot_locked() {
   health=""
   if [[ -f "$summary_file" ]]; then
     health="$(jq -r '.health // empty' "$summary_file" 2>/dev/null || true)"
+  fi
+  next_action_earliest_at=""
+  if [[ "$state" == "rate-limit-pending" ]]; then
+    next_action_earliest_at="$(status_rate_limit_next_action_earliest_at "$log_base")"
   fi
 
   if [[ "$parallel" != "true" && "$parallel" != "false" ]]; then
@@ -278,6 +301,7 @@ _write_status_snapshot_locked() {
     --arg updated_at "$now_iso" \
     --arg state "$state" \
     --arg health "$health" \
+    --arg next_action_earliest_at "$next_action_earliest_at" \
     --argjson issues_created "$issues_created" \
     --slurpfile active_raw <(jq -s 'sort_by(.domain, .lens_id)' "$active_tmp" 2>/dev/null || printf '[]') \
     --rawfile completed_raw "$completed_tmp" \
@@ -323,6 +347,11 @@ _write_status_snapshot_locked() {
           queued: $queued,
           completed: $completed
         }
+      | if $state == "rate-limit-pending" and $next_action_earliest_at != "" then
+          . + {next_action: {earliest_at: $next_action_earliest_at}}
+        else
+          .
+        end
     ' > "$tmp_file" && mv -f "$tmp_file" "$status_file"
 
   local rc=$?

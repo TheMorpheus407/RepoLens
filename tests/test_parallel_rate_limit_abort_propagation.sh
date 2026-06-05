@@ -102,6 +102,23 @@ assert_jq() {
   fi
 }
 
+assert_next_action_delta_between_updated_at() {
+  local desc="$1" file="$2" min_delta="$3" max_delta="$4"
+  TOTAL=$((TOTAL + 1))
+  if [[ -f "$file" ]] && jq -e \
+    --argjson min_delta "$min_delta" \
+    --argjson max_delta "$max_delta" \
+    '.state == "rate-limit-pending"
+     and (.next_action.earliest_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+     and (((.next_action.earliest_at | fromdateiso8601) - (.updated_at | fromdateiso8601)) as $delta
+          | ($delta >= $min_delta and $delta <= $max_delta))' \
+    "$file" >/dev/null 2>&1; then
+    pass_with "$desc"
+  else
+    fail_with "$desc" "file=$file expected delta ${min_delta}..${max_delta}s"
+  fi
+}
+
 assert_numeric_at_least() {
   local desc="$1" actual="$2" minimum="$3"
   TOTAL=$((TOTAL + 1))
@@ -314,6 +331,7 @@ run_resume_cleanup_case() {
     printf 'stopped_reason=interrupted-sigint\n'
     printf 'source=rate-limit-sleep\n'
   } > "$CASE_LOG_BASE/.rate-limit-sleep-interrupt"
+  : > "$CASE_LOG_BASE/.rate-limit-abort.tmp.123"
   : > "$CASE_LOG_BASE/.rate-limit-sleep-interrupt.tmp.123"
 
   set +e
@@ -364,6 +382,8 @@ assert_signal_sleep_case() {
   assert_file_contains "$label interrupt marker records stopped reason" "$CASE_LOG_BASE/.rate-limit-sleep-interrupt" "stopped_reason=$stopped_reason"
   assert_file_contains "$label interrupt marker records source" "$CASE_LOG_BASE/.rate-limit-sleep-interrupt" "source=rate-limit-sleep"
   assert_jq "$label status.json final state is interrupted" "$CASE_STATUS_FILE" '.state == "interrupted"'
+  assert_jq "$label interrupted status omits next_action retry metadata" "$CASE_STATUS_FILE" \
+            'has("next_action") | not'
   assert_jq "$label summary records signal-specific stopped_reason" "$CASE_SUMMARY_FILE" \
             ".stopped_reason == \"$stopped_reason\""
   assert_jq "$label does not finalize as finished" "$CASE_STATUS_FILE" \
@@ -388,6 +408,9 @@ assert_file_exists "generic sleep failure writes parent-visible rate-limit marke
 assert_file_missing "generic sleep failure does not write sleep interrupt marker" "$CASE_LOG_BASE/.rate-limit-sleep-interrupt"
 assert_jq "generic sleep failure status is rate-limit-pending" "$CASE_STATUS_FILE" \
           '.state == "rate-limit-pending"'
+assert_next_action_delta_between_updated_at \
+  "generic sleep failure status persists the parsed short retry time" \
+  "$CASE_STATUS_FILE" -15 15
 assert_jq "generic sleep failure stopped_reason stays rate-limit related" "$CASE_SUMMARY_FILE" \
           '(.stopped_reason // "") | startswith("rate-limited")'
 assert_jq "generic sleep failure is not classified as interrupted" "$CASE_SUMMARY_FILE" \
@@ -405,6 +428,8 @@ assert_eq "terminal rate-limit does not enter retry sleep" "0" "$(count_rate_lim
 assert_file_exists "terminal rate-limit writes parent-visible marker" "$CASE_LOG_BASE/.rate-limit-abort"
 assert_jq "terminal rate-limit status is rate-limit-pending" "$CASE_STATUS_FILE" \
           '.state == "rate-limit-pending"'
+assert_jq "terminal rate-limit without a retry time omits next_action" "$CASE_STATUS_FILE" \
+          'has("next_action") | not'
 assert_jq "terminal rate-limit stopped_reason is rate-limit related" "$CASE_SUMMARY_FILE" \
           '(.stopped_reason // "") | startswith("rate-limited")'
 rate_limited_count="$(jq '[.lenses[]? | select(.status == "rate-limited")] | length' "$CASE_SUMMARY_FILE" 2>/dev/null || printf 0)"
@@ -417,11 +442,14 @@ echo "Test: resume clears stale rate-limit sleep interrupt state"
 run_resume_cleanup_case "resume-clears-sleep-interrupt"
 assert_eq "resume cleanup exits successfully" "0" "$CASE_EXIT_CODE"
 assert_file_missing "resume cleanup removes stale rate-limit marker" "$CASE_LOG_BASE/.rate-limit-abort"
+assert_file_missing "resume cleanup removes stale rate-limit temp marker" "$CASE_LOG_BASE/.rate-limit-abort.tmp.123"
 assert_file_missing "resume cleanup removes stale sleep interrupt marker" "$CASE_LOG_BASE/.rate-limit-sleep-interrupt"
 assert_file_missing "resume cleanup removes stale sleep interrupt temp marker" "$CASE_LOG_BASE/.rate-limit-sleep-interrupt.tmp.123"
 assert_jq "resume cleanup clears stale stopped_reason" "$CASE_SUMMARY_FILE" '.stopped_reason == null'
 assert_jq "resume cleanup does not finalize as interrupted" "$CASE_STATUS_FILE" '.state != "interrupted"'
 assert_jq "resume cleanup does not finalize as rate-limit-pending" "$CASE_STATUS_FILE" '.state != "rate-limit-pending"'
+assert_jq "resume cleanup omits stale next_action retry metadata" "$CASE_STATUS_FILE" \
+          'has("next_action") | not'
 assert_file_contains "resume cleanup marks pending lens completed" "$CASE_LOG_BASE/.completed" "i18n/i18n-strings"
 assert_eq "resume cleanup invokes fake agent once" "1" "$(cat "$CASE_STATE/calls" 2>/dev/null || printf 0)"
 
