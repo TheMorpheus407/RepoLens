@@ -187,6 +187,15 @@ prompt="${*: -1}"
 call_file="${REPOLENS_GREENFIELD_CALLS:?missing call counter}"
 prompt_dir="${REPOLENS_GREENFIELD_PROMPT_DIR:?missing prompt capture dir}"
 
+prompt_output_dir() {
+  printf '%s\n' "$prompt" \
+    | sed -n \
+      -e 's/^Write all findings to: `\(.*\)`$/\1/p' \
+      -e 's/^Write all backlog items to: `\(.*\)`$/\1/p' \
+      -e 's/^Write all greenfield backlog items to: `\(.*\)`$/\1/p' \
+    | sed -n '1p'
+}
+
 call=0
 if [[ -f "$call_file" ]]; then
   call="$(cat "$call_file")"
@@ -197,7 +206,7 @@ mkdir -p "$prompt_dir"
 printf '%s\n' "$prompt" > "$prompt_dir/iteration-${call}.prompt.md"
 
 if [[ "${REPOLENS_GREENFIELD_EXISTING_DRAFT_MODE:-false}" == "true" ]]; then
-  output_dir="$(printf '%s\n' "$prompt" | sed -n 's/^Write all findings to: `\(.*\)`$/\1/p' | sed -n '1p')"
+  output_dir="$(prompt_output_dir)"
   if [[ -z "$output_dir" ]]; then
     printf 'No local output directory was rendered.\n'
     exit 1
@@ -243,7 +252,7 @@ if [[ "${REPOLENS_GREENFIELD_FORGE_MODE:-false}" == "true" ]]; then
   exit 0
 fi
 
-output_dir="$(printf '%s\n' "$prompt" | sed -n 's/^Write all findings to: `\(.*\)`$/\1/p' | sed -n '1p')"
+output_dir="$(prompt_output_dir)"
 if [[ -z "$output_dir" ]]; then
   printf 'No local output directory was rendered.\n'
   exit 0
@@ -436,6 +445,8 @@ DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
 COLORS_FILE="$SCRIPT_DIR/config/label-colors.json"
 GREENFIELD_BASE="$SCRIPT_DIR/prompts/_base/greenfield.md"
 GREENFIELD_LENS="$SCRIPT_DIR/prompts/lenses/greenfield/backlog-planning.md"
+AUDIT_BASE="$SCRIPT_DIR/prompts/_base/audit.md"
+AUDIT_LENS="$SCRIPT_DIR/prompts/lenses/security/injection.md"
 
 echo ""
 echo "=== Test Suite: greenfield mode (issue #283) ==="
@@ -514,6 +525,17 @@ if [[ -f "$GREENFIELD_BASE" && -f "$GREENFIELD_LENS" ]]; then
     "3" \
     "$SOURCE_FILE" \
     "false" \
+    "false" \
+    "")"
+  local_rendered="$(compose_prompt \
+    "$GREENFIELD_BASE" \
+    "$GREENFIELD_LENS" \
+    "LENS_NAME=Backlog Planning|DOMAIN_NAME=Greenfield Planning|REPO_OWNER=owner|REPO_NAME=repo|PROJECT_PATH=$PROJECT_DIR|LENS_LABEL=greenfield:greenfield/backlog-planning|DOMAIN_COLOR=44aa99|DOMAIN=greenfield|LENS_ID=backlog-planning|MODE=greenfield|RUN_ID=test-greenfield|FORGE_REPO_SLUG=owner/repo|CURRENT_BACKLOG=@$CURRENT_BACKLOG_FILE" \
+    "$SPEC_FILE" \
+    "greenfield" \
+    "3" \
+    "$SOURCE_FILE" \
+    "false" \
     "true" \
     "$TMPDIR/rendered-issues")"
 
@@ -526,7 +548,7 @@ if [[ -f "$GREENFIELD_BASE" && -f "$GREENFIELD_LENS" ]]; then
   assert_contains "rendered prompt says issue creation is not completion" "Creating one backlog issue is not completion" "$rendered"
   assert_contains "rendered prompt reserves DONE for sufficient backlog coverage" "DONE" "$rendered"
   assert_contains "rendered prompt includes max-issues guidance" "at most 3 issue(s)" "$rendered"
-  assert_contains "rendered prompt includes local output path" "Write all findings to: \`$TMPDIR/rendered-issues\`" "$rendered"
+  assert_contains "local rendered prompt includes local output path" "\`$TMPDIR/rendered-issues\`" "$local_rendered"
   assert_contains "rendered prompt includes current backlog section" "## Current Backlog Snapshot" "$rendered"
   assert_contains "rendered prompt includes supplied backlog item" "[P0] Boundary Probe" "$rendered"
   assert_contains "current backlog placeholder text remains literal" "{{SPEC_SECTION}}" "$rendered"
@@ -540,7 +562,6 @@ if [[ -f "$GREENFIELD_BASE" && -f "$GREENFIELD_LENS" ]]; then
     "Do not defer" \
     "AutoDev" \
     "without additional product interpretation" \
-    "Chosen Behavior" \
     "acceptance semantics" \
     "error states" \
     "empty states" \
@@ -549,6 +570,7 @@ if [[ -f "$GREENFIELD_BASE" && -f "$GREENFIELD_LENS" ]]; then
     "accessibility" \
     "security" \
     "security-relevant states" \
+    "responsive behavior" \
     "architecture" \
     "implementation-ordering decisions" \
     "technical prerequisites only" \
@@ -561,6 +583,66 @@ if [[ -f "$GREENFIELD_BASE" && -f "$GREENFIELD_LENS" ]]; then
     "sequencing details"; do
     assert_contains "rendered prompt has decision-complete handoff term: $term" "$term" "$rendered"
   done
+
+  issue_body_structure="$(
+    printf '%s\n' "$rendered" \
+      | awk '
+          /^### Issue Body Structure$/ { capture = 1 }
+          capture { print }
+          capture && /^### Backlog Coverage$/ { exit }
+        '
+  )"
+  expected_issue_headings="$(cat <<'EOF'
+## Summary
+## Spec Reference
+## Planner Decisions
+## User-Visible Behavior
+## Accessibility And Responsive Behavior
+## Acceptance Criteria
+## Dependencies
+## Implementation Notes
+## Non-Goals / Out Of Scope
+EOF
+)"
+  actual_issue_headings="$(
+    printf '%s\n' "$issue_body_structure" \
+      | awk '/^- `## / { line = $0; sub(/^- `/, "", line); sub(/`.*/, "", line); print line }'
+  )"
+  assert_eq "forge issue-body structure lists required headings in exact order" "$expected_issue_headings" "$actual_issue_headings"
+  for required_heading in \
+    "## Summary" \
+    "## Spec Reference" \
+    "## Planner Decisions" \
+    "## User-Visible Behavior" \
+    "## Accessibility And Responsive Behavior" \
+    "## Acceptance Criteria" \
+    "## Dependencies" \
+    "## Implementation Notes" \
+    "## Non-Goals / Out Of Scope"; do
+    assert_contains "forge issue-body structure requires greenfield issue heading: $required_heading" "$required_heading" "$issue_body_structure"
+  done
+  assert_contains "forge issue-body structure requires exact Markdown issue headings" "exact Markdown headings" "$issue_body_structure"
+  assert_contains "forge issue-body structure requires outcome-focused summary" "implementation outcome" "$issue_body_structure"
+  assert_contains "forge issue-body structure requires optional sections to be explicit" "Not applicable" "$issue_body_structure"
+
+  local_override_section="$(
+    printf '%s\n' "$local_rendered" \
+      | awk '
+          /^## LOCAL MODE OVERRIDE$/ { capture = 1 }
+          capture { print }
+          capture && /^## Termination$/ { exit }
+        '
+  )"
+  assert_contains "greenfield local mode writes backlog items, not generic findings" "backlog item" "$local_override_section"
+  assert_contains "greenfield local mode uses priority title frontmatter" 'title: "[P0|P1|P2|P3] Backlog item title"' "$local_override_section"
+  assert_contains "greenfield local mode uses priority frontmatter" "priority: P0|P1|P2|P3" "$local_override_section"
+  assert_contains "greenfield local mode carries planner decisions heading" "## Planner Decisions" "$local_override_section"
+  assert_contains "greenfield local mode carries user-visible behavior heading" "## User-Visible Behavior" "$local_override_section"
+  assert_contains "greenfield local mode carries accessibility and responsive heading" "## Accessibility And Responsive Behavior" "$local_override_section"
+  assert_contains "greenfield local mode carries non-goals heading" "## Non-Goals / Out Of Scope" "$local_override_section"
+  assert_not_contains "greenfield local mode does not use severity frontmatter" "severity: critical|high|medium|low" "$local_override_section"
+  assert_not_contains "greenfield local mode does not use generic finding title template" 'title: "[SEVERITY] Finding title"' "$local_override_section"
+
   for forbidden_example in \
     "decide how this should behave" \
     "determine the UX later" \
@@ -583,6 +665,41 @@ if [[ -f "$GREENFIELD_BASE" && -f "$GREENFIELD_LENS" ]]; then
 else
   TOTAL=$((TOTAL + 1))
   fail_with "full greenfield prompt can be rendered" "Missing $GREENFIELD_BASE or $GREENFIELD_LENS"
+fi
+
+echo ""
+echo "Test 5b: local-mode rendering keeps generic finding output outside greenfield"
+if [[ -f "$AUDIT_BASE" && -f "$AUDIT_LENS" ]]; then
+  audit_rendered="$(compose_prompt \
+    "$AUDIT_BASE" \
+    "$AUDIT_LENS" \
+    "LENS_NAME=Injection|DOMAIN_NAME=Security|REPO_OWNER=owner|REPO_NAME=repo|PROJECT_PATH=$PROJECT_DIR|LENS_LABEL=audit:security/injection|DOMAIN_COLOR=dd1133|DOMAIN=security|LENS_ID=injection|MODE=audit|RUN_ID=test-audit-local" \
+    "" \
+    "audit" \
+    "" \
+    "" \
+    "false" \
+    "true" \
+    "$TMPDIR/audit-rendered-issues")"
+
+  audit_local_override="$(
+    printf '%s\n' "$audit_rendered" \
+      | awk '
+          /^## LOCAL MODE OVERRIDE$/ { capture = 1 }
+          capture { print }
+          capture && /^## Termination$/ { exit }
+        '
+  )"
+  assert_contains "audit local mode keeps findings output wording" "Write all findings to: \`$TMPDIR/audit-rendered-issues\`" "$audit_local_override"
+  assert_contains "audit local mode keeps generic finding body wording" "write each finding as a standalone markdown file" "$audit_local_override"
+  assert_contains "audit local mode keeps severity title frontmatter" 'title: "[SEVERITY] Finding title"' "$audit_local_override"
+  assert_contains "audit local mode keeps severity frontmatter" "severity: critical|high|medium|low" "$audit_local_override"
+  assert_not_contains "audit local mode does not use greenfield backlog wording" "Write all greenfield backlog items" "$audit_local_override"
+  assert_not_contains "audit local mode does not use priority frontmatter" "priority: P0|P1|P2|P3" "$audit_local_override"
+  assert_not_contains "audit local mode does not include planner decisions heading" "## Planner Decisions" "$audit_local_override"
+else
+  TOTAL=$((TOTAL + 1))
+  fail_with "audit local prompt can be rendered" "Missing $AUDIT_BASE or $AUDIT_LENS"
 fi
 
 echo ""
@@ -683,6 +800,10 @@ if [[ -n "$captured_prompt" && -f "$captured_prompt" ]]; then
   prompt_text="$(cat "$captured_prompt")"
   assert_contains "captured prompt includes greenfield label" "greenfield:greenfield/backlog-planning" "$prompt_text"
   assert_contains "captured prompt includes spec content" "Users can sign in with passkeys" "$prompt_text"
+  assert_contains "captured prompt uses greenfield local backlog output wording" "Write all greenfield backlog items to:" "$prompt_text"
+  assert_contains "captured prompt uses priority local frontmatter" "priority: P0|P1|P2|P3" "$prompt_text"
+  assert_not_contains "captured prompt does not use generic finding output wording" "Write all findings to:" "$prompt_text"
+  assert_not_contains "captured prompt does not use severity local frontmatter" "severity: critical|high|medium|low" "$prompt_text"
   assert_not_contains "captured prompt rejects stale generic DONE rule" "After you have created all real GitHub issues" "$prompt_text"
 else
   TOTAL=$((TOTAL + 1))

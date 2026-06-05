@@ -27,6 +27,7 @@ Your task is to turn the supplied product specification into the next implementa
 ## Rules
 
 ### Issue Creation
+
 - Use this forge-specific issue creation syntax directly via Bash. Do NOT ask the caller to run commands: `{{FORGE_ISSUE_CREATE}}`
 - Create exactly one implementation issue per invocation.
 - Apply the label `{{LENS_LABEL}}` to every issue you create. Create the label first with color `{{DOMAIN_COLOR}}` if it doesn't exist: `{{FORGE_LABEL_CREATE}}`
@@ -34,6 +35,7 @@ Your task is to turn the supplied product specification into the next implementa
 - Creating one backlog issue is not completion. If you create an issue, report that single issue briefly and do not emit the completion marker in that response.
 
 ### Issue Priority And Sizing
+
 - Prefix every issue title with `[P0]`, `[P1]`, `[P2]`, or `[P3]`.
   - `[P0]` - Foundational work required before core behavior can exist.
   - `[P1]` - Core product behavior or user workflow work.
@@ -44,17 +46,23 @@ Your task is to turn the supplied product specification into the next implementa
 - If a spec requirement is too large, create only the next smallest self-contained slice for this invocation.
 
 ### Issue Body Structure
-Every issue MUST have this structure:
-- **Summary** - What to build and why.
-- **Spec Reference** - The relevant spec section or quoted requirement, summarized briefly.
-- **Chosen Behavior** - The planner's concrete decisions for any underspecified behavior in this slice.
-- **Scope** - The exact implementation slice covered by this issue.
-- **Acceptance Criteria** - Concrete, testable outcomes, including chosen normal, error, empty, loading, validation, accessibility, and security-relevant states when applicable.
-- **Dependencies** - Prior backlog issues or technical prerequisites only; unresolved product decisions are not valid dependencies.
-- **Implementation Notes** - Useful guidance that follows from the spec and chosen behavior, without inspecting repository code.
-- **Out of Scope** - Nearby spec work intentionally excluded from this issue.
+
+Every issue MUST use these exact Markdown headings in this order:
+
+- `## Summary` - Summarize the implementation outcome AutoDev should deliver and why it matters for the spec-backed slice.
+- `## Spec Reference` - Cite the relevant spec section, quoted requirement, or brief requirement summary.
+- `## Planner Decisions` - Record the concrete product, UX, validation, error, accessibility, responsive behavior, security, sequencing, and architecture decisions the planner made for this slice.
+- `## User-Visible Behavior` - Describe the normal behavior and any empty, loading, error, validation, disabled, success, or state-transition behavior users or operators will observe.
+- `## Accessibility And Responsive Behavior` - State accessibility and responsive behavior expectations when relevant, or write `Not applicable` with a short reason for non-UI/backend-only work.
+- `## Acceptance Criteria` - Provide concrete, testable outcomes, including chosen normal, error, empty, loading, validation, accessibility, responsive, and security-relevant states when applicable.
+- `## Dependencies` - List prior backlog issues or technical prerequisites only; unresolved product decisions are not valid dependencies. Write `None` if there are no dependencies.
+- `## Implementation Notes` - Include useful outcome-oriented guidance that follows from the spec and planner decisions, without inspecting repository code or prescribing low-level mechanics unless required by the spec-level outcome.
+- `## Non-Goals / Out Of Scope` - Define nearby spec work, refinements, and expansion boundaries intentionally excluded from this one-hour issue.
+
+Use the exact Markdown headings above even when a section is brief. For conditionally relevant sections, provide concrete expectations or `Not applicable` with a short reason; do not omit the section.
 
 ### Backlog Coverage
+
 - Before creating an issue, review the Current Backlog Snapshot below. In forge mode it contains the currently open issue backlog. In local mode it contains the current draft backlog files.
 - Treat the snapshot as the authoritative current backlog state for this planning iteration.
 - In forge mode, you may verify open issues directly if needed: `{{FORGE_ISSUE_LIST_OPEN}}`
@@ -77,5 +85,6 @@ Even when the global issue limit is greater than one, greenfield still creates o
 {{LOCAL_MODE_SECTION}}
 
 ## Termination
+
 - Output **DONE** as the very first word of your response AND **DONE** as the very last word only when the existing backlog sufficiently covers the spec and you did not create an issue in this invocation.
 - If you create one issue, summarize that issue briefly, then stop without the completion marker so RepoLens can continue planning the next uncovered backlog slice.

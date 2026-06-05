@@ -410,7 +410,69 @@ This limit overrides the instruction to find all issues. Prioritize your finding
   # Step 5b: Build and insert local mode section
   local local_mode_section=""
   if [[ "$local_mode" == "true" && -n "$local_output_dir" ]]; then
-    local_mode_section="## LOCAL MODE OVERRIDE
+    if [[ "$mode" == "greenfield" ]]; then
+      local_mode_section="## LOCAL MODE OVERRIDE
+
+**IMPORTANT: This overrides the Issue Creation rules above.**
+
+You are running in LOCAL MODE. Do **NOT** use \`gh issue create\` or \`gh label create\` commands. Instead, write each greenfield backlog item as a standalone markdown file.
+
+### Output Directory
+Write all greenfield backlog items to: \`${local_output_dir}\`
+
+### File Naming Convention
+Name files as: \`NNN-<slug>.md\` where NNN is a zero-padded sequence number (001, 002, ...) and \`<slug>\` is a lowercase, hyphenated slug derived from the backlog item title.
+
+### File Format
+Each markdown file must contain YAML frontmatter followed by the AutoDev-ready backlog item body:
+\`\`\`markdown
+---
+title: \"[P0|P1|P2|P3] Backlog item title\"
+priority: P0|P1|P2|P3
+domain: <domain>
+lens: <lens-id>
+labels:
+  - \"<lens-label>\"
+---
+
+## Summary
+Summary of the implementation outcome and why it matters.
+
+## Spec Reference
+Relevant spec section, quoted requirement, or brief requirement summary.
+
+## Planner Decisions
+Concrete decisions made by the greenfield planner.
+
+## User-Visible Behavior
+Normal, empty, loading, error, validation, and state-transition behavior when relevant.
+
+## Accessibility And Responsive Behavior
+Concrete expectations, or Not applicable with a short reason.
+
+## Acceptance Criteria
+- Testable completion outcome.
+
+## Dependencies
+Prior backlog issues or technical prerequisites only, or None.
+
+## Implementation Notes
+Outcome-oriented guidance from the spec and planner decisions.
+
+## Non-Goals / Out Of Scope
+Nearby spec work intentionally excluded from this one-hour backlog item.
+\`\`\`
+
+### Deduplication
+Before writing a new backlog item, check if a file with a similar title already exists in the output directory. If so, skip the duplicate.
+
+### Key Rules
+- Do **NOT** use \`gh issue create\` — write markdown files instead
+- Do **NOT** use \`gh label create\` — no GitHub labels needed
+- Do **NOT** use \`gh issue list\` — check existing files in the output directory instead
+- Create the output subdirectory with \`mkdir -p\` before writing files"
+    else
+      local_mode_section="## LOCAL MODE OVERRIDE
 
 **IMPORTANT: This overrides the Issue Creation rules above.**
 
@@ -458,6 +520,7 @@ Before writing a new finding, check if a file with a similar title already exist
 - Do **NOT** use \`gh label create\` — no GitHub labels needed
 - Do **NOT** use \`gh issue list\` — check existing files in the output directory instead
 - Create the output subdirectory with \`mkdir -p\` before writing files"
+    fi
   fi
 
   prompt="${prompt//\{\{LOCAL_MODE_SECTION\}\}/$local_mode_section}"
