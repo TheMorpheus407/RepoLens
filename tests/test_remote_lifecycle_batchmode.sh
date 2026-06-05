@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Behavioral tests for issue #271: every RepoLens-owned remote SSH lifecycle
+# Behavioral tests for issues #271 and #272: every RepoLens-owned remote SSH lifecycle
 # operation must stay non-interactive and must carry the shared parsed SSH
 # options across preflight, ControlMaster open/check, reconnect, and close.
 
@@ -154,6 +154,11 @@ class_lines() {
   grep -F $'SSH_CALL\t'"$class"$'\t' "$transcript" 2>/dev/null || true
 }
 
+batchmode_violation_count() {
+  local violations="$1" class="$2"
+  grep -F -c $'missing-batchmode\t'"$class"$'\t' "$violations" 2>/dev/null || true
+}
+
 assert_class_count_at_least() {
   local desc="$1" transcript="$2" class="$3" minimum="$4"
   local count
@@ -223,6 +228,7 @@ set -uo pipefail
 transcript="${FAKE_SSH_TRANSCRIPT:-}"
 state_dir="${FAKE_SSH_STATE_DIR:-}"
 scenario="${FAKE_SSH_SCENARIO:-normal}"
+batchmode_violations="${FAKE_SSH_BATCHMODE_VIOLATIONS:-}"
 mkdir -p "$state_dir"
 
 class="unknown"
@@ -235,6 +241,7 @@ has_f=0
 has_N=0
 has_preflight=0
 has_control_master_auto=0
+has_batchmode=0
 prev=""
 
 for arg in "$@"; do
@@ -244,11 +251,13 @@ for arg in "$@"; do
     socket_path="$arg"
   elif [[ "$prev" == "-o" ]]; then
     case "$arg" in
+      BatchMode=yes) has_batchmode=1 ;;
       ControlMaster=auto) has_control_master_auto=1 ;;
       ControlPath=*) control_path="${arg#ControlPath=}" ;;
     esac
   fi
   case "$arg" in
+    -oBatchMode=yes) has_batchmode=1 ;;
     -M) has_master=1 ;;
     -fN) has_fN=1 ;;
     -f) has_f=1 ;;
@@ -291,6 +300,22 @@ if [[ -n "$transcript" ]]; then
     printf '\n'
   } >> "$transcript"
 fi
+
+case "$class" in
+  preflight|open|check|close)
+    if [[ "$has_batchmode" -ne 1 ]]; then
+      if [[ -n "$batchmode_violations" ]]; then
+        {
+          printf 'missing-batchmode\t%s\tcall=%s' "$class" "$call_count"
+          [[ -n "$check_index" ]] && printf '\tcheck=%s' "$check_index"
+          printf '\n'
+        } >> "$batchmode_violations"
+      fi
+      printf '%s\n' "fake ssh: $class missing -o BatchMode=yes" >&2
+      exit 64
+    fi
+    ;;
+esac
 
 if [[ "$class" == "preflight" && "$has_control_master_auto" -eq 1 && -n "$control_path" ]]; then
   mkdir -p "$(dirname "$control_path")"
@@ -370,7 +395,7 @@ run_repolens_remote() {
 }
 
 echo ""
-echo "=== Test Suite: remote SSH lifecycle BatchMode (issue #271) ==="
+echo "=== Test Suite: remote SSH lifecycle BatchMode (issues #271/#272) ==="
 echo ""
 
 FAKE_BIN="$TMPDIR/bin"
@@ -385,6 +410,130 @@ printf '%s\n' "fake private key" > "$REMOTE_KEY"
 
 DEPLOYMENT_LENS_COUNT="$(jq -r '.domains[] | select(.id=="deployment") | .lenses[]' "$SCRIPT_DIR/config/domains.json" | wc -l | tr -d ' ')"
 
+run_fake_ssh_missing_batchmode() {
+  local desc="$1" output_file="$2"
+  shift 2
+
+  PATH="$FAKE_BIN:$PATH" \
+  FAKE_SSH_TRANSCRIPT="$MISSING_BATCHMODE_TRANSCRIPT" \
+  FAKE_SSH_STATE_DIR="$MISSING_BATCHMODE_STATE" \
+  FAKE_SSH_SCENARIO="normal" \
+  FAKE_SSH_BATCHMODE_VIOLATIONS="$MISSING_BATCHMODE_VIOLATIONS" \
+    ssh "$@" > "$output_file" 2>&1
+  local rc=$?
+
+  assert_nonzero "$desc" "$rc"
+}
+
+echo "Test 0: fake ssh rejects every lifecycle class that omits BatchMode"
+MISSING_BATCHMODE_TRANSCRIPT="$TMPDIR/missing-batchmode.transcript"
+MISSING_BATCHMODE_VIOLATIONS="$TMPDIR/missing-batchmode.violations"
+MISSING_BATCHMODE_STATE="$TMPDIR/fake-ssh-state-missing-batchmode"
+MISSING_BATCHMODE_CONTROL_DIR="$TMPDIR/missing-batchmode-control"
+MISSING_BATCHMODE_SOCKET="$MISSING_BATCHMODE_CONTROL_DIR/cm.sock"
+: > "$MISSING_BATCHMODE_TRANSCRIPT"
+: > "$MISSING_BATCHMODE_VIOLATIONS"
+rm -rf "$MISSING_BATCHMODE_STATE" "$MISSING_BATCHMODE_CONTROL_DIR"
+mkdir -p "$MISSING_BATCHMODE_STATE" "$MISSING_BATCHMODE_CONTROL_DIR"
+
+run_fake_ssh_missing_batchmode "Preflight without BatchMode is rejected by fake ssh" \
+  "$TMPDIR/missing-batchmode-preflight.out" \
+  -i "$REMOTE_KEY" \
+  -p 2222 \
+  -o ConnectTimeout=10 \
+  -o ControlMaster=no \
+  deploy@remote.example \
+  'hostname && uname -a'
+
+run_fake_ssh_missing_batchmode "ControlMaster open without BatchMode is rejected by fake ssh" \
+  "$TMPDIR/missing-batchmode-open.out" \
+  -i "$REMOTE_KEY" \
+  -p 2222 \
+  -fN \
+  -M \
+  -S "$MISSING_BATCHMODE_SOCKET" \
+  -o ControlPersist=600 \
+  -o ServerAliveInterval=30 \
+  deploy@remote.example
+
+run_fake_ssh_missing_batchmode "Post-open ControlMaster check without BatchMode is rejected by fake ssh" \
+  "$TMPDIR/missing-batchmode-post-open-check.out" \
+  -i "$REMOTE_KEY" \
+  -p 2222 \
+  -O check \
+  -S "$MISSING_BATCHMODE_SOCKET" \
+  deploy@remote.example
+
+run_fake_ssh_missing_batchmode "Inter-lens ControlMaster check without BatchMode is rejected by fake ssh" \
+  "$TMPDIR/missing-batchmode-inter-lens-check.out" \
+  -i "$REMOTE_KEY" \
+  -p 2222 \
+  -O check \
+  -S "$MISSING_BATCHMODE_SOCKET" \
+  deploy@remote.example
+
+run_fake_ssh_missing_batchmode "ControlMaster close without BatchMode is rejected by fake ssh" \
+  "$TMPDIR/missing-batchmode-close.out" \
+  -i "$REMOTE_KEY" \
+  -p 2222 \
+  -O exit \
+  -S "$MISSING_BATCHMODE_SOCKET" \
+  deploy@remote.example
+
+assert_eq "Preflight missing-BatchMode violation is recorded independently" \
+  "1" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "preflight")"
+assert_eq "ControlMaster open missing-BatchMode violation is recorded independently" \
+  "1" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "open")"
+assert_eq "Both post-open and inter-lens check missing-BatchMode violations are recorded" \
+  "2" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "check")"
+assert_eq "ControlMaster close missing-BatchMode violation is recorded independently" \
+  "1" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "close")"
+assert_eq "Rejected preflight call is transcribed before BatchMode rejection" \
+  "1" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "preflight")"
+assert_eq "Rejected ControlMaster open call is transcribed before BatchMode rejection" \
+  "1" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "open")"
+assert_eq "Both rejected ControlMaster check calls are transcribed before BatchMode rejection" \
+  "2" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "check")"
+assert_eq "Rejected ControlMaster close call is transcribed before BatchMode rejection" \
+  "1" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "close")"
+
+echo ""
+echo "Test 0b: fake ssh accepts ControlMaster close when BatchMode is present"
+VALID_CLOSE_TRANSCRIPT="$TMPDIR/valid-close-batchmode.transcript"
+VALID_CLOSE_VIOLATIONS="$TMPDIR/valid-close-batchmode.violations"
+VALID_CLOSE_STATE="$TMPDIR/fake-ssh-state-valid-close"
+VALID_CLOSE_CONTROL_DIR="$TMPDIR/valid-close-control"
+VALID_CLOSE_SOCKET="$VALID_CLOSE_CONTROL_DIR/cm.sock"
+VALID_CLOSE_OUTPUT="$TMPDIR/valid-close-batchmode.out"
+: > "$VALID_CLOSE_TRANSCRIPT"
+: > "$VALID_CLOSE_VIOLATIONS"
+rm -rf "$VALID_CLOSE_STATE" "$VALID_CLOSE_CONTROL_DIR"
+mkdir -p "$VALID_CLOSE_STATE" "$VALID_CLOSE_CONTROL_DIR"
+
+PATH="$FAKE_BIN:$PATH" \
+FAKE_SSH_TRANSCRIPT="$VALID_CLOSE_TRANSCRIPT" \
+FAKE_SSH_STATE_DIR="$VALID_CLOSE_STATE" \
+FAKE_SSH_SCENARIO="normal" \
+FAKE_SSH_BATCHMODE_VIOLATIONS="$VALID_CLOSE_VIOLATIONS" \
+  ssh \
+    -o BatchMode=yes \
+    -i "$REMOTE_KEY" \
+    -p 2222 \
+    -O exit \
+    -S "$VALID_CLOSE_SOCKET" \
+    deploy@remote.example \
+    > "$VALID_CLOSE_OUTPUT" 2>&1
+valid_close_rc=$?
+
+assert_eq "ControlMaster close with BatchMode is accepted by fake ssh" "0" "$valid_close_rc"
+assert_eq "Accepted ControlMaster close records no missing-BatchMode violation" \
+  "0" "$(batchmode_violation_count "$VALID_CLOSE_VIOLATIONS" "close")"
+assert_eq "Accepted ControlMaster close is classified once" \
+  "1" "$(ssh_class_count "$VALID_CLOSE_TRANSCRIPT" "close")"
+assert_all_class_lines_contain "Accepted ControlMaster close keeps BatchMode=yes" \
+  "$VALID_CLOSE_TRANSCRIPT" "close" $'\t-o\tBatchMode=yes\t'
+
+echo ""
 echo "Test 1: lifecycle SSH argv keeps BatchMode, parsed target, key, and cleanup semantics"
 LOG1="$TMPDIR/lifecycle.log"
 TRANSCRIPT1="$TMPDIR/lifecycle.transcript"
@@ -538,15 +687,22 @@ set +e
   export FAKE_SSH_TRANSCRIPT="$TRANSCRIPT4"
   export FAKE_SSH_STATE_DIR="$TMPDIR/fake-ssh-state-close"
   export FAKE_SSH_SCENARIO="normal"
+  # shellcheck disable=SC2034 # Read by sourced lib/remote.sh.
   REMOTE_TARGET="deploy@remote.example:2222"
+  # shellcheck disable=SC2034 # Read by sourced lib/remote.sh.
   REMOTE_USER="deploy"
+  # shellcheck disable=SC2034 # Read by sourced lib/remote.sh.
   REMOTE_HOST="remote.example"
+  # shellcheck disable=SC2034 # Read by sourced lib/remote.sh.
   REMOTE_PORT="2222"
+  # shellcheck disable=SC2034 # Read by sourced lib/remote.sh.
   REPOLENS_REMOTE_SSH_SOCKET="$CLOSE_SOCKET"
   REPOLENS_REMOTE_SSH_CONTROL_DIR="$CLOSE_CONTROL_DIR"
   REPOLENS_REMOTE_MASTER_ACTIVE=1
   REPOLENS_REMOTE_MASTER_CLOSED=0
+  # shellcheck disable=SC1091 # Runtime path is built from SCRIPT_DIR in this fixture.
   source "$SCRIPT_DIR/lib/remote.sh"
+  # shellcheck disable=SC2329 # Invoked indirectly by remote_close_master.
   _cleanup_remote_control_socket() {
     rm -rf -- "$REPOLENS_REMOTE_SSH_CONTROL_DIR"
   }
