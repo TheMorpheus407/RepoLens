@@ -16,6 +16,7 @@
 # RepoLens — JSON summary generation
 
 _SUMMARY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
 # shellcheck source=lib/locking.sh
 source "$_SUMMARY_LIB_DIR/locking.sh"
 
@@ -189,11 +190,16 @@ _set_summary_health_locked() {
 }
 
 # set_stop_reason <summary_file> <reason>
-#   Sets the stopped_reason field in summary.json
+#   Sets the stopped_reason field in summary.json. Stop reasons are persisted
+#   from abort/shutdown paths, so lock contention uses a short local timeout:
+#   if the summary lock cannot be opened or acquired, this returns nonzero and
+#   leaves summary.json unchanged.
 set_stop_reason() {
   local file="$1" reason="${2:-}"
+  local lock_timeout="${REPOLENS_SUMMARY_STOP_REASON_LOCK_TIMEOUT:-1}"
   [[ -n "$reason" ]] || return 0
-  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+  [[ "$lock_timeout" =~ ^[0-9]+$ ]] || lock_timeout=1
+  with_file_lock "${file}.lock" "$lock_timeout" \
     _set_stop_reason_locked "$file" "$reason"
 }
 
