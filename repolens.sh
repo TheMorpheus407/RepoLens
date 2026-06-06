@@ -50,6 +50,8 @@ source "$SCRIPT_DIR/lib/parallel.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/rounds.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/polish.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/verify.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/triage.sh"
@@ -1793,6 +1795,8 @@ fi
 # via the {{TRIAGE_CONTEXT_PACK}} slot. When the file is absent (other modes,
 # --no-triage, or triage failure) the slot resolves to empty in lens prompts.
 TRIAGE_CONTEXT_PACK_FILE="$LOG_BASE/triage/context-pack.md"
+POLISH_VOICE_PROFILE_FILE="$LOG_BASE/polish/voice-profile.md"
+export POLISH_VOICE_PROFILE_FILE
 DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
 COLORS_FILE="$SCRIPT_DIR/config/label-colors.json"
 BASE_PROMPTS_DIR="$SCRIPT_DIR/prompts/_base"
@@ -2897,6 +2901,13 @@ run_lens() {
   if [[ -n "${HYPOTHESES_TO_VERIFY_FILE:-}" ]]; then
     vars+="|HYPOTHESES_TO_VERIFY=@${HYPOTHESES_TO_VERIFY_FILE}"
   fi
+  if [[ "$MODE" == "polish" ]]; then
+    if [[ -f "${POLISH_VOICE_PROFILE_FILE:-}" ]]; then
+      vars+="|VOICE_PROFILE=@${POLISH_VOICE_PROFILE_FILE}"
+    else
+      vars+="|VOICE_PROFILE=No polish voice profile was generated; use direct repository evidence only."
+    fi
+  fi
   [[ -n "$CHANGE_STATEMENT" ]] && vars+="|CHANGE_STATEMENT=${CHANGE_STATEMENT}"
   if [[ "$MODE" == "bugreport" && -f "$BUG_REPORT_FILE" ]]; then
     vars+="|BUG_REPORT=@${BUG_REPORT_FILE}"
@@ -3317,6 +3328,18 @@ if [[ "$MODE" == "bugreport" && -z "$FOCUS" && -z "$DOMAIN_FILTER" \
     fi
   fi
   unset _RELEVANT_DOMAINS_KEEP _PRUNED_LENS_LIST _lens_entry _lens_entry_domain _relevant_domain_id _ORIGINAL_LENS_COUNT
+fi
+
+# --- Polish voice profile (pre-round, shared by every polish lens) ---
+if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "polish" ]] && (( TOTAL_LENSES > 0 )); then
+  if run_polish_voice_profile_prepass "$RUN_ID"; then
+    log_info "Polish voice profile: ready ($POLISH_VOICE_PROFILE_FILE)"
+  elif [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+    log_warn "Polish voice profile: rate-limited - aborting before lens rounds"
+    RUN_ROUNDS_RC=1
+  else
+    die "Polish voice profile pre-pass failed"
+  fi
 fi
 
 # --- Execute lenses ---

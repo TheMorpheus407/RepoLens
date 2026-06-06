@@ -142,7 +142,7 @@ _template_resolve_file_backed_value() {
   local key="$1" value="$2" path
 
   case "$key" in
-    PRIOR_ROUND_DIGEST|HYPOTHESES_TO_VERIFY|BUG_REPORT|TRIAGE_CONTEXT_PACK|PRIOR_FINDING_ANCHOR|CURRENT_BACKLOG) ;;
+    PRIOR_ROUND_DIGEST|HYPOTHESES_TO_VERIFY|BUG_REPORT|TRIAGE_CONTEXT_PACK|PRIOR_FINDING_ANCHOR|CURRENT_BACKLOG|VOICE_PROFILE) ;;
     *)
       printf '%s' "$value"
       return 0
@@ -179,7 +179,7 @@ _template_resolve_file_backed_value() {
 #  13. Substitutes held untrusted markdown after all {{*_SECTION}} replacements
 #   Variables string format: "KEY1=VALUE1|KEY2=VALUE2|..."
 #   Large round context values may be passed as KEY=@/path/to/file for
-#   PRIOR_ROUND_DIGEST and HYPOTHESES_TO_VERIFY so markdown pipes and
+#   PRIOR_ROUND_DIGEST, HYPOTHESES_TO_VERIFY, and VOICE_PROFILE so markdown pipes and
 #   multi-line lists are never split by the pipe-delimited transport.
 compose_prompt() {
   local base_file="$1" lens_file="$2" vars_string="$3"
@@ -189,6 +189,7 @@ compose_prompt() {
   local base_content lens_body spec_section prompt key value sentinel_seed
   local pair char next i vars_len
   local prior_round_digest_sentinel hypotheses_to_verify_sentinel round_context_sentinel triage_context_pack_sentinel
+  local voice_profile_sentinel
   local current_backlog_section_sentinel
   local -a pairs=()
   local -A prompt_vars=()
@@ -200,6 +201,7 @@ compose_prompt() {
   hypotheses_to_verify_sentinel="__REPOLENS_HYPOTHESES_TO_VERIFY_${sentinel_seed}__"
   round_context_sentinel="__REPOLENS_ROUND_CONTEXT_SECTION_${sentinel_seed}__"
   triage_context_pack_sentinel="__REPOLENS_TRIAGE_CONTEXT_PACK_${sentinel_seed}__"
+  voice_profile_sentinel="__REPOLENS_VOICE_PROFILE_${sentinel_seed}__"
   current_backlog_section_sentinel="__REPOLENS_CURRENT_BACKLOG_SECTION_${sentinel_seed}__"
 
   # Step 1: Insert lens body
@@ -255,6 +257,9 @@ compose_prompt() {
         ;;
       TRIAGE_CONTEXT_PACK)
         prompt="${prompt//\{\{$key\}\}/$triage_context_pack_sentinel}"
+        ;;
+      VOICE_PROFILE)
+        prompt="${prompt//\{\{$key\}\}/$voice_profile_sentinel}"
         ;;
       *)
         prompt="${prompt//\{\{$key\}\}/$value}"
@@ -681,10 +686,12 @@ ${spec_content}
   # Clear any unsubstituted {{TRIAGE_CONTEXT_PACK}} placeholder so non-bugreport
   # templates (which never receive the pack) do not leak the raw token through.
   prompt="${prompt//\{\{TRIAGE_CONTEXT_PACK\}\}/$triage_context_pack_sentinel}"
+  prompt="${prompt//\{\{VOICE_PROFILE\}\}/$voice_profile_sentinel}"
   prompt="${prompt//$round_context_sentinel/$round_context_section}"
   prompt="${prompt//$prior_round_digest_sentinel/${prompt_vars[PRIOR_ROUND_DIGEST]:-}}"
   prompt="${prompt//$hypotheses_to_verify_sentinel/${prompt_vars[HYPOTHESES_TO_VERIFY]:-}}"
   prompt="${prompt//$triage_context_pack_sentinel/${prompt_vars[TRIAGE_CONTEXT_PACK]:-}}"
+  prompt="${prompt//$voice_profile_sentinel/${prompt_vars[VOICE_PROFILE]:-}}"
   prompt="${prompt//$current_backlog_section_sentinel/$current_backlog_section}"
 
   printf "%s" "$prompt"
