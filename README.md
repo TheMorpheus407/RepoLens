@@ -285,9 +285,32 @@ RepoLens supports 10 modes. Each mode controls which domains/lenses are visible 
 
 ## Greenfield planning
 
-Greenfield mode plans backlog from `--spec` rather than repository code. Before every planning iteration, RepoLens refreshes the current backlog snapshot: forge runs read all currently open issues, and `--local` runs read the existing draft markdown files under the greenfield output directory. The planner uses that snapshot to skip spec slices that are already covered and emits `DONE` when there is no non-duplicate implementation issue left to file.
+Use `greenfield` before implementation starts, when you have a product spec, PRD, roadmap, or launch brief and need an implementation backlog. Use `feature` when you want RepoLens to inspect existing code for missing capabilities, `audit` when you want defects, security issues, and quality risks in existing code, and `bugreport` when you are starting from a symptom or user-reported failure.
 
-With `--local`, seed `<output-dir>/greenfield/backlog-planning/*.md` before a run if you want drafts created elsewhere to count as existing backlog. In forge mode, if RepoLens cannot load the current open issue backlog, it tells the planner not to create a new issue while duplicate checks are unavailable.
+Greenfield is a planning mode, not an implementation mode. The product owner puts all human product intent in the `--spec` file. RepoLens reads that spec and the current backlog snapshot; it does not inspect repository code, dependencies, configuration, tests, docs, or implementation details to discover work. The greenfield planner turns the spec into implementation-sized `[P0]`-`[P3]` backlog items and resolves remaining non-human product and implementation decisions into the issue details so AutoDev receives decision-complete work.
+
+Run RepoLens greenfield to completion first, then run AutoDev on the created issues or local drafts. Do not run AutoDev concurrently against the same backlog while greenfield planning is still running, because each RepoLens planning iteration deduplicates against the current backlog snapshot.
+
+Forge-backed run:
+
+```bash
+./repolens.sh --project ~/my-app --agent claude --mode greenfield \
+  --spec ~/docs/product-spec.md --max-issues 3
+```
+
+Local draft run:
+
+```bash
+./repolens.sh --project ~/my-app --agent claude --mode greenfield \
+  --spec ~/docs/product-spec.md --local --output ~/reports/my-app-backlog \
+  --max-issues 3
+```
+
+`--local` changes the output sink, not the planning agent. In forge mode, RepoLens creates issues on the detected or selected forge and deduplicates against currently open issues. In `--local` mode, RepoLens writes markdown backlog drafts under `<output-dir>/greenfield/backlog-planning/` and deduplicates against existing drafts there. The greenfield prompt and backlog-planning lens are otherwise the same.
+
+Use `--max-issues` for controlled planning batches. `--max-issues 1` is useful for a first smoke-test issue; small batches such as `--max-issues 3` or `--max-issues 5` let you review, edit, or prioritize the generated backlog before rerunning greenfield. The next run uses the current open issues or local drafts as backlog coverage.
+
+Before every planning iteration, RepoLens refreshes the current backlog snapshot: forge runs read all currently open issues, and `--local` runs read the existing draft markdown files under the greenfield output directory. The planner uses that snapshot to skip spec slices that are already covered and emits `DONE` when there is no non-duplicate implementation issue left to file. With `--local`, seed `<output-dir>/greenfield/backlog-planning/*.md` before a run if you want drafts created elsewhere to count as existing backlog. In forge mode, if RepoLens cannot load the current open issue backlog, it tells the planner not to create a new issue while duplicate checks are unavailable.
 
 ## Remote deploy mode
 
