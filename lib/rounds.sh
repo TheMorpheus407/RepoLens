@@ -789,7 +789,7 @@ _rounds_meta_active_lens_entries() {
     fi
   done < <(
     jq -r --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
-      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
+      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
   )
 }
 
@@ -817,7 +817,7 @@ _rounds_meta_all_lens_entries() {
     fi
   done < <(
     jq -r --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
-      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
+      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
   )
 }
 
@@ -1477,7 +1477,7 @@ _round_digest_audit_domains() {
       sub(/".*$/, "", mode)
     }
     /^[[:space:]]*}[,]?[[:space:]]*$/ {
-      if (id != "" && mode != "discover" && mode != "deploy" && mode != "opensource" && mode != "content" && mode != "greenfield") {
+      if (id != "" && mode != "discover" && mode != "deploy" && mode != "opensource" && mode != "content" && mode != "greenfield" && mode != "polish") {
         print id
       }
       id = ""
