@@ -8,7 +8,7 @@
 
 RepoLens implements **Lens-Based Auditing (LBA)**, a methodology for automated code analysis that decomposes the audit problem into 336 narrow-focus specialist agents ("lenses") across 33 domains. Rather than asking a single generalist agent to review an entire codebase for every possible concern, LBA assigns each concern to a dedicated expert lens — one that examines the code through a single, specific perspective.
 
-The tool currently supports 10 modes of operation (audit, feature, bugfix, bugreport, discover, deploy, opensource, content, greenfield, custom), multiple agent backends, parallel execution, automated issue creation, and a separate ranked polish artifact workflow. This document describes the methodology behind the tool: what Lensing is, why it works, and how its components fit together.
+The tool currently supports 10 modes of operation (audit, feature, bugfix, bugreport, discover, deploy, opensource, content, greenfield, custom), multiple agent backends, parallel execution, automated issue creation, and a separate ranked polish workflow that emits polishing shortlists. This document describes the methodology behind the tool: what Lensing is, why it works, and how its components fit together.
 
 ---
 
@@ -22,7 +22,7 @@ At execution time, a template engine merges a mode-specific base template with t
 2. Deep domain-specific expertise (the lens body)
 3. Runtime context (project path, repository owner, labels)
 
-**Lens-Based Auditing (LBA)** is the methodology built on Lensing: run many lenses independently against the same codebase, each producing mode-specific output such as issues, local files, or ranked artifacts. Its key properties are:
+**Lens-Based Auditing (LBA)** is the methodology built on Lensing: run many lenses independently against the same codebase, each producing mode-specific output such as issues, local files, ranked artifacts, or polishing shortlists. Its key properties are:
 
 - **Single responsibility** — each lens examines one aspect only
 - **Deep specialization** — lens prompts encode detailed expert knowledge
@@ -78,7 +78,7 @@ RepoLens resolves these thresholds from a single per-mode default table; the val
 | Modes | Streak Required (N) | Rationale |
 |-------|---------------------|-----------|
 | audit, feature, bugfix | 3 | Multi-pass exhaustive search — the agent must confirm "nothing left to find" 3 consecutive times |
-| discover, deploy, custom, opensource, content, greenfield | 1 | Single-pass modes — one comprehensive sweep is sufficient |
+| discover, deploy, custom, opensource, content, greenfield, polish | 1 | Single-pass modes — one comprehensive sweep is sufficient |
 
 Runs started with `--max-issues` use an effective 1× streak so the issue budget is enforced promptly.
 
@@ -138,7 +138,7 @@ Each mode uses its own output schema (e.g., audit uses CRITICAL/HIGH/MEDIUM/LOW,
 
 Greenfield mode is intentionally spec-led rather than code-led. Its single planner lens treats the provided `--spec` file as product-owner intent. Before each planner iteration, RepoLens supplies the current backlog: all currently open forge issues in normal mode, or existing local draft markdown files in `--local` mode. The planner skips covered spec slices, creates only the next missing implementation-sized backlog item, and emits `DONE` when no non-duplicate work remains. The target project still provides the repository and issue tracker context, but greenfield planning does not derive work from current implementation details.
 
-The separate polish workflow is intentionally suggestion-led rather than defect-led. It first builds a project voice profile, then runs the fluency, effort-signal, and hedonic polish lenses once. Lenses emit structured tags such as `voice_fit`, `location_expectedness`, and `polish_family`; RepoLens combines those tags deterministically into `logs/<run-id>/polish/ranked-suggestions.json`. The final rank orders agent-surfaced polish suggestions. It does not score the repository, and the agents do not compute the rank themselves.
+The separate polish workflow is intentionally suggestion-led rather than defect-led. It first builds a project voice profile, then runs the fluency, effort-signal, and hedonic polish lenses once. Lenses emit structured tags such as `voice_fit`, `voice_fit_justification`, `location_expectedness`, and `polish_family`; RepoLens combines those tags deterministically into `logs/<run-id>/polish/ranked-suggestions.json`. The final rank orders agent-surfaced polish suggestions. It does not score the repository, and the agents do not compute the rank themselves. After ranking, RepoLens emits one polishing shortlist per lens with usable suggestions, defaulting to the top 3 ranked items and including a one-line voice-fit justification for every listed item. Forge runs create those shortlists as `[POLISH]` issues; `--local` runs write grouped markdown drafts under `logs/<run-id>/polish/filed/`.
 
 Deploy mode is unique in that it does not require a git repository. It can inspect a live server, a direct Android APK, a discovered APK, or a shallow Android source tree. Live-server deploy uses system commands (systemctl, ss, df, journalctl) in a strictly read-only fashion, with explicit legal authorization gates.
 

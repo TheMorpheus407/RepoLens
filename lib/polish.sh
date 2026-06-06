@@ -208,6 +208,253 @@ run_polish_ranking() {
   return 0
 }
 
+_polish_slugify() {
+  local value="$*"
+
+  printf '%s\n' "$value" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E \
+        -e 's/[^a-z0-9]+/-/g' \
+        -e 's/-+/-/g' \
+        -e 's/^-+//' \
+        -e 's/-+$//'
+}
+
+_polish_build_issue_groups() {
+  local ranked_file="$1" top_n="$2"
+
+  jq -c --argjson top_n "$top_n" '
+    def norm_string:
+      tostring | ascii_downcase | gsub("_"; "-") | gsub("[[:space:]]+"; "-");
+    def rank_value:
+      ((.polish_rank_x1000 // 0) | tonumber? // 0);
+
+    if type == "array" then .
+    else error("ranked polish suggestions must be a JSON array")
+    end
+    | to_entries
+    | map(
+        select(
+          ((.value.domain // "" | tostring | length) > 0)
+          and ((.value.lens_id // "" | tostring | length) > 0)
+          and ((.value.title // "" | tostring | length) > 0)
+          and ((.value.body // "" | tostring | length) > 0)
+          and ((.value.voice_fit // "" | norm_string) != "off-brand")
+          and ((.value | rank_value) > 0)
+        )
+      )
+    | group_by((.value.domain | tostring) + "\u0000" + (.value.lens_id | tostring))
+    | map(
+        (sort_by(.key)) as $entries
+        | {
+            first_index: ($entries[0].key),
+            domain: ($entries[0].value.domain | tostring),
+            lens_id: ($entries[0].value.lens_id | tostring),
+            items: ($entries[:$top_n] | map(.value))
+          }
+      )
+    | sort_by(.first_index)
+    | .[]
+  ' "$ranked_file"
+}
+
+_polish_render_issue_body() {
+  local group_json="$1" body_file="$2" run_id="$3" ranked_file="$4"
+
+  jq -r --arg run_id "$run_id" --arg ranked_file "$ranked_file" '
+    def one_line:
+      tostring
+      | gsub("[\r\n]+"; " ")
+      | gsub("[[:space:]]+"; " ")
+      | sub("^[[:space:]]+"; "")
+      | sub("[[:space:]]+$"; "");
+    def body_voice_fit:
+      (.body // "" | tostring | split("Voice Profile Fit")) as $parts
+      | if ($parts | length) > 1 then
+          ($parts[1]
+            | split("\n")
+            | map(one_line)
+            | map(select(length > 0 and (startswith("#") | not)))
+            | .[0] // "")
+        else ""
+        end;
+    def voice_justification:
+      (.voice_fit_justification // "" | one_line) as $explicit
+      | if $explicit != "" then $explicit
+        else (body_voice_fit) as $body_fit
+        | if $body_fit != "" then $body_fit
+          else "Voice fit tag: \((.voice_fit // "unspecified") | one_line)."
+          end
+        end;
+    def suggested_refinement:
+      (.body // "" | tostring
+        | split("\n")
+        | map(one_line)
+        | map(select(length > 0 and (startswith("#") | not)))
+        | .[0] // "See the polish suggestion body for details.");
+
+    "## Polish Scope",
+    "",
+    "This issue groups ranked polish suggestions for the `\(.domain)/\(.lens_id)` lens from run `\($run_id)`.",
+    "",
+    "## Ranked Polish Suggestions",
+    "",
+    (.items | to_entries[] |
+      "\(.key + 1). **\(.value.title | one_line)**\n   - Source: `\((.value.source_path // "not specified") | one_line)`\n   - Rank: \((.value.polish_rank_x1000 // 0) | tostring)\n   - Voice-fit justification: \(.value | voice_justification)\n   - Suggested refinement: \(.value | suggested_refinement)\n"
+    ),
+    "## Acceptance Criteria",
+    "",
+    "- The selected polishing refinements are reviewed independently.",
+    "- Each accepted polish item remains scoped to approximately one hour.",
+    "",
+    "## References",
+    "",
+    "- `\($ranked_file)`"
+  ' <<< "$group_json" > "$body_file"
+}
+
+_polish_increment_issue_counts() {
+  GLOBAL_ISSUES_CREATED=$(( ${GLOBAL_ISSUES_CREATED:-0} + 1 ))
+
+  if [[ -n "${SUMMARY_FILE:-}" && -f "${SUMMARY_FILE:-}" ]]; then
+    if declare -F increment_summary_issues_created >/dev/null 2>&1; then
+      increment_summary_issues_created "$SUMMARY_FILE" 1
+      return $?
+    fi
+  fi
+
+  return 0
+}
+
+_polish_issue_budget_available() {
+  local max_issues="${MAX_ISSUES:-}" global_issues="${GLOBAL_ISSUES_CREATED:-0}"
+
+  [[ "$global_issues" =~ ^[0-9]+$ ]] || global_issues=0
+  if [[ "$max_issues" =~ ^[1-9][0-9]*$ ]] && (( global_issues >= max_issues )); then
+    return 1
+  fi
+
+  return 0
+}
+
+# run_polish_issue_emission [run_id] [top_n]
+#   Reads logs/<run-id>/polish/ranked-suggestions.json and emits one grouped
+#   polish issue per lens, containing that lens's ranked top-N suggestions.
+run_polish_issue_emission() {
+  local run_id="${1:-${RUN_ID:-}}" top_n="${2:-${REPOLENS_POLISH_TOP_N:-3}}"
+  local base_dir polish_dir ranked_file groups_file filed_dir group_json
+  local emitted=0 forge_rc=0 emission_rc=0
+
+  if [[ -z "$run_id" ]]; then
+    _polish_log_warn "Polish issue emission: missing RUN_ID"
+    return 1
+  fi
+  if [[ ! "$top_n" =~ ^[1-9][0-9]*$ ]]; then
+    _polish_log_warn "Polish issue emission: top-N must be a positive integer, got: $top_n"
+    return 1
+  fi
+
+  base_dir="$(_polish_run_base "$run_id")" || return 1
+  polish_dir="$base_dir/polish"
+  ranked_file="$polish_dir/ranked-suggestions.json"
+  filed_dir="$polish_dir/filed"
+  groups_file="$polish_dir/issue-groups.jsonl.tmp.$$"
+
+  if [[ ! -f "$ranked_file" ]]; then
+    _polish_log_warn "Polish issue emission: ranked suggestions missing: $ranked_file"
+    return 1
+  fi
+
+  mkdir -p "$filed_dir" || return 1
+
+  if ! _polish_build_issue_groups "$ranked_file" "$top_n" > "$groups_file"; then
+    rm -f "$groups_file"
+    _polish_log_warn "Polish issue emission: failed to group ranked suggestions"
+    return 1
+  fi
+
+  while IFS= read -r group_json || [[ -n "$group_json" ]]; do
+    [[ -n "$group_json" ]] || continue
+
+    if ! _polish_issue_budget_available; then
+      _polish_log_info "Polish issue emission: global issue budget exhausted (${GLOBAL_ISSUES_CREATED:-0}/${MAX_ISSUES:-})"
+      break
+    fi
+
+    local domain lens_id safe_name body_file tmp_body title sentinel issue_url label
+    domain="$(jq -r '.domain // empty' <<< "$group_json")"
+    lens_id="$(jq -r '.lens_id // empty' <<< "$group_json")"
+    safe_name="$(_polish_slugify "$domain--$lens_id")"
+    [[ -n "$safe_name" ]] || safe_name="polish-lens-$emitted"
+
+    body_file="$filed_dir/$safe_name.md"
+    tmp_body="$body_file.tmp.$$"
+    sentinel="$filed_dir/$safe_name.url"
+    title="[POLISH] $domain/$lens_id polishing shortlist"
+    label="polish:$domain/$lens_id"
+
+    if [[ -s "$sentinel" ]]; then
+      _polish_log_info "Polish issue emission: reusing existing filed marker for $domain/$lens_id"
+      continue
+    fi
+
+    if ! _polish_render_issue_body "$group_json" "$tmp_body" "$run_id" "$ranked_file"; then
+      rm -f "$tmp_body"
+      _polish_log_warn "Polish issue emission: failed to render issue body for $domain/$lens_id"
+      emission_rc=1
+      break
+    fi
+    mv "$tmp_body" "$body_file" || {
+      rm -f "$tmp_body"
+      emission_rc=1
+      break
+    }
+
+    if ${LOCAL_MODE:-false}; then
+      issue_url="local:$body_file"
+    else
+      if ! declare -F forge_issue_create >/dev/null 2>&1; then
+        _polish_log_warn "Polish issue emission: forge_issue_create is not available"
+        emission_rc=1
+        break
+      fi
+      if [[ -z "${FORGE_REPO_SLUG:-}" ]]; then
+        _polish_log_warn "Polish issue emission: missing FORGE_REPO_SLUG"
+        emission_rc=1
+        break
+      fi
+
+      issue_url="$(forge_issue_create "$FORGE_REPO_SLUG" "$title" "$body_file" "$label" "enhancement")"
+      forge_rc=$?
+      if (( forge_rc != 0 )); then
+        printf 'forge_issue_create failed with status %s\n' "$forge_rc" > "$filed_dir/$safe_name.failed" 2>/dev/null || true
+        _polish_log_warn "Polish issue emission: forge issue create failed for $domain/$lens_id"
+        emission_rc="$forge_rc"
+        break
+      fi
+    fi
+
+    printf '%s\n' "$issue_url" > "$sentinel" || {
+      emission_rc=1
+      break
+    }
+    if ! _polish_increment_issue_counts; then
+      _polish_log_warn "Polish issue emission: failed to update summary issue count"
+      emission_rc=1
+      break
+    fi
+    emitted=$((emitted + 1))
+  done < "$groups_file"
+
+  rm -f "$groups_file"
+  if (( emission_rc != 0 )); then
+    return "$emission_rc"
+  fi
+
+  _polish_log_info "Polish issue emission: emitted $emitted grouped polish issue(s)"
+  return 0
+}
+
 # run_polish_voice_profile_prepass [run_id]
 #   Builds logs/<run-id>/polish/voice-profile.md once before polish lenses run.
 run_polish_voice_profile_prepass() {

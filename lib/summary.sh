@@ -95,6 +95,31 @@ _increment_findings_filtered_locked() {
   return "$rc"
 }
 
+# increment_summary_issues_created <summary_file> [count]
+#   Adds to totals.issues_created for issue emission that happens outside the
+#   per-lens loop, such as grouped polish issue filing after ranking.
+increment_summary_issues_created() {
+  local file="${1:-}" count="${2:-1}"
+  [[ -n "$file" && -f "$file" ]] || return 0
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  (( count > 0 )) || return 0
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _increment_summary_issues_created_locked "$file" "$count"
+}
+
+_increment_summary_issues_created_locked() {
+  local file="$1" count="$2"
+  local tmp
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+  jq --argjson c "$count" \
+    '.totals.issues_created = ((.totals.issues_created // 0) + $c)' \
+    "$file" > "$tmp" && mv "$tmp" "$file"
+  local rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  return "$rc"
+}
+
 # record_lens <summary_file> <domain> <lens_id> <iterations> <status> [issues] [rate_limit_sleep_seconds]
 #   Appends a lens result to the summary. The `round` field is sourced from
 #   the ambient CURRENT_ROUND_INDEX variable (set by `run_rounds` for

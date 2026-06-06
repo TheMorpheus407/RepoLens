@@ -28,6 +28,7 @@ Project voice profile reference: {{VOICE_PROFILE}}
 - If no fitting polish suggestion is warranted, write an empty JSON array (`[]`) to that file.
 - Every suggestion object MUST include these structured tags:
   - `voice_fit: strong | medium | weak | off-brand`
+  - `voice_fit_justification: one concise line explaining why the polish suggestion fits the project voice`
   - `location_expectedness: expected | low-expectation | no-benchmark | forgotten-corner`
   - `polish_family: fluency | effort-signal | hedonic`
 - Also include `title`, `domain`, `lens_id`, `source_path`, `body`, and `labels` when available. Prefix every polish title with `[POLISH]`.

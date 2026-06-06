@@ -501,6 +501,7 @@ Each JSON file must contain one polish suggestion object:
   \"source_path\": \"<path-or-surface>\",
   \"polish_family\": \"fluency|effort-signal|hedonic\",
   \"voice_fit\": \"strong|medium|weak|off-brand\",
+  \"voice_fit_justification\": \"One concise line explaining why this polish suggestion fits the project voice.\",
   \"location_expectedness\": \"expected|low-expectation|no-benchmark|forgotten-corner\",
   \"labels\": [\"<lens-label>\", \"enhancement\"],
   \"body\": \"Markdown body using the required polish sections.\"

@@ -5,7 +5,7 @@
 [![CI](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/TheMorpheus407/RepoLens?style=social)](https://github.com/TheMorpheus407/RepoLens)
 
-**Multi-lens code audit tool.** Runs 336 specialist lenses across 33 domains against any git repository, live server, Android APK, or product specification and creates remote issues for real findings or backlog work. A separate polish pass writes ranked suggestion artifacts for review. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, infrastructure auditing, Android auditing, spec-to-backlog planning, and polishing — all with deep specialization.
+**Multi-lens code audit tool.** Runs 336 specialist lenses across 33 domains against any git repository, live server, Android APK, or product specification and creates remote issues for real findings, backlog work, or polishing shortlists. The polish pass also writes ranked suggestion artifacts for review. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, infrastructure auditing, Android auditing, spec-to-backlog planning, and polishing — all with deep specialization.
 
 > [!IMPORTANT]
 > **RepoLens runs AI agents with shell access against your repository, and a full audit can cost hundreds of dollars in API charges.** It is NOT a sandboxed security tool, comes with NO warranty, and you use it entirely at your own risk. **Read [Warnings & Limits](#warnings--limits) before your first run** — especially the cost and security sections.
@@ -200,7 +200,7 @@ For the full legal text, see [LICENSE](LICENSE) (Apache License, Version 2.0, Se
 
 ## Modes
 
-RepoLens supports 10 modes. Each mode controls which domains/lenses are visible and how the agent iterates. `polish` is a separate suggestion workflow that writes ranked JSON artifacts.
+RepoLens supports 10 modes. Each issue and backlog mode controls which domains/lenses are visible and how the agent iterates. `polish` is a separate suggestion workflow that writes ranked JSON artifacts and grouped polishing shortlists.
 
 | Mode         | DONE Streak | Domains                                    | Description                                                                   |
 | ------------ | ----------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
@@ -264,7 +264,7 @@ RepoLens supports 10 modes. Each mode controls which domains/lenses are visible 
 # Greenfield — plan implementation backlog from a product spec
 ./repolens.sh --project ~/my-app --agent claude --mode greenfield --spec ~/docs/product-spec.md
 
-# Polish — collect ranked polish suggestions
+# Polish — file ranked polishing shortlists
 ./repolens.sh --project ~/my-app --agent claude --mode polish
 
 # Logs — point runtime log analysis lenses at a log corpus
@@ -319,13 +319,21 @@ Before every planning iteration, RepoLens refreshes the current backlog snapshot
 
 Use `polish` when nothing is necessarily broken, but you want small, additive refinements that make the project feel more fluent, cared-for, and voice-fit. Polish mode runs one pass over the `fluency`, `effort-signal`, and `hedonic` domains, builds a project voice profile for the run, and asks each lens for structured polish suggestions.
 
-Polish suggestions are not filed as forge issues during this ranking step. Each lens writes JSON suggestions with tags such as `voice_fit`, `location_expectedness`, and `polish_family`. After the lenses finish, RepoLens writes the sorted artifact:
+Polish suggestions are not filed during lens execution. Each lens writes JSON suggestions with tags such as `voice_fit`, `voice_fit_justification`, `location_expectedness`, and `polish_family`. After the lenses finish, RepoLens writes the sorted artifact:
 
 ```text
 logs/<run-id>/polish/ranked-suggestions.json
 ```
 
 Each entry in that file includes the original suggestion fields plus `fluency_baseline`, `soul_fit`, `effort_gap_multiplier`, and `polish_rank_x1000`. RepoLens computes those fields deterministically from the structured tags and orders the suggestions highest-first. Lens agents do not compute the rank, and off-brand suggestions sort to the bottom.
+
+After ranking, RepoLens groups the ranked suggestions by lens and emits one `[POLISH] <domain>/<lens-id> polishing shortlist` per lens with usable suggestions. Each shortlist includes that lens's top-N ranked suggestions, defaults to 3 items, and includes a one-line voice-fit justification for every listed item. Set `REPOLENS_POLISH_TOP_N` to a positive integer to change the per-lens shortlist size. `--max-issues` still caps the total number of emitted polishing shortlists, so `--max-issues 1` files only the highest-ranked lens shortlist.
+
+In forge mode, polishing shortlists are created as remote issues with `polish:<domain>/<lens-id>` and `enhancement` labels. In `--local` mode, RepoLens writes the same grouped markdown drafts under:
+
+```text
+logs/<run-id>/polish/filed/
+```
 
 ## Remote deploy mode
 
@@ -409,12 +417,12 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--max-parallel <n>`   | Max concurrent agents in parallel mode (default: 8)                                                                                                                                                                                                                                                      |
 | `--resume <run-id>`    | Resume a previous interrupted run                                                                                                                                                                                                                                                                        |
 | `--spec <file>`        | Spec/PRD/roadmap to guide analysis (any text file, max 100 KB). Required for `--mode greenfield`; greenfield treats it as product-owner intent for backlog planning.                                                                                                                                    |
-| `--max-issues <n>`     | Stop after creating _n_ total issues                                                                                                                                                                                                                                                                     |
+| `--max-issues <n>`     | Stop after creating _n_ total issues. In polish mode, this caps emitted polishing shortlist issues rather than individual suggestions                                                                                                                                                                    |
 | `--min-severity <level>` | Only file findings at or above `critical`, `high`, `medium`, or `low`. Filtered findings are counted in `summary.json` and reported in final stdout when the count is non-zero. No effect in non-severity modes such as `discover`, `feature`, `custom`, `greenfield`, and `polish`. Env fallback: `REPOLENS_MIN_SEVERITY`. |
 | `--depth <n>`          | DONE streak depth per lens. Defaults to `3` for `audit`, `feature`, and `bugfix`; defaults to `1` for all other modes. Must be between `1` and `19`                                                                                        |
 | `--rounds <n>`         | Validated cross-lens round count for multi-round orchestration. Defaults to `1` except `bugreport`, which defaults to `3`. Only `bugreport` accepts values above `1`; `audit`, `feature`, `bugfix`, `custom`, `deploy`, `opensource`, `content`, `discover`, `greenfield`, and `polish` are locked to `1`. `--rounds >= 4` requires `--i-know-this-is-expensive`. The resolved value is shown by `--dry-run` and sizes the `logs/<run-id>/rounds/round-N/` artifact layout |
 | `--strategy <name>`    | Bugreport round-1 dispatch strategy: `fanout` (default — every lens runs in round 1, identical to today's `--mode bugreport`) \| `waves` (a narrow set of triage-seeded GENERIC investigators dispatch in round 1; subsequent rounds use the existing role-aware dispatch). `waves` requires `--mode bugreport` and rejects with a clear error on any other mode. The resolved value is shown by `--dry-run` under `--mode bugreport`. Env fallback: `REPOLENS_STRATEGY`. Wave width is controlled by `REPOLENS_WAVE_WIDTH` (default `7`, clamped to `1..50`). |
-| `--local`              | Write local output files instead of creating remote issues. Most modes write markdown; polish mode writes JSON suggestion objects. No forge CLI required                                                                                                                                                 |
+| `--local`              | Write local output files instead of creating remote issues. Most modes write markdown; polish mode writes JSON suggestion objects and grouped polishing shortlist drafts. No forge CLI required                                                                                                         |
 | `--output <path>`      | Output directory for local output files (requires `--local`, default: `logs/<run-id>/rounds/round-1/lens-outputs/`)                                                                                                                                                                                     |
 | `--forge <provider>`   | Override forge auto-detection: `gh` for GitHub, `tea` for Gitea, `fj` for Forgejo/Codeberg. Codeberg is auto-detected; use this for self-hosted Gitea/Forgejo remotes whose hostname is not auto-detected. Self-hosted Forgejo needs an HTTPS or SSH `origin` remote so RepoLens can pass `fj -H <host>` |
 | `--hosted`             | Spin up Docker Compose for DAST scanning (used with `toolgate` domain)                                                                                                                                                                                                                                   |
@@ -498,6 +506,7 @@ REPOLENS_AGENT_TIMEOUT_OPENCODE=3600 ./repolens.sh --project ~/my-app --agent op
 | `REPOLENS_AGENT_TIMEOUT_GREENFIELD`  | `1800`   | Greenfield-mode timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `REPOLENS_AGENT_TIMEOUT_POLISH`      | `1800`   | Polish-mode timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `REPOLENS_AGENT_TIMEOUT_BUGREPORT`   | `1800`   | Bug-report mode timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `REPOLENS_POLISH_TOP_N`              | `3`      | Number of ranked suggestions to include in each per-lens polishing shortlist. Must be a positive integer.                                                                                                                                                                                                                                                                                                                                       |
 | `REPOLENS_RATE_LIMIT_MAX_SLEEP`      | `21600`  | Maximum parsed agent rate-limit wait in seconds before RepoLens falls back to the terminal rate-limit abort path. When an agent exits non-zero with a known rate-limit signature and a parseable resume time within this cap, RepoLens sleeps until that time plus a 60-second buffer, retries the same lens once, and records `rate_limit_sleep_seconds` in `summary.json`. During lens execution, unparseable resume times, waits beyond this cap, a second rate-limit after retry, or a non-signal retry sleep failure finish as `rate-limit-pending` and exit `3`; SIGHUP, SIGINT, or SIGTERM during the sleep preserve `interrupted` and exit `129`, `130`, or `143`. |
 | `REPOLENS_NO_PROGRESS_LIMIT`         | `3`      | Consecutive degraded iterations allowed before RepoLens stops the lens with summary status `agent-no-progress`. A degraded iteration is a non-zero agent exit or near-empty output without `DONE`, issue URLs, or newly created local findings. Must be a positive integer no greater than the per-lens safety cap.                                                                                                                                                                                            |
 | `REPOLENS_NO_PROGRESS_MIN_BYTES`     | `512`    | Output-size threshold, in bytes, used by the no-progress guard. Agent output below this size is treated as degraded unless the iteration still shows progress through `DONE`, issue URLs, or local findings. Must be a non-negative integer up to `1048576`.                                                                                                                                                                                                                                                     |
@@ -666,7 +675,8 @@ To prune automatically at startup instead of running `clean` by hand, set `REPOL
    - Agent follows the selected mode: code modes read code, deploy modes inspect the target, content modes inspect content/source material, greenfield plans from `--spec` using the current open issue or local draft backlog without inspecting repository code, and polish mode looks for voice-fit refinements
    - Agent creates remote issues, writes local files, or writes polish suggestion JSON depending on the selected mode
    - Loops until DONE detected (3× streak for audit/feature/bugfix, 1× for other modes)
-10. Writes `logs/<run-id>/status.json` while the run is active and generates `logs/<run-id>/summary.json`
+10. For polish mode, ranks collected suggestions and emits grouped polishing shortlists
+11. Writes `logs/<run-id>/status.json` while the run is active and generates `logs/<run-id>/summary.json`
 
 For a deeper look at the methodology — how lenses are composed, how agents iterate, and how streak detection works — see [METHODOLOGY.md](METHODOLOGY.md).
 
@@ -704,8 +714,8 @@ Completed lenses are skipped; unfinished and rate-limited lenses are retried. Th
 
 ## Output
 
-- **Remote Issues** — Created directly in the target repo with severity-prefixed titles and domain labels for issue-filing modes
-- **Local Output** — With `--local`, findings or backlog items are written as individual markdown files to `<output-dir>/<domain>/<lens-id>/NNN-slug.md` with YAML frontmatter (title, severity or priority, domain, lens, labels). Polish suggestions are JSON objects instead. Default output directory: `logs/<run-id>/rounds/round-1/lens-outputs/`. In greenfield mode, existing draft files in that directory are treated as the current draft backlog on later planning iterations
+- **Remote Issues** — Created directly in the target repo with severity-prefixed titles and domain labels for issue-filing modes. Polish mode creates `[POLISH]` lens-scoped polishing shortlist issues instead
+- **Local Output** — With `--local`, findings or backlog items are written as individual markdown files to `<output-dir>/<domain>/<lens-id>/NNN-slug.md` with YAML frontmatter (title, severity or priority, domain, lens, labels). Polish lenses write JSON suggestion objects, then RepoLens writes grouped polishing shortlist drafts under `logs/<run-id>/polish/filed/`. Default output directory: `logs/<run-id>/rounds/round-1/lens-outputs/`. In greenfield mode, existing draft files in that directory are treated as the current draft backlog on later planning iterations
 - **Polish Ranked Suggestions** — Polish runs write `logs/<run-id>/polish/ranked-suggestions.json`, sorted by deterministic polish rank with `fluency_baseline`, `soul_fit`, `effort_gap_multiplier`, and `polish_rank_x1000` on each suggestion
 - **Round Artifacts** — Every run creates `logs/<run-id>/rounds/round-N/` for each resolved round, including `metadata.json`, `lens-outputs/`, and `digest.md`. `round-N/.completed` appears only after that round finishes cleanly. Multi-round runs write between-round `dispatch.md` handoff files on completed rounds before the final round
 - **Final Artifacts** — Every run creates `logs/<run-id>/final/` and `logs/<run-id>/final/filed/`. Successful multi-round runs promote a schema-validated `logs/<run-id>/final/manifest.json`; later filing stages record filed issue links under `final/filed/`

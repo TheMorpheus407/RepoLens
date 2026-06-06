@@ -3357,6 +3357,12 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "polish" ]]; then
   log_info "Polish ranking: ordering surfaced suggestions"
   if run_polish_ranking "$RUN_ID"; then
     log_info "Polish ranking: ranked-suggestions.json promoted"
+    log_info "Polish issue emission: filing ranked lens shortlists"
+    if run_polish_issue_emission "$RUN_ID" "${REPOLENS_POLISH_TOP_N:-3}"; then
+      log_info "Polish issue emission: ranked lens shortlists processed"
+    else
+      die "Polish issue emission failed"
+    fi
   else
     die "Polish ranking failed"
   fi

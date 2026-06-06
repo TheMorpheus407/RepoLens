@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
-- Polish mode now collects structured JSON suggestions and writes `logs/<run-id>/polish/ranked-suggestions.json`, sorted by deterministic polish rank with `fluency_baseline`, `soul_fit`, `effort_gap_multiplier`, and `polish_rank_x1000` fields on each suggestion. Polish issue emission remains separate from this ranking step ([#301](https://github.com/TheMorpheus407/RepoLens/issues/301))
+- Polish mode now collects structured JSON suggestions, writes `logs/<run-id>/polish/ranked-suggestions.json`, and emits one `[POLISH]` lens-scoped polishing shortlist per lens with ranked top-N suggestions (default 3) and a voice-fit justification for each listed item. Forge runs create remote shortlist issues; `--local` runs write grouped markdown drafts under `logs/<run-id>/polish/filed/` ([#301](https://github.com/TheMorpheus407/RepoLens/issues/301), [#302](https://github.com/TheMorpheus407/RepoLens/issues/302))
 
 ### Added
 
