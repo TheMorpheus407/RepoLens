@@ -666,7 +666,10 @@
       "lenses": [
         "empty-states",
         "error-and-404-grace",
-        "edge-case-thoughtfulness"
+        "edge-case-thoughtfulness",
+        "loading-transparency",
+        "forgotten-corners",
+        "offline-and-failure-grace"
       ]
     }
   ]

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Tests for issue #297: polish-mode effort-signal domain and lenses.
+# Tests for issues #297 and #298: polish-mode effort-signal domain and lenses.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -70,7 +70,7 @@ DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
 COLORS_FILE="$SCRIPT_DIR/config/label-colors.json"
 LENSES_DIR="$SCRIPT_DIR/prompts/lenses"
 
-EXPECTED_LENSES="empty-states error-and-404-grace edge-case-thoughtfulness"
+EXPECTED_LENSES="empty-states error-and-404-grace edge-case-thoughtfulness loading-transparency forgotten-corners offline-and-failure-grace"
 
 echo ""
 echo "=== Test Suite: polish effort-signal lenses (issue #297) ==="
@@ -147,6 +147,24 @@ assert_contains "edge-case-thoughtfulness names zero/one/many" \
   "zero/one/many" "$(cat "$LENSES_DIR/effort-signal/edge-case-thoughtfulness.md")"
 assert_contains "edge-case-thoughtfulness names unsaved changes" \
   "Unsaved changes" "$(cat "$LENSES_DIR/effort-signal/edge-case-thoughtfulness.md")"
+assert_contains "loading-transparency names labor illusion" \
+  "labor illusion" "$(cat "$LENSES_DIR/effort-signal/loading-transparency.md")"
+assert_contains "loading-transparency names perceived value" \
+  "perceived value" "$(cat "$LENSES_DIR/effort-signal/loading-transparency.md")"
+assert_contains "loading-transparency includes honesty caveat" \
+  "do not claim downstream satisfaction or repurchase effects" "$(cat "$LENSES_DIR/effort-signal/loading-transparency.md")"
+assert_contains "forgotten-corners names help output" \
+  "--help" "$(cat "$LENSES_DIR/effort-signal/forgotten-corners.md")"
+assert_contains "forgotten-corners names deep settings" \
+  "Deep settings" "$(cat "$LENSES_DIR/effort-signal/forgotten-corners.md")"
+assert_contains "forgotten-corners names effort-gap multiplier" \
+  "effort-gap multiplier" "$(cat "$LENSES_DIR/effort-signal/forgotten-corners.md")"
+assert_contains "offline-and-failure-grace names connectivity" \
+  "connectivity drops" "$(cat "$LENSES_DIR/effort-signal/offline-and-failure-grace.md")"
+assert_contains "offline-and-failure-grace names stale-but-usable content" \
+  "stale-but-usable" "$(cat "$LENSES_DIR/effort-signal/offline-and-failure-grace.md")"
+assert_contains "offline-and-failure-grace separates from reliability work" \
+  "missing offline mode" "$(cat "$LENSES_DIR/effort-signal/offline-and-failure-grace.md")"
 
 echo ""
 echo "================================"

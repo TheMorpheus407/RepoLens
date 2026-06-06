@@ -94,7 +94,7 @@ echo ""
 echo "Test 4: polish mode resolves fluency lenses"
 polish_lenses="$(jq -r --arg mode "polish" \
   '.domains | sort_by(.order)[] | (if $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
-assert_eq "polish lens count is 9" "9" "$(printf '%s\n' "$polish_lenses" | sed '/^$/d' | wc -l | tr -d ' ')"
+assert_eq "polish lens count is 12" "12" "$(printf '%s\n' "$polish_lenses" | sed '/^$/d' | wc -l | tr -d ' ')"
 for lens in $EXPECTED_LENSES; do
   assert_contains "polish resolves fluency/$lens" "fluency/$lens" "$polish_lenses"
 done
