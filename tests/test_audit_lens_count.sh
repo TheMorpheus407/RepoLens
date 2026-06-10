@@ -138,7 +138,7 @@ assert_contains "discover exclusion in audit jq query" 'discover' "$audit_lenses
 echo ""
 echo "Test 8: Dynamic audit count from domains.json must be a positive integer"
 # Compute expected audit lens count using the production mode-isolation filter
-expected_audit_count="$(jq '[.domains[] | select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") | .lenses | length] | add' "$DOMAINS_FILE")"
+expected_audit_count="$(jq '[.domains[] | select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") | .lenses | length] | add' "$DOMAINS_FILE")"
 TOTAL=$((TOTAL + 1))
 if [[ "$expected_audit_count" =~ ^[1-9][0-9]*$ ]]; then
   PASS=$((PASS + 1))
@@ -151,7 +151,7 @@ fi
 echo ""
 echo "Test 9: Dynamic audit count must not include exclusive-mode domains"
 # Count lenses from exclusive-mode domains
-exclusive_count="$(jq '[.domains[] | select(.mode == "discover" or .mode == "deploy" or .mode == "opensource" or .mode == "content") | .lenses | length] | add' "$DOMAINS_FILE")"
+exclusive_count="$(jq '[.domains[] | select(.mode == "discover" or .mode == "deploy" or .mode == "opensource" or .mode == "content" or .mode == "greenfield" or .mode == "polish") | .lenses | length] | add' "$DOMAINS_FILE")"
 total_count="$(jq '[.domains[] | .lenses | length] | add' "$DOMAINS_FILE")"
 recomputed_audit="$((total_count - exclusive_count))"
 assert_eq "audit count = total minus exclusive" "$recomputed_audit" "$expected_audit_count"
@@ -160,7 +160,7 @@ echo ""
 echo "Test 10: Production jq query and dynamic count agree"
 # Run the full production-style query (with sort_by and full conditional chain) and count
 prod_count="$(jq -r --arg mode "audit" \
-  '[.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .lenses | length] | add' "$DOMAINS_FILE")"
+  '[.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .lenses | length] | add' "$DOMAINS_FILE")"
 assert_eq "production query count matches dynamic count" "$expected_audit_count" "$prod_count"
 
 # =====================================================================
@@ -204,13 +204,12 @@ else
 fi
 
 echo ""
-echo "Test 13: Audit jq query must exclude all four exclusive modes in else branch"
-# After fix, the else branch should contain exclusions for all 4 modes
-# Pattern: select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content")
+echo "Test 13: Audit jq query must exclude all exclusive modes in else branch"
+# After fix, the else branch should contain exclusions for all exclusive modes.
 audit_query_full="$(grep -A2 'audit_lenses=' "$TEST_FILE" | tr '\n' ' ')"
 TOTAL=$((TOTAL + 1))
 has_all_exclusions=true
-for mode in discover deploy opensource content; do
+for mode in discover deploy opensource content greenfield polish; do
   if ! echo "$audit_query_full" | grep -q "mode != \"$mode\""; then
     has_all_exclusions=false
     break
@@ -218,10 +217,10 @@ for mode in discover deploy opensource content; do
 done
 if $has_all_exclusions; then
   PASS=$((PASS + 1))
-  echo "  PASS: audit jq query excludes all four exclusive modes"
+  echo "  PASS: audit jq query excludes all exclusive modes"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: audit jq query must exclude discover, deploy, opensource, and content"
+  echo "  FAIL: audit jq query must exclude discover, deploy, opensource, content, greenfield, and polish"
 fi
 
 # =====================================================================
@@ -234,7 +233,7 @@ echo "Test 14: Audit lens count in test output must match production query"
 # must equal the production query's count.
 # We extract the "Actual:" value from test 4's output to see what the test computed.
 prod_audit_count="$(jq -r --arg mode "audit" \
-  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE" | wc -l)"
+  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE" | wc -l)"
 test4_actual="$(echo "$test_output" | grep -A3 'Test 4:' | grep 'Actual:' | sed 's/.*Actual:[[:space:]]*//' | tr -d '[:space:]')"
 # If test 4 passes, there's no "Actual:" line — the count matched expected.
 # In that case, extract the expected value that was asserted.
@@ -252,7 +251,7 @@ echo ""
 echo "Test 15: Audit query excludes deployment domain lenses"
 # Run the same audit jq query used in test_discover_mode.sh (and production)
 audit_lenses="$(jq -r --arg mode "audit" \
-  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
+  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
 deploy_lenses="$(echo "$audit_lenses" | grep "^deployment/" || true)"
 assert_eq "no deployment lenses in audit mode" "" "$deploy_lenses"
 
@@ -270,6 +269,21 @@ echo ""
 echo "Test 18: Audit query excludes discovery domain lenses"
 discovery_lenses="$(echo "$audit_lenses" | grep "^discovery/" || true)"
 assert_eq "no discovery lenses in audit mode" "" "$discovery_lenses"
+
+echo ""
+echo "Test 19: Audit query excludes greenfield domain lenses"
+greenfield_lenses="$(echo "$audit_lenses" | grep "^greenfield/" || true)"
+assert_eq "no greenfield lenses in audit mode" "" "$greenfield_lenses"
+
+echo ""
+echo "Test 20: Audit query excludes fluency domain lenses"
+fluency_lenses="$(echo "$audit_lenses" | grep "^fluency/" || true)"
+assert_eq "no fluency lenses in audit mode" "" "$fluency_lenses"
+
+echo ""
+echo "Test 21: Audit query excludes hedonic domain lenses"
+hedonic_lenses="$(echo "$audit_lenses" | grep "^hedonic/" || true)"
+assert_eq "no hedonic lenses in audit mode" "" "$hedonic_lenses"
 
 # =====================================================================
 # Summary

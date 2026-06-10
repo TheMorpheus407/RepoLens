@@ -34,6 +34,8 @@ source "$SCRIPT_DIR/lib/core.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/logging.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/remote.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/streak.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/template.sh"
@@ -42,9 +44,13 @@ source "$SCRIPT_DIR/lib/summary.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/status.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/clean.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/parallel.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/rounds.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/polish.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/verify.sh"
 # shellcheck source=/dev/null
@@ -113,6 +119,7 @@ usage() {
   cat <<'EOF'
 Usage: repolens.sh --project <path> --agent <agent> [OPTIONS]
        repolens.sh status [run-id] [OPTIONS]
+       repolens.sh clean [OPTIONS]
 
 RepoLens — Multi-lens code audit tool. Runs expert analysis agents against
 any git repository and creates remote issues for real findings.
@@ -123,9 +130,10 @@ Required:
 
 Commands:
   status [run-id]         Show a live run snapshot from logs/<run-id>/status.json
+  clean [OPTIONS]         Remove old run directories under logs/ (see clean --help)
 
 Options:
-  --mode <mode>           audit (default) | feature | bugfix | bugreport | discover | deploy | custom | opensource | content
+  --mode <mode>           audit (default) | feature | bugfix | bugreport | discover | deploy | custom | opensource | content | greenfield | polish
   --change <statement>    Change impact analysis — propagates statement across all lenses (implies --mode custom)
   --bug-report <file|text>
                           Symptom report for --mode bugreport. Accepts a file path (read verbatim)
@@ -151,7 +159,7 @@ Options:
   --parallel              Run lenses in parallel (one agent process per lens)
   --max-parallel <n>      Max concurrent agents in parallel mode (default: 8)
   --resume <run-id>       Resume a previous interrupted run
-  --spec <file>           Spec/PRD/roadmap to guide analysis (any text file)
+  --spec <file>           Spec/PRD/roadmap to guide analysis (required for --mode greenfield)
   --max-issues <n>        Stop after creating n total issues (dry-run quality check)
   --min-severity <level>  Only file findings at or above level: critical|high|medium|low
   --depth <n>             DONE streak depth per lens. Defaults: 3 for audit/feature/bugfix,
@@ -221,6 +229,7 @@ Examples:
   repolens.sh --project ~/myapp --agent claude --mode content
   repolens.sh --project ~/myapp --agent claude --mode content --source ~/docs/math-book.pdf
   repolens.sh --project ~/myapp --agent claude --mode content --source ~/docs/curriculum.md --spec lesson-format.md
+  repolens.sh --project ~/myapp --agent claude --mode polish
   repolens.sh --project ~/myapp --agent claude --mode audit --source ~/docs/threat-report.pdf
   repolens.sh --project ~/myapp --agent claude --mode content --focus topic-extraction --source ~/docs/textbook.pdf
   repolens.sh --project ~/myapp --agent claude --mode bugreport --bug-report ~/reports/crash-on-login.txt
@@ -265,6 +274,10 @@ Environment:
                            Open-source readiness default: 1800.
   REPOLENS_AGENT_TIMEOUT_CONTENT
                            Content default: 1800.
+  REPOLENS_AGENT_TIMEOUT_GREENFIELD
+                           Greenfield default: 1800.
+  REPOLENS_AGENT_TIMEOUT_POLISH
+                           Polish default: 1800.
   REPOLENS_AGENT_TIMEOUT_BUGREPORT
                            Bug report default: 1800.
   REPOLENS_BUG_REPORT_PATH Fallback for --bug-report when the CLI flag is unset.
@@ -355,14 +368,16 @@ EOF
   echo "  custom      Change impact — analyzes what needs adapting (requires --change)"
   echo "  opensource  Open source readiness — audits if a repo can go public safely"
   echo "  content     Content audit & creation — audits existing content, creates from --source"
+  echo "  greenfield  Spec-to-backlog planning — creates one implementation issue per iteration (requires --spec)"
+  echo "  polish      Polish — proposes small, additive craft refinements"
   echo "  bugreport   Symptom-driven investigation — runs lenses on a user bug report (requires --bug-report)"
 
   # Parse all domains in one jq call
   local domain_data
   domain_data="$(jq -r '.domains | sort_by(.order)[] | .id + "|" + .name + "|" + (.mode // "code") + "|" + ([.lenses[] | if type == "string" then . else .id end] | join(","))' "$domains_file")"
 
-  local code_total=0 discover_total=0 deploy_total=0 opensource_total=0 content_total=0
-  local code_output="" discover_output="" deploy_output="" opensource_output="" content_output=""
+  local code_total=0 discover_total=0 deploy_total=0 opensource_total=0 content_total=0 greenfield_total=0 polish_total=0
+  local code_output="" discover_output="" deploy_output="" opensource_output="" content_output="" greenfield_output="" polish_output=""
 
   while IFS='|' read -r did dname dmode dlenses; do
     IFS=',' read -ra lens_arr <<< "$dlenses"
@@ -387,6 +402,12 @@ EOF
     elif [[ "$dmode" == "content" ]]; then
       content_total=$((content_total + lcount))
       content_output+="$section"$'\n'
+    elif [[ "$dmode" == "greenfield" ]]; then
+      greenfield_total=$((greenfield_total + lcount))
+      greenfield_output+="$section"$'\n'
+    elif [[ "$dmode" == "polish" ]]; then
+      polish_total=$((polish_total + lcount))
+      polish_output+="$section"$'\n'
     else
       code_total=$((code_total + lcount))
       code_output+="$section"$'\n'
@@ -409,12 +430,26 @@ EOF
   echo "Domains (content mode — ${content_total} lenses):"
   echo ""
   printf "%s" "$content_output"
+  echo "Domains (greenfield mode — ${greenfield_total} lenses):"
+  echo ""
+  printf "%s" "$greenfield_output"
+  echo "Domains (polish mode — ${polish_total} lenses):"
+  echo ""
+  printf "%s" "$polish_output"
 }
 
 # Dispatch read-only subcommands before normal run validation.
 if [[ "${1:-}" == "status" ]]; then
   shift
   status_command "$@"
+  exit "$?"
+fi
+
+# `clean` removes old run dirs; it needs no --project/--agent, so dispatch it
+# here alongside status, before run validation.
+if [[ "${1:-}" == "clean" ]]; then
+  shift
+  clean_command "$@"
   exit "$?"
 fi
 
@@ -715,8 +750,8 @@ fi
 
 # --- Validate mode ---
 case "$MODE" in
-  audit|feature|bugfix|bugreport|discover|deploy|custom|opensource|content) ;;
-  *) die "Invalid mode: $MODE (expected 'audit', 'feature', 'bugfix', 'bugreport', 'discover', 'deploy', 'custom', 'opensource', or 'content')" ;;
+  audit|feature|bugfix|bugreport|discover|deploy|custom|opensource|content|greenfield|polish) ;;
+  *) die "Invalid mode: $MODE (expected 'audit', 'feature', 'bugfix', 'bugreport', 'discover', 'deploy', 'custom', 'opensource', 'content', 'greenfield', or 'polish')" ;;
 esac
 
 # --- Resolve --strategy (CLI flag wins over REPOLENS_STRATEGY env) ---
@@ -851,6 +886,95 @@ template_var_escape() {
   value="${value//\\/\\\\}"
   value="${value//|/\\|}"
   printf '%s' "$value"
+}
+
+greenfield_backlog_inline_text() {
+  local value="${1:-}" max_len="${2:-3000}"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//$'\t'/ }"
+  while [[ "$value" == *"  "* ]]; do
+    value="${value//  / }"
+  done
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ "$max_len" =~ ^[0-9]+$ && "$max_len" -gt 0 && "${#value}" -gt "$max_len" ]]; then
+    value="${value:0:max_len}..."
+  fi
+  printf '%s' "$value"
+}
+
+greenfield_frontmatter_scalar() {
+  local file="$1" key="$2" value
+  value="$(read_frontmatter "$file" "$key" 2>/dev/null || true)"
+  value="${value%$'\r'}"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value#\"}"
+    value="${value%\"}"
+  elif [[ "$value" == \'* && "$value" == *\' ]]; then
+    value="${value#\'}"
+    value="${value%\'}"
+  fi
+  greenfield_backlog_inline_text "$value" 500
+}
+
+greenfield_local_backlog_snapshot() {
+  local dir="$1" file count=0 title priority body filename
+
+  if [[ ! -d "$dir" ]]; then
+    printf 'No current local draft backlog items were found.\n'
+    return 0
+  fi
+
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    count=$((count + 1))
+    filename="$(basename "$file")"
+    title="$(greenfield_frontmatter_scalar "$file" "title")"
+    priority="$(greenfield_frontmatter_scalar "$file" "priority")"
+    body="$(read_body "$file" 2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+      body="$(sed 's/\r$//' "$file" 2>/dev/null || true)"
+    fi
+    body="$(greenfield_backlog_inline_text "$body" 3000)"
+
+    [[ -n "$title" ]] || title="<untitled>"
+    [[ -n "$priority" ]] || priority="<unspecified>"
+
+    printf '### Local draft: %s\n' "$filename"
+    printf -- '- Title: %s\n' "$title"
+    printf -- '- Priority: %s\n' "$priority"
+    if [[ -n "$body" ]]; then
+      printf -- '- Body excerpt: %s\n' "$body"
+    else
+      printf -- '- Body excerpt: <empty>\n'
+    fi
+    printf '\n'
+  done < <(find "$dir" -maxdepth 1 -type f -name '*.md' -print 2>/dev/null | sort)
+
+  if (( count == 0 )); then
+    printf 'No current local draft backlog items were found.\n'
+  fi
+}
+
+greenfield_write_current_backlog_snapshot() {
+  local target_file="$1" lens_local_dir="$2" repo="$3"
+
+  if $LOCAL_MODE; then
+    greenfield_local_backlog_snapshot "$lens_local_dir" > "$target_file"
+    return 0
+  fi
+
+  if forge_open_issue_backlog_snapshot "$repo" > "$target_file"; then
+    return 0
+  fi
+
+  log_warn "Greenfield current backlog snapshot failed; rendering a stop-safe snapshot for this iteration."
+  cat > "$target_file" <<'EOF'
+Current forge backlog state could not be loaded for this planning iteration.
+Do not create a new issue while current backlog coverage is unavailable. Output DONE.
+EOF
+  return 1
 }
 
 # --- Validate deploy target intent ---
@@ -1061,6 +1185,11 @@ if [[ "$MODE" == "bugreport" && -z "$BUG_REPORT" && -z "$RESUME_RUN_ID" ]]; then
   die "Mode 'bugreport' requires --bug-report <file|text> (or REPOLENS_BUG_REPORT_PATH env var)"
 fi
 
+# --- Validate greenfield spec requirement ---
+if [[ "$MODE" == "greenfield" && -z "$SPEC_FILE" ]]; then
+  die "Mode 'greenfield' requires --spec <file>"
+fi
+
 # --- Handle remote repository URL ---
 CLONE_DIR=""
 
@@ -1085,10 +1214,169 @@ _cleanup_all() {
   if $HOSTED 2>/dev/null; then
     cleanup_hosted "${RUN_ID:-}" 2>/dev/null
   fi
-  _cleanup_remote_control_socket 2>/dev/null || true
+  if declare -F remote_close_master >/dev/null 2>&1; then
+    remote_close_master 2>/dev/null || true
+  else
+    _cleanup_remote_control_socket 2>/dev/null || true
+  fi
   _cleanup_clone
 }
 trap _cleanup_all EXIT
+
+rate_limit_sleep_interrupt_marker() {
+  printf '%s\n' "${LOG_BASE:-}/.rate-limit-sleep-interrupt"
+}
+
+rate_limit_sleep_signal_name() {
+  case "$1" in
+    129) printf '%s\n' "SIGHUP" ;;
+    130) printf '%s\n' "SIGINT" ;;
+    143) printf '%s\n' "SIGTERM" ;;
+    *) return 1 ;;
+  esac
+}
+
+rate_limit_sleep_stopped_reason() {
+  case "$1" in
+    129) printf '%s\n' "interrupted-sighup" ;;
+    130) printf '%s\n' "interrupted-sigint" ;;
+    143) printf '%s\n' "interrupted-sigterm" ;;
+    *) return 1 ;;
+  esac
+}
+
+write_rate_limit_sleep_interrupt_marker() {
+  local exit_code="$1" signal_name="$2" stopped_reason="$3"
+  local marker tmp
+
+  [[ -n "${LOG_BASE:-}" ]] || return 0
+  marker="$(rate_limit_sleep_interrupt_marker)"
+  tmp="${marker}.tmp.${BASHPID}"
+  {
+    printf 'exit_code=%s\n' "$exit_code"
+    printf 'signal=%s\n' "$signal_name"
+    printf 'stopped_reason=%s\n' "$stopped_reason"
+    printf 'source=rate-limit-sleep\n'
+  } > "$tmp" && mv -f "$tmp" "$marker"
+  rm -f "$tmp" 2>/dev/null || true
+}
+
+read_rate_limit_abort_earliest_at() {
+  local marker key value earliest_at=""
+
+  [[ -n "${LOG_BASE:-}" ]] || { printf '\n'; return 0; }
+  marker="$LOG_BASE/.rate-limit-abort"
+  [[ -f "$marker" ]] || { printf '\n'; return 0; }
+
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    case "$key" in
+      earliest_at) earliest_at="$value" ;;
+    esac
+  done < "$marker"
+
+  if [[ "$earliest_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    printf '%s\n' "$earliest_at"
+  else
+    printf '\n'
+  fi
+}
+
+write_rate_limit_abort_marker() {
+  local resume_epoch="${1:-}" marker tmp now_epoch earliest_at existing_earliest_at
+
+  [[ -n "${LOG_BASE:-}" ]] || return 0
+  marker="$LOG_BASE/.rate-limit-abort"
+  tmp="${marker}.tmp.${BASHPID}"
+  earliest_at=""
+
+  if [[ "$resume_epoch" =~ ^[0-9]+$ ]]; then
+    now_epoch="$(date +%s 2>/dev/null || printf '0')"
+    if [[ "$now_epoch" =~ ^[0-9]+$ && "$resume_epoch" -ge $((now_epoch - 60)) ]]; then
+      earliest_at="$(date -u -d "@$resume_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+    fi
+  fi
+  if [[ ! "$earliest_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    earliest_at=""
+  fi
+
+  if [[ -z "$earliest_at" ]]; then
+    existing_earliest_at="$(read_rate_limit_abort_earliest_at)"
+    earliest_at="$existing_earliest_at"
+  fi
+
+  {
+    if [[ -n "$earliest_at" ]]; then
+      printf 'earliest_at=%s\n' "$earliest_at"
+    fi
+    if [[ "$resume_epoch" =~ ^[0-9]+$ ]]; then
+      printf 'resume_epoch=%s\n' "$resume_epoch"
+    fi
+    printf 'source=lens-rate-limit\n'
+  } > "$tmp" && mv -f "$tmp" "$marker"
+  rm -f "$tmp" 2>/dev/null || true
+}
+
+rate_limit_abort_stopped_reason() {
+  [[ -n "${SUMMARY_FILE:-}" && -f "$SUMMARY_FILE" ]] || return 0
+  jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || true
+}
+
+is_phase_rate_limit_stopped_reason() {
+  case "$1" in
+    rate-limited-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_rate_limit_abort_final_state() {
+  local marker key value exit_code="" stopped_reason="" existing_reason
+
+  marker="$(rate_limit_sleep_interrupt_marker)"
+  if [[ -f "$marker" ]]; then
+    while IFS='=' read -r key value || [[ -n "$key" ]]; do
+      case "$key" in
+        exit_code) exit_code="$value" ;;
+        stopped_reason) stopped_reason="$value" ;;
+      esac
+    done < "$marker"
+
+    case "$exit_code" in
+      129|130|143) ;;
+      *) exit_code=130 ;;
+    esac
+    case "$stopped_reason" in
+      interrupted-sighup|interrupted-sigint|interrupted-sigterm) ;;
+      *) stopped_reason="$(rate_limit_sleep_stopped_reason "$exit_code" 2>/dev/null || printf '%s\n' "interrupted-sigint")" ;;
+    esac
+
+    REPOLENS_FINAL_STATE="interrupted"
+    REPOLENS_INTERRUPT_EXIT_CODE="$exit_code"
+    set_stop_reason "$SUMMARY_FILE" "$stopped_reason"
+    return 0
+  fi
+
+  if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+    existing_reason="$(rate_limit_abort_stopped_reason)"
+    if is_phase_rate_limit_stopped_reason "$existing_reason"; then
+      REPOLENS_FINAL_STATE="failed"
+      return 0
+    fi
+
+    REPOLENS_FINAL_STATE="rate-limit-pending"
+    if [[ -z "$existing_reason" ]]; then
+      set_stop_reason "$SUMMARY_FILE" "rate-limited"
+    fi
+    return 0
+  fi
+
+  return 1
+}
+
+_handle_hangup() {
+  REPOLENS_FINAL_STATE="interrupted"
+  REPOLENS_INTERRUPT_EXIT_CODE=129
+  exit 129
+}
 
 _handle_interrupt() {
   REPOLENS_FINAL_STATE="interrupted"
@@ -1102,6 +1390,7 @@ _handle_termination() {
   exit 143
 }
 
+trap _handle_hangup HUP
 trap _handle_interrupt INT
 trap _handle_termination TERM
 
@@ -1330,6 +1619,15 @@ if [[ -n "$MIN_SEVERITY" ]]; then
   MIN_SEVERITY="$(severity_normalize "$MIN_SEVERITY")"
   [[ -n "$MIN_SEVERITY" ]] || die "--min-severity must be one of critical, high, medium, low; got: $MIN_SEVERITY_RAW"
 fi
+MIN_SEVERITY_MODE_EXEMPT=""
+case "$MODE" in
+  discover|feature|custom|greenfield|polish)
+    if [[ -n "$MIN_SEVERITY" ]]; then
+      MIN_SEVERITY_MODE_EXEMPT="$MODE"
+      MIN_SEVERITY=""
+    fi
+    ;;
+esac
 REPOLENS_MIN_SEVERITY="$MIN_SEVERITY"
 export REPOLENS_MIN_SEVERITY
 
@@ -1456,7 +1754,11 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.agent-no-progress-abort" ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.rate-limit-abort" ]]; then
-  rm -f "$LOG_BASE/.rate-limit-abort"
+  rm -f "$LOG_BASE/.rate-limit-abort" "$LOG_BASE/.rate-limit-abort.tmp."*
+  clear_stop_reason "$SUMMARY_FILE"
+fi
+if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.rate-limit-sleep-interrupt" ]]; then
+  rm -f "$LOG_BASE/.rate-limit-sleep-interrupt" "$LOG_BASE/.rate-limit-sleep-interrupt.tmp."*
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
@@ -1493,6 +1795,11 @@ fi
 # via the {{TRIAGE_CONTEXT_PACK}} slot. When the file is absent (other modes,
 # --no-triage, or triage failure) the slot resolves to empty in lens prompts.
 TRIAGE_CONTEXT_PACK_FILE="$LOG_BASE/triage/context-pack.md"
+POLISH_VOICE_PROFILE_FILE="$LOG_BASE/polish/voice-profile.md"
+export POLISH_VOICE_PROFILE_FILE
+if [[ "$MODE" == "polish" ]]; then
+  mkdir -p "$LOG_BASE/polish/suggestions" || die "Unable to initialize polish suggestions directory"
+fi
 DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
 COLORS_FILE="$SCRIPT_DIR/config/label-colors.json"
 BASE_PROMPTS_DIR="$SCRIPT_DIR/prompts/_base"
@@ -1555,6 +1862,10 @@ if $BASE_WRAPPER_FALLBACK; then
   log_warn "Base wrapper $BASE_PROMPTS_DIR/android.md missing; falling back to deploy.md (server-flavored safety wording on an Android target)"
 fi
 
+# Opt-in startup retention: prune old run dirs in the background (no-op unless
+# REPOLENS_AUTO_CLEAN=true). Never blocks or fails the run.
+maybe_auto_clean
+
 log_info "RepoLens run $RUN_ID starting"
 log_info "Project: $PROJECT_PATH ($FORGE_REPO_SLUG)"
 log_info "Agent: $AGENT | Mode: $MODE | Parallel: $PARALLEL"
@@ -1563,6 +1874,9 @@ log_info "Agent timeout kill grace: ${AGENT_KILL_GRACE_SECS}s"
 log_info "Lens wall-clock budget: ${LENS_MAX_WALL_SECS}s"
 [[ -n "$SPEC_FILE" ]] && log_info "Spec: $SPEC_FILE"
 [[ -n "$MAX_ISSUES" ]] && log_info "Max issues: $MAX_ISSUES (DONE streak: 1)"
+if [[ -n "$MIN_SEVERITY_MODE_EXEMPT" ]]; then
+  log_warn "--min-severity has no effect in ${MIN_SEVERITY_MODE_EXEMPT} mode (this mode does not use severity)"
+fi
 [[ -n "$MIN_SEVERITY" ]] && log_info "Min severity: $MIN_SEVERITY"
 [[ "$MODE" == "discover" ]] && log_info "Discover mode: single-pass brainstorming (DONE streak: 1)"
 [[ "$MODE" == "deploy" ]] && log_info "Deploy mode: single-pass server audit (DONE streak: 1)"
@@ -1571,43 +1885,20 @@ if [[ "$MODE" == "deploy" && "${TARGET_TYPE:-server}" == "android" && -n "${ANDR
 fi
 
 run_remote_preflight() {
-  [[ -n "${REMOTE_TARGET:-}" ]] || return 0
-
-  local remote_dir="$LOG_BASE/.remote"
-  local preflight_log="$remote_dir/preflight.log"
-  local ssh_args=(
-    -o BatchMode=yes
-    -o ConnectTimeout=5
-    -o ControlMaster=auto
-    -o ControlPath="$REPOLENS_REMOTE_SSH_SOCKET"
-    -o ControlPersist=600
-  )
-  local ssh_target="$REMOTE_HOST"
-
-  mkdir -p "$remote_dir"
-  if [[ -n "${REMOTE_KEY:-}" ]]; then
-    ssh_args+=(-i "$REMOTE_KEY")
-  fi
-  if [[ -n "${REMOTE_PORT:-}" ]]; then
-    ssh_args+=(-p "$REMOTE_PORT")
-  fi
-  if [[ -n "${REMOTE_USER:-}" ]]; then
-    ssh_target="${REMOTE_USER}@${REMOTE_HOST}"
-  fi
-
-  if ssh "${ssh_args[@]}" "$ssh_target" 'hostname && uname -a' > "$preflight_log" 2>&1; then
-    log_info "Remote preflight captured: $preflight_log"
-    return 0
-  fi
-
-  local preflight_rc=$?
-  log_warn "Remote preflight failed for $REMOTE_TARGET (exit $preflight_rc); see $preflight_log"
-  return "$preflight_rc"
+  remote_preflight
 }
 
 [[ "$MODE" == "custom" ]] && log_info "Custom mode: change impact analysis (DONE streak: 1)"
 [[ "$MODE" == "opensource" ]] && log_info "Open source mode: readiness audit (DONE streak: 1)"
 [[ "$MODE" == "content" ]] && log_info "Content mode: content audit & creation (DONE streak: 1)"
+[[ "$MODE" == "greenfield" ]] && log_info "Greenfield mode: spec-to-backlog planning (DONE streak: 1)"
+[[ "$MODE" == "polish" ]] && log_info "Polish mode: single-pass polishing (DONE streak: 1)"
+POLISH_SURFACE=""
+if [[ "$MODE" == "polish" ]]; then
+  POLISH_SURFACE="$(detect_polish_surface "$PROJECT_PATH")"
+  export POLISH_SURFACE
+  log_info "Polish surface: $POLISH_SURFACE"
+fi
 [[ "$MODE" == "bugreport" ]] && log_info "Bug report mode: rounds-driven symptom investigation (rounds: $ROUNDS, DONE streak: $DONE_STREAK_REQUIRED)"
 [[ -n "$CHANGE_STATEMENT" ]] && log_info "Change: $CHANGE_STATEMENT"
 [[ -n "$SOURCE_FILE" ]] && log_info "Source: $SOURCE_FILE"
@@ -1623,26 +1914,77 @@ fi
 
 # --- Resolve lens list ---
 resolve_lenses() {
-  # Mode-aware jq filter: discover sees only discover domains, others exclude
-  # them. Deploy mode additionally narrows to a single domain based on
-  # TARGET_TYPE so server and Android lens families never co-run.
+  # Mode-aware jq filter: isolated modes see only their own domains, default
+  # code modes exclude isolated domains. Deploy additionally narrows to a
+  # single domain based on TARGET_TYPE so server and Android lens families
+  # never co-run. Polish additionally narrows visual-only domains to visual
+  # polish surfaces.
   local deploy_domain="deployment"
   if [[ "$MODE" == "deploy" && "${TARGET_TYPE:-server}" == "android" ]]; then
     deploy_domain="android"
   fi
+  local polish_surface="${POLISH_SURFACE:-}"
+  local active_domain_jq='
+    def active_domain:
+      if $mode == "discover" then
+        select(.mode == "discover")
+      elif $mode == "deploy" then
+        select(.mode == "deploy" and .id == $deploy_domain)
+      elif $mode == "opensource" then
+        select(.mode == "opensource")
+      elif $mode == "content" then
+        select(.mode == "content")
+      elif $mode == "greenfield" then
+        select(.mode == "greenfield")
+      elif $mode == "polish" then
+        select(.mode == "polish")
+        | select(
+            ($polish_surface == "")
+            or ((.polish_surfaces // ["visual-ui", "cli-backend"]) | index($polish_surface))
+          )
+      else
+        select(
+          .mode != "discover"
+          and .mode != "deploy"
+          and .mode != "opensource"
+          and .mode != "content"
+          and .mode != "greenfield"
+          and .mode != "polish"
+        )
+      end;
+  '
 
   if [[ -n "$FOCUS" ]]; then
     # Single lens mode — find which domain it belongs to. If a domain filter is
     # also present, use it to disambiguate duplicate lens IDs across domains.
     local found_domain=""
     if [[ -n "$DOMAIN_FILTER" ]]; then
-      found_domain="$(jq -r --arg lens "$FOCUS" --arg d "$DOMAIN_FILTER" --arg mode "$MODE" --arg deploy_domain "$deploy_domain" \
-        '.domains[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | select(.id == $d) | select([.lenses[] | if type == "string" then . else .id end] | index($lens)) | .id' "$DOMAINS_FILE" | head -1)"
-      [[ -n "$found_domain" ]] || die "Lens '$FOCUS' not found in domain '$DOMAIN_FILTER' (mode: $MODE)"
+      found_domain="$(jq -r --arg lens "$FOCUS" --arg d "$DOMAIN_FILTER" --arg mode "$MODE" --arg deploy_domain "$deploy_domain" --arg polish_surface "$polish_surface" \
+        "$active_domain_jq
+        .domains[]
+        | active_domain
+        | select(.id == \$d)
+        | select([.lenses[] | if type == \"string\" then . else .id end] | index(\$lens))
+        | .id" "$DOMAINS_FILE" | head -1)"
+      if [[ -z "$found_domain" ]]; then
+        if [[ "$MODE" == "polish" ]]; then
+          die "Lens '$FOCUS' not available in domain '$DOMAIN_FILTER' for current polish surface: ${polish_surface:-unknown}"
+        fi
+        die "Lens '$FOCUS' not found in domain '$DOMAIN_FILTER' (mode: $MODE)"
+      fi
     else
-      found_domain="$(jq -r --arg lens "$FOCUS" --arg mode "$MODE" --arg deploy_domain "$deploy_domain" \
-        '.domains[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | select([.lenses[] | if type == "string" then . else .id end] | index($lens)) | .id' "$DOMAINS_FILE" | head -1)"
-      [[ -n "$found_domain" ]] || die "Lens '$FOCUS' not found in domains.json (mode: $MODE)"
+      found_domain="$(jq -r --arg lens "$FOCUS" --arg mode "$MODE" --arg deploy_domain "$deploy_domain" --arg polish_surface "$polish_surface" \
+        "$active_domain_jq
+        .domains[]
+        | active_domain
+        | select([.lenses[] | if type == \"string\" then . else .id end] | index(\$lens))
+        | .id" "$DOMAINS_FILE" | head -1)"
+      if [[ -z "$found_domain" ]]; then
+        if [[ "$MODE" == "polish" ]]; then
+          die "Lens '$FOCUS' not available for current polish surface: ${polish_surface:-unknown}"
+        fi
+        die "Lens '$FOCUS' not found in domains.json (mode: $MODE)"
+      fi
     fi
 
     local lens_file="$LENSES_DIR/$found_domain/$FOCUS.md"
@@ -1655,19 +1997,44 @@ resolve_lenses() {
   if [[ -n "$DOMAIN_FILTER" ]]; then
     # Domain filter mode
     local domain_exists=""
-    domain_exists="$(jq -r --arg d "$DOMAIN_FILTER" --arg mode "$MODE" --arg deploy_domain "$deploy_domain" \
-      '.domains[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | select(.id == $d) | .id' "$DOMAINS_FILE")"
-    [[ -n "$domain_exists" ]] || die "Domain '$DOMAIN_FILTER' not found in domains.json (mode: $MODE)"
+    domain_exists="$(jq -r --arg d "$DOMAIN_FILTER" --arg mode "$MODE" --arg deploy_domain "$deploy_domain" --arg polish_surface "$polish_surface" \
+      "$active_domain_jq
+      .domains[]
+      | active_domain
+      | select(.id == \$d)
+      | .id" "$DOMAINS_FILE")"
+    if [[ -z "$domain_exists" ]]; then
+      if [[ "$MODE" == "polish" ]]; then
+        die "Domain '$DOMAIN_FILTER' not available for current polish surface: ${polish_surface:-unknown}"
+      fi
+      die "Domain '$DOMAIN_FILTER' not found in domains.json (mode: $MODE)"
+    fi
 
-    jq -r --arg d "$DOMAIN_FILTER" \
-      '.domains[] | select(.id == $d) | .lenses[] | $d + "/" + (if type == "string" then . else .id end)' "$DOMAINS_FILE"
+    jq -r --arg d "$DOMAIN_FILTER" --arg mode "$MODE" --arg deploy_domain "$deploy_domain" --arg polish_surface "$polish_surface" \
+      "$active_domain_jq
+      .domains[]
+      | active_domain
+      | select(.id == \$d)
+      | .id as \$d
+      | .lenses[]
+      | (if type == \"string\" then {id: ., skip_modes: []} else . end)
+      | select(((.skip_modes // []) | index(\$mode)) | not)
+      | \$d + \"/\" + .id" "$DOMAINS_FILE"
     return
   fi
 
   # All lenses — ordered by domain order
   local _all_lenses
-  _all_lenses="$(jq -r --arg mode "$MODE" --arg deploy_domain "$deploy_domain" \
-    '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$DOMAINS_FILE")"
+  _all_lenses="$(jq -r --arg mode "$MODE" --arg deploy_domain "$deploy_domain" --arg polish_surface "$polish_surface" \
+    "$active_domain_jq
+    .domains
+    | sort_by(.order)[]
+    | active_domain
+    | .id as \$d
+    | .lenses[]
+    | (if type == \"string\" then {id: ., skip_modes: []} else . end)
+    | select(((.skip_modes // []) | index(\$mode)) | not)
+    | \$d + \"/\" + .id" "$DOMAINS_FILE")"
 
   # Issue #228: --relevant-domains <csv> deterministic allowlist. Operator-given
   # CSV of domain ids; intersects with the mode-filtered lens list. Validated
@@ -1678,8 +2045,11 @@ resolve_lenses() {
     while IFS= read -r _rd_allow_id; do
       [[ -z "$_rd_allow_id" ]] && continue
       _rd_allowed["$_rd_allow_id"]=1
-    done < <(jq -r --arg mode "$MODE" --arg deploy_domain "$deploy_domain" \
-      '.domains[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id' "$DOMAINS_FILE")
+    done < <(jq -r --arg mode "$MODE" --arg deploy_domain "$deploy_domain" --arg polish_surface "$polish_surface" \
+      "$active_domain_jq
+      .domains[]
+      | active_domain
+      | .id" "$DOMAINS_FILE")
 
     local -A _rd_keep=()
     local _rd_token _rd_count=0
@@ -1692,6 +2062,9 @@ resolve_lenses() {
       _rd_token="${_rd_token%"${_rd_token##*[![:space:]]}"}"
       [[ -z "$_rd_token" ]] && continue
       if [[ -z "${_rd_allowed[$_rd_token]:-}" ]]; then
+        if [[ "$MODE" == "polish" ]]; then
+          die "--relevant-domains: domain id '$_rd_token' not available for current polish surface: ${polish_surface:-unknown}"
+        fi
         die "--relevant-domains: unknown or wrong-mode domain id '$_rd_token' (mode: $MODE)"
       fi
       _rd_keep["$_rd_token"]=1
@@ -1745,17 +2118,13 @@ resolve_lenses() {
       if (( _kw_match == 1 )); then
         _kw_keep["$_kw_dom"]=1
       fi
-    done < <(jq -r --arg mode "$MODE" --arg deploy_domain "$deploy_domain" '
+    done < <(jq -r --arg mode "$MODE" --arg deploy_domain "$deploy_domain" --arg polish_surface "$polish_surface" "
+      $active_domain_jq
       .domains[]
-      | (if $mode == "discover" then select(.mode == "discover")
-         elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain)
-         elif $mode == "opensource" then select(.mode == "opensource")
-         elif $mode == "content" then select(.mode == "content")
-         else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content")
-         end)
+      | active_domain
       | [.id] + ((.keywords // []) | map(ascii_downcase))
       | @tsv
-    ' "$DOMAINS_FILE")
+    " "$DOMAINS_FILE")
 
     if (( ${#_kw_keep[@]} > 0 )); then
       local _kw_pruned="" _kw_entry _kw_entry_domain
@@ -1824,6 +2193,8 @@ if [[ "$TOTAL_LENSES" -eq 0 ]]; then
   if [[ -n "$DOMAIN_FILTER" ]]; then
     EMPTY_DOMAIN_SELECTED=true
     log_info "Domain '$DOMAIN_FILTER' has no lenses to run."
+  elif [[ "$MODE" == "polish" && "$DRY_RUN" == true ]]; then
+    log_info "Polish mode has no lenses to run yet."
   else
     die "No lenses to run."
   fi
@@ -2425,7 +2796,11 @@ fi
 confirm_autonomous_mode
 confirm_deploy_authorization
 confirm_run
-run_remote_preflight || true
+if [[ -n "${REMOTE_TARGET:-}" ]]; then
+  if run_remote_preflight; then
+    remote_open_master || die "Remote ControlMaster failed for $REMOTE_TARGET"
+  fi
+fi
 maybe_build_android_apk_after_gates
 
 # --- Ensure forge labels ---
@@ -2442,6 +2817,8 @@ ensure_labels() {
     custom)      label_prefix="change" ;;
     opensource)  label_prefix="opensource" ;;
     content)     label_prefix="content" ;;
+    greenfield)  label_prefix="greenfield" ;;
+    polish)      label_prefix="polish" ;;
   esac
 
   local label_set_file
@@ -2457,8 +2834,8 @@ ensure_labels() {
     printf '%s=%s\n' "$label" "$color" >> "$label_set_file"
   done
 
-  # Ensure enhancement label for discover mode
-  if [[ "$MODE" == "discover" ]]; then
+  # Ensure enhancement label for generative issue-creation modes.
+  if [[ "$MODE" == "discover" || "$MODE" == "polish" ]]; then
     printf '%s=%s\n' "enhancement" "a2eeef" >> "$label_set_file"
   fi
 
@@ -2506,7 +2883,14 @@ if $HOSTED && $PARALLEL; then
   PARALLEL=false
 fi
 
-start_status_updater "$RUN_ID" "$LOG_BASE" "$HEARTBEAT_DIR" "$completed_lenses_file" "$SUMMARY_FILE" "$PROJECT_PATH" "$FORGE_REPO_SLUG" "$MODE" "$AGENT" "$PARALLEL" "$MAX_PARALLEL" "${REMOTE_TARGET:-}" "${REMOTE_LABEL:-}"
+if [[ -n "$RESUME_RUN_ID" ]]; then
+  # shellcheck disable=SC2034 # Consumed by write_status_snapshot in sourced lib/status.sh.
+  REPOLENS_STATUS_ALLOW_RUNNING_OVER_TERMINAL=true
+  start_status_updater "$RUN_ID" "$LOG_BASE" "$HEARTBEAT_DIR" "$completed_lenses_file" "$SUMMARY_FILE" "$PROJECT_PATH" "$FORGE_REPO_SLUG" "$MODE" "$AGENT" "$PARALLEL" "$MAX_PARALLEL" "${REMOTE_TARGET:-}" "${REMOTE_LABEL:-}"
+  unset REPOLENS_STATUS_ALLOW_RUNNING_OVER_TERMINAL
+else
+  start_status_updater "$RUN_ID" "$LOG_BASE" "$HEARTBEAT_DIR" "$completed_lenses_file" "$SUMMARY_FILE" "$PROJECT_PATH" "$FORGE_REPO_SLUG" "$MODE" "$AGENT" "$PARALLEL" "$MAX_PARALLEL" "${REMOTE_TARGET:-}" "${REMOTE_LABEL:-}"
+fi
 
 # --- Run a single lens ---
 run_lens() {
@@ -2564,6 +2948,8 @@ run_lens() {
     custom)      label_prefix="change" ;;
     opensource)  label_prefix="opensource" ;;
     content)     label_prefix="content" ;;
+    greenfield)  label_prefix="greenfield" ;;
+    polish)      label_prefix="polish" ;;
   esac
   lens_label="${label_prefix}:${domain}/${lens_id}"
 
@@ -2599,6 +2985,14 @@ run_lens() {
   if [[ -n "${HYPOTHESES_TO_VERIFY_FILE:-}" ]]; then
     vars+="|HYPOTHESES_TO_VERIFY=@${HYPOTHESES_TO_VERIFY_FILE}"
   fi
+  if [[ "$MODE" == "polish" ]]; then
+    vars+="|POLISH_SUGGESTIONS_FILE=$(template_var_escape "$LOG_BASE/polish/suggestions/${domain}--${lens_id}.json")"
+    if [[ -f "${POLISH_VOICE_PROFILE_FILE:-}" ]]; then
+      vars+="|VOICE_PROFILE=@${POLISH_VOICE_PROFILE_FILE}"
+    else
+      vars+="|VOICE_PROFILE=No polish voice profile was generated; use direct repository evidence only."
+    fi
+  fi
   [[ -n "$CHANGE_STATEMENT" ]] && vars+="|CHANGE_STATEMENT=${CHANGE_STATEMENT}"
   if [[ "$MODE" == "bugreport" && -f "$BUG_REPORT_FILE" ]]; then
     vars+="|BUG_REPORT=@${BUG_REPORT_FILE}"
@@ -2623,13 +3017,17 @@ run_lens() {
   fi
 
   # Compose prompt (pass local mode params)
-  local prompt lens_local_dir=""
+  local prompt="" lens_local_dir=""
   if $LOCAL_MODE; then
     lens_local_dir="${CURRENT_ROUND_OUTPUT_DIR:-$OUTPUT_DIR}/$domain/$lens_id"
     mkdir -p "$lens_local_dir"
-    prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")"
+    if [[ "$MODE" != "greenfield" ]]; then
+      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")"
+    fi
   else
-    prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
+    if [[ "$MODE" != "greenfield" ]]; then
+      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
+    fi
   fi
 
   # Create lens log directory
@@ -2725,6 +3123,18 @@ run_lens() {
       effective_timeout_secs="$remaining_wall_secs"
     fi
 
+    if [[ "$MODE" == "greenfield" ]]; then
+      local current_backlog_file iteration_vars
+      current_backlog_file="$lens_log_dir/current-backlog-${iteration}.md"
+      greenfield_write_current_backlog_snapshot "$current_backlog_file" "$lens_local_dir" "$FORGE_REPO_SLUG" || true
+      iteration_vars="${vars}|CURRENT_BACKLOG=@${current_backlog_file}"
+      if $LOCAL_MODE; then
+        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")"
+      else
+        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
+      fi
+    fi
+
     run_agent "$AGENT" "$prompt" "$PROJECT_PATH" "$effective_timeout_secs" "$AGENT_KILL_GRACE_SECS" "$envelope_file" >"$output_file" 2>&1 || agent_rc=$?
     if [[ -s "$envelope_file" && "$output_envelope_file" != "$envelope_file" ]]; then
       mkdir -p "$(dirname "$output_envelope_file")" 2>/dev/null || true
@@ -2771,42 +3181,54 @@ run_lens() {
         rl_sig="${rl_hit%%|*}"
         rl_snip="${rl_hit#*|}"
 
-        if ! $rate_limit_retry_attempted; then
-          local resume_epoch now_epoch wait_delta sleep_seconds resume_label
-          resume_epoch="$(parse_rate_limit_resume_epoch "$output_file" || true)"
-          if [[ "$resume_epoch" =~ ^[0-9]+$ ]]; then
-            now_epoch="$(date +%s)"
-            if [[ "$resume_epoch" -lt $((now_epoch - 60)) ]]; then
-              resume_epoch=""
-            else
-              wait_delta=$((resume_epoch - now_epoch))
-              if [[ "$wait_delta" -lt 0 ]]; then
-                wait_delta=0
+        local rl_resume_epoch="" rl_abort_resume_epoch="" rl_now_epoch="" wait_delta sleep_seconds resume_label
+        rl_resume_epoch="$(parse_rate_limit_resume_epoch "$output_file" || true)"
+        if [[ "$rl_resume_epoch" =~ ^[0-9]+$ ]]; then
+          rl_now_epoch="$(date +%s)"
+          if [[ "$rl_resume_epoch" -lt $((rl_now_epoch - 60)) ]]; then
+            rl_resume_epoch=""
+          else
+            rl_abort_resume_epoch="$rl_resume_epoch"
+            wait_delta=$((rl_resume_epoch - rl_now_epoch))
+            if [[ "$wait_delta" -lt 0 ]]; then
+              wait_delta=0
+            fi
+
+            if ! $rate_limit_retry_attempted && (( wait_delta <= RATE_LIMIT_MAX_SLEEP_SECS )); then
+              sleep_seconds=$((wait_delta + 60))
+              resume_label="$(date -u -d "@$rl_resume_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$rl_resume_epoch")"
+              log_warn "[$domain/$lens_id] Agent rate-limited. Resume at $resume_label (${sleep_seconds}s from now). Sleeping."
+              rate_limit_retry_attempted=true
+              rate_limit_sleep_seconds=$((rate_limit_sleep_seconds + sleep_seconds))
+              local sleep_rc sleep_signal sleep_stopped_reason
+              if env --help 2>&1 | grep -q -- '--default-signal'; then
+                env --default-signal=INT sleep "$sleep_seconds"
+                sleep_rc=$?
+              else
+                sleep "$sleep_seconds"
+                sleep_rc=$?
               fi
 
-              if [[ "$wait_delta" -le "$RATE_LIMIT_MAX_SLEEP_SECS" ]]; then
-                sleep_seconds=$((wait_delta + 60))
-                resume_label="$(date -u -d "@$resume_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' "$resume_epoch")"
-                log_warn "[$domain/$lens_id] Agent rate-limited. Resume at $resume_label (${sleep_seconds}s from now). Sleeping."
-                rate_limit_retry_attempted=true
-                rate_limit_sleep_seconds=$((rate_limit_sleep_seconds + sleep_seconds))
-                if env --help 2>&1 | grep -q -- '--default-signal'; then
-                  if ! env --default-signal=INT sleep "$sleep_seconds"; then
-                    log_warn "[$domain/$lens_id] Rate-limit sleep interrupted."
-                    exit 130
-                  fi
-                elif ! sleep "$sleep_seconds"; then
-                  log_warn "[$domain/$lens_id] Rate-limit sleep interrupted."
-                  exit 130
+              if (( sleep_rc != 0 )); then
+                log_warn "[$domain/$lens_id] Rate-limit sleep interrupted."
+                write_rate_limit_abort_marker "$rl_abort_resume_epoch"
+                if sleep_stopped_reason="$(rate_limit_sleep_stopped_reason "$sleep_rc" 2>/dev/null)"; then
+                  sleep_signal="$(rate_limit_sleep_signal_name "$sleep_rc" 2>/dev/null || printf '%s\n' "UNKNOWN")"
+                  write_rate_limit_sleep_interrupt_marker "$sleep_rc" "$sleep_signal" "$sleep_stopped_reason"
+                  exit "$sleep_rc"
                 fi
-                continue
+
+                log_warn "[$domain/$lens_id] Rate-limit sleep failed with exit $sleep_rc; leaving run pending for resume."
+                exit_status="rate-limited"
+                break
               fi
+              continue
             fi
           fi
         fi
 
         log_error "[$domain/$lens_id] Agent rate-limited / quota exceeded. Aborting run. Matched: $rl_sig. Snippet: $rl_snip"
-        : > "$LOG_BASE/.rate-limit-abort"
+        write_rate_limit_abort_marker "$rl_abort_resume_epoch"
         exit_status="rate-limited"
         break
       fi
@@ -2924,6 +3346,11 @@ run_lens() {
     mark_lens_completed "$lens_entry"
   fi
 
+  # Compress this lens's forensic iteration captures, keeping the most recent
+  # few uncompressed. Forensic-only — synth/verify/--resume read lens-outputs/,
+  # not iteration-*.txt — so this is safe and non-fatal.
+  compress_lens_iterations "$lens_log_dir" "${REPOLENS_ITERATION_KEEP:-3}"
+
   if (( heartbeat_interval > 0 )); then
     stop_lens_heartbeat_writer "$heartbeat_writer_pid" "$heartbeat_file" "$heartbeat_iteration_file" "true"
     restore_exit_trap "$previous_exit_trap"
@@ -2988,10 +3415,38 @@ if [[ "$MODE" == "bugreport" && -z "$FOCUS" && -z "$DOMAIN_FILTER" \
   unset _RELEVANT_DOMAINS_KEEP _PRUNED_LENS_LIST _lens_entry _lens_entry_domain _relevant_domain_id _ORIGINAL_LENS_COUNT
 fi
 
+# --- Polish voice profile (pre-round, shared by every polish lens) ---
+if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "polish" ]] && (( TOTAL_LENSES > 0 )); then
+  if run_polish_voice_profile_prepass "$RUN_ID"; then
+    log_info "Polish voice profile: ready ($POLISH_VOICE_PROFILE_FILE)"
+  elif [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+    log_warn "Polish voice profile: rate-limited - aborting before lens rounds"
+    RUN_ROUNDS_RC=1
+  else
+    die "Polish voice profile pre-pass failed"
+  fi
+fi
+
 # --- Execute lenses ---
 if [[ "$RUN_ROUNDS_RC" -eq 0 ]]; then
   run_rounds "$ROUNDS" LENS_LIST
   RUN_ROUNDS_RC=$?
+fi
+
+# --- Polish ranking (post-rounds, pre-verifier) ---
+if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "polish" ]]; then
+  log_info "Polish ranking: ordering surfaced suggestions"
+  if run_polish_ranking "$RUN_ID"; then
+    log_info "Polish ranking: ranked-suggestions.json promoted"
+    log_info "Polish issue emission: filing ranked lens shortlists"
+    if run_polish_issue_emission "$RUN_ID" "${REPOLENS_POLISH_TOP_N:-3}"; then
+      log_info "Polish issue emission: ranked lens shortlists processed"
+    else
+      die "Polish issue emission failed"
+    fi
+  else
+    die "Polish ranking failed"
+  fi
 fi
 
 # --- Verifier (post-rounds, pre-synthesizer) ---
@@ -3051,6 +3506,8 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]
 
         if (( filing_failed > 0 || filing_missing > 0 )); then
           log_warn "Filing: incomplete batch (failed=$filing_failed, dedup=$filing_dedup, missing=$filing_missing)"
+          REPOLENS_FINAL_STATE="failed"
+          set_stop_reason "$SUMMARY_FILE" "filing-failed"
           RUN_ROUNDS_RC=1
         else
           log_info "Filing: batch complete"
@@ -3060,6 +3517,8 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]
           [[ -n "$filing_line" ]] && log_warn "Filing: $filing_line"
         done <<< "$filing_output"
         log_warn "Filing: failed to dispatch synthesized manifest"
+        REPOLENS_FINAL_STATE="failed"
+        set_stop_reason "$SUMMARY_FILE" "filing-failed"
         RUN_ROUNDS_RC=1
       fi
     fi
@@ -3082,6 +3541,10 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]
         log_warn "Synthesizer: failed to produce a valid manifest"
         ;;
     esac
+    if [[ "$synth_rc" -ne 3 ]]; then
+      REPOLENS_FINAL_STATE="failed"
+      set_stop_reason "$SUMMARY_FILE" "synthesizer-failed"
+    fi
     RUN_ROUNDS_RC=1
   fi
 fi
@@ -3100,12 +3563,13 @@ if declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 && (( ${#_FORGE_WARN_SEEN[@]} > 0
 fi
 
 finalize_summary "$SUMMARY_FILE"
+apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"
 RUN_HEALTH="$(jq -r '.health // "ok"' "$SUMMARY_FILE" 2>/dev/null || printf 'ok')"
 
 case "$RUN_HEALTH" in
   broken)
-    if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == "finished" ]]; then
       REPOLENS_FINAL_STATE="failed"
     fi
     read -r HEALTH_MAX_ITERATIONS HEALTH_RUN_LENSES HEALTH_ISSUES < <(
@@ -3122,7 +3586,7 @@ case "$RUN_HEALTH" in
     log_error "Run health: BROKEN - ${HEALTH_MAX_ITERATIONS:-0}/${HEALTH_RUN_LENSES:-0} run lenses reached max-iterations with ${HEALTH_ISSUES:-0} findings"
     ;;
   no-findings|empty)
-    if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == "finished" ]]; then
       REPOLENS_FINAL_STATE="finished-empty"
     fi
     ;;
@@ -3133,25 +3597,33 @@ log_info "RepoLens run $RUN_ID complete"
 log_info "Summary: $SUMMARY_FILE"
 log_info "=============================="
 
+FINAL_FINDINGS_FILTERED="$(jq -r '.totals.findings_filtered // 0' "$SUMMARY_FILE" 2>/dev/null || printf '0')"
+if [[ "$FINAL_FINDINGS_FILTERED" =~ ^[0-9]+$ ]] && (( 10#$FINAL_FINDINGS_FILTERED > 0 )); then
+  echo "Findings filtered by --min-severity: $FINAL_FINDINGS_FILTERED"
+fi
+
 # Print summary to stdout
 echo ""
 echo "=== RepoLens Run Summary ==="
 jq '.' "$SUMMARY_FILE"
 
-# If the rate-limit detector fired, exit non-zero so CI / operators see the
-# run as failed. The summary is already finalized with stopped_reason and
-# per-lens statuses, so --resume picks up seamlessly.
-if [[ -f "$LOG_BASE/.rate-limit-abort" || -f "$LOG_BASE/.agent-no-progress-abort" \
-    || -f "$LOG_BASE/.systemic-failure-abort" ]]; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+  exit "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+fi
+
+if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+  if is_phase_rate_limit_stopped_reason "$(rate_limit_abort_stopped_reason)"; then
+    exit 1
+  fi
+  exit 3
+fi
+
+if [[ -f "$LOG_BASE/.agent-no-progress-abort" || -f "$LOG_BASE/.systemic-failure-abort" ]]; then
   exit 1
 fi
 
 if [[ "$RUN_ROUNDS_RC" -ne 0 ]]; then
   exit "$RUN_ROUNDS_RC"
-fi
-
-if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
-  exit "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 fi
 
 if [[ "$RUN_HEALTH" == "broken" && "${REPOLENS_ALLOW_DEGENERATE:-false}" != "true" ]]; then

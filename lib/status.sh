@@ -23,9 +23,33 @@ STATUS_UPDATER_PGID=""
 STATUS_LENSES_FILE=""
 # shellcheck disable=SC2034 # Shared with repolens.sh after this file is sourced.
 REPOLENS_FINAL_STATE="finished"
+# shellcheck disable=SC2034 # Shared with repolens.sh after this file is sourced.
+REPOLENS_STOP_REASON=""
+
+set_final_state() {
+  local state="${1:-}" reason="${2:-}"
+
+  case "$state" in
+    finished|finished-empty|failed|rate-limit-pending|interrupted) ;;
+    *) return 2 ;;
+  esac
+
+  # shellcheck disable=SC2034 # Shared with callers after this file is sourced.
+  REPOLENS_FINAL_STATE="$state"
+  if (($# >= 2)); then
+    # shellcheck disable=SC2034 # Shared with callers after this file is sourced.
+    REPOLENS_STOP_REASON="$reason"
+  fi
+
+  [[ -n "$reason" ]] || return 0
+  [[ -n "${SUMMARY_FILE:-}" && -f "${SUMMARY_FILE:-}" ]] || return 0
+  declare -F set_stop_reason >/dev/null 2>&1 || return 0
+
+  set_stop_reason "$SUMMARY_FILE" "$reason" || true
+}
 
 _STATUS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/locking.sh
+# shellcheck source=/dev/null
 source "$_STATUS_LIB_DIR/locking.sh"
 
 status_log_warn() {
@@ -151,6 +175,25 @@ cleanup_status_snapshot_temps() {
     2>/dev/null || true
 }
 
+status_rate_limit_next_action_earliest_at() {
+  local log_base="$1" marker key value earliest_at=""
+
+  marker="$log_base/.rate-limit-abort"
+  [[ -f "$marker" ]] || { printf '\n'; return 0; }
+
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    case "$key" in
+      earliest_at) earliest_at="$value" ;;
+    esac
+  done < "$marker"
+
+  if [[ "$earliest_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    printf '%s\n' "$earliest_at"
+  else
+    printf '\n'
+  fi
+}
+
 _write_status_snapshot_locked() {
   local state="$1" run_id="$2" log_base="$3" heartbeat_dir="$4" completed_file="$5" summary_file="$6"
   local project="$7" repo="$8" mode="$9" agent="${10}" parallel="${11}" max_parallel="${12}" lenses_file="${13}"
@@ -158,12 +201,12 @@ _write_status_snapshot_locked() {
   local status_file="$log_base/status.json"
   local tmp_file="${status_file}.tmp.${BASHPID}"
   local active_tmp completed_tmp lenses_tmp
-  local now_iso now_epoch started_at issues_created health
+  local now_iso now_epoch started_at issues_created health stopped_reason next_action_earliest_at
   local heartbeat_file
 
-  if [[ "$state" == "running" && -f "$status_file" ]]; then
+  if [[ "$state" == "running" && -f "$status_file" && "${REPOLENS_STATUS_ALLOW_RUNNING_OVER_TERMINAL:-false}" != "true" ]]; then
     case "$(jq -r '.state // empty' "$status_file" 2>/dev/null || true)" in
-      finished|finished-empty|failed|interrupted)
+      finished|finished-empty|failed|interrupted|rate-limit-pending)
         return 0
         ;;
     esac
@@ -200,6 +243,14 @@ _write_status_snapshot_locked() {
   health=""
   if [[ -f "$summary_file" ]]; then
     health="$(jq -r '.health // empty' "$summary_file" 2>/dev/null || true)"
+  fi
+  stopped_reason=""
+  if [[ -f "$summary_file" ]]; then
+    stopped_reason="$(jq -r '.stopped_reason // empty' "$summary_file" 2>/dev/null || true)"
+  fi
+  next_action_earliest_at=""
+  if [[ "$state" == "rate-limit-pending" ]]; then
+    next_action_earliest_at="$(status_rate_limit_next_action_earliest_at "$log_base")"
   fi
 
   if [[ "$parallel" != "true" && "$parallel" != "false" ]]; then
@@ -278,6 +329,8 @@ _write_status_snapshot_locked() {
     --arg updated_at "$now_iso" \
     --arg state "$state" \
     --arg health "$health" \
+    --arg stopped_reason "$stopped_reason" \
+    --arg next_action_earliest_at "$next_action_earliest_at" \
     --argjson issues_created "$issues_created" \
     --slurpfile active_raw <(jq -s 'sort_by(.domain, .lens_id)' "$active_tmp" 2>/dev/null || printf '[]') \
     --rawfile completed_raw "$completed_tmp" \
@@ -311,6 +364,7 @@ _write_status_snapshot_locked() {
           updated_at: $updated_at,
           state: $state,
           health: (if $health == "" then null else $health end),
+          stopped_reason: (if $stopped_reason == "" then null else $stopped_reason end),
           total_lenses: $total,
           counts: {
             queued: ($queued | length),
@@ -323,6 +377,11 @@ _write_status_snapshot_locked() {
           queued: $queued,
           completed: $completed
         }
+      | if $state == "rate-limit-pending" and $next_action_earliest_at != "" then
+          . + {next_action: {earliest_at: $next_action_earliest_at}}
+        else
+          .
+        end
     ' > "$tmp_file" && mv -f "$tmp_file" "$status_file"
 
   local rc=$?

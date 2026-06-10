@@ -48,6 +48,7 @@ RepoLens runs AI agents with shell access against target repositories and server
 - The `--dangerously-skip-permissions` flag grants agents autonomous operation without confirmation prompts
 - Prompt templates are user-facing and should be reviewed for injection risks
 - `--spec` file content is embedded in agent prompts — known tag-breakout vectors are sanitized, but only use spec files from trusted sources
+- In `--mode greenfield`, current open issue bodies or local draft markdown files can also be embedded in agent prompts for duplicate checks. Treat forge issues and local draft files as untrusted prompt input.
 
 ## Supported Versions
 

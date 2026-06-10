@@ -254,6 +254,28 @@ assert_eq "real registry audit lens count unchanged" \
   "$real_count_expected" "$real_count_actual"
 assert_not_contains "real registry resolves with no jq errors" "jq: error" "$real_out"
 
+echo ""
+echo "Test 8b: real config/domains.json resolves greenfield mode to planner only"
+real_greenfield_active="$(
+  unset FOCUS DOMAIN_FILTER TARGET_TYPE
+  MODE=greenfield LENSES_DIR="$SCRIPT_DIR/prompts/lenses" \
+    DOMAINS_FILE="$SCRIPT_DIR/config/domains.json" \
+    _rounds_meta_active_lens_entries \
+      "$SCRIPT_DIR/prompts/lenses" "$SCRIPT_DIR/config/domains.json" 2>&1
+)"
+assert_eq "greenfield active meta lens list contains only backlog planner" \
+  "greenfield/backlog-planning" "$real_greenfield_active"
+
+real_greenfield_all="$(
+  unset FOCUS DOMAIN_FILTER TARGET_TYPE
+  MODE=greenfield LENSES_DIR="$SCRIPT_DIR/prompts/lenses" \
+    DOMAINS_FILE="$SCRIPT_DIR/config/domains.json" \
+    _rounds_meta_all_lens_entries \
+      "$SCRIPT_DIR/prompts/lenses" "$SCRIPT_DIR/config/domains.json" 2>&1
+)"
+assert_eq "greenfield all meta lens list contains only backlog planner" \
+  "greenfield/backlog-planning" "$real_greenfield_all"
+
 # ---------------------------------------------------------------------------
 # repolens.sh jq filters — the schema change touches 3 additional sites in
 # the CLI entry point. _rounds_meta_active_lens_entries (above) is just one

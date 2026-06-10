@@ -6,6 +6,12 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 # Tests for issue #228: when neither `--scope-by-keywords` nor
 # `REPOLENS_SCOPE_BY_KEYWORDS` is set — and no `--relevant-domains` CSV is
@@ -100,12 +106,13 @@ extract_lens_entries() {
 
 # Compute the bugreport-mode lens total dynamically from domains.json using
 # the same selection predicate the production resolve_lenses() catch-all
-# uses. NOTE: bugreport is a "default" mode — it includes every domain whose
-# mode is unset OR is one of the non-exclusive flavours.
+# uses. NOTE: bugreport is a "default" mode, so it includes domains whose
+# mode is unset and excludes all mode-specific domains.
 expected_bugreport_count="$(jq '
   [.domains[]
    | select(.mode != "discover" and .mode != "deploy"
-            and .mode != "opensource" and .mode != "content")
+            and .mode != "opensource" and .mode != "content"
+            and .mode != "greenfield" and .mode != "polish")
    | .lenses | length] | add
 ' "$DOMAINS_FILE")"
 

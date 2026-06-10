@@ -79,6 +79,16 @@ echo ""
 
 readme_content="$(cat "$README")"
 
+mapfile -t cli_modes < <(
+  bash "$SCRIPT_DIR/repolens.sh" --help |
+    awk '
+      /^Modes:/ { in_modes = 1; next }
+      in_modes && /^$/ { exit }
+      in_modes && /^[[:space:]]+[a-z][a-z0-9-]*[[:space:]]/ { print $1 }
+    '
+)
+actual_mode_count="${#cli_modes[@]}"
+
 # =====================================================================
 # 1. License badge — must say Apache-2.0, not MIT
 # =====================================================================
@@ -99,8 +109,8 @@ assert_not_contains "no MIT in license section" "MIT" "$last_line_area"
 
 echo ""
 echo "Test 3: Lens count matches domains.json"
-actual_count="$(jq '[.domains[].lenses | length] | add' "$DOMAINS_FILE")"
-assert_contains "README has actual lens count ($actual_count)" "$actual_count" "$readme_content"
+actual_count="$(jq '[.domains[] | select(.mode != "polish") | .lenses | length] | add' "$DOMAINS_FILE")"
+assert_contains "README has documented non-polish lens count ($actual_count)" "$actual_count" "$readme_content"
 
 echo ""
 echo "Test 4: Old lens count '109' is gone"
@@ -112,18 +122,19 @@ assert_not_contains "no stale '109' count" "109 expert" "$readme_content"
 
 echo ""
 echo "Test 5: Domain count matches domains.json"
-actual_domains="$(jq '.domains | length' "$DOMAINS_FILE")"
-assert_contains "README has actual domain count ($actual_domains)" "$actual_domains" "$readme_content"
+actual_domains="$(jq '[.domains[] | select(.mode != "polish")] | length' "$DOMAINS_FILE")"
+assert_contains "README has documented non-polish domain count ($actual_domains)" "$actual_domains" "$readme_content"
 
 # =====================================================================
-# 4. All 9 modes documented
+# 4. All CLI modes documented
 # =====================================================================
 
 echo ""
-echo "Test 6: All 9 modes are documented as modes"
+echo "Test 6: All CLI modes are documented as modes"
+assert_contains "README current mode count sentence" "RepoLens supports $actual_mode_count modes." "$readme_content"
 # Each mode must appear backtick-quoted (e.g. `discover`) to count as documented as a mode,
 # not just mentioned as a random word (e.g. "discovery" or "deployment").
-for mode in audit feature bugfix bugreport discover deploy custom opensource content; do
+for mode in "${cli_modes[@]}"; do
   TOTAL=$((TOTAL + 1))
   if grep -qE "\`$mode\`" <<< "$readme_content"; then
     PASS=$((PASS + 1))
@@ -155,6 +166,10 @@ assert_matches "opensource mode description" '(?i)`opensource`.*open.source|open
 echo ""
 echo "Test 11: Content mode has meaningful description"
 assert_matches "content mode description" '(?i)`content`.*content|content.*`content`' "$readme_content"
+
+echo ""
+echo "Test 11b: Polish mode has meaningful description"
+assert_matches "polish mode description" '(?i)`polish`.*polish|polish.*`polish`|`polish`.*shortlist|shortlist.*`polish`' "$readme_content"
 
 # =====================================================================
 # 5. Install instructions
@@ -250,7 +265,7 @@ echo ""
 echo "Test 26: New domains documented"
 # These domains are missing from the old README entirely. Check for their id or display name.
 # Use word-boundary-aware matching to avoid false positives (e.g., "deployment safety" != domain "deployment")
-for domain in "toolgate" "discovery" "deployment" "open-source-readiness" "content-quality" "visual-design" "design-system" "interaction-design" "information-architecture" "adaptive-ux" "ux-antipatterns"; do
+for domain in "toolgate" "discovery" "deployment" "open-source-readiness" "content-quality" "visual-design" "design-system" "interaction-design" "information-architecture" "adaptive-ux" "ux-antipatterns" "fluency" "effort-signal" "hedonic"; do
   domain_name="$(jq -r --arg d "$domain" '.domains[] | select(.id == $d) | .name' "$DOMAINS_FILE")"
   TOTAL=$((TOTAL + 1))
   # Check for domain appearing as a documented domain (in a table row, heading, or backtick-quoted)
@@ -304,6 +319,9 @@ assert_matches "discovery domain documented" '(?i)discover.*14 lenses|14.*discov
 assert_matches "deployment domain documented" '(?i)deploy.*26 lenses|26.*deploy|`deployment`' "$readme_content"
 assert_matches "open-source-readiness domain documented" '(?i)opensource.*13 lenses|13.*opensource|`open-source-readiness`|open.source.readiness' "$readme_content"
 assert_matches "content-quality domain documented" '(?i)content.*17 lenses|17.*content|`content-quality`|content.quality' "$readme_content"
+assert_matches "fluency domain documented" '(?i)polish.*fluency|fluency.*polish|`fluency`' "$readme_content"
+assert_matches "effort-signal domain documented" '(?i)polish.*effort-signal|effort-signal.*polish|`effort-signal`' "$readme_content"
+assert_matches "hedonic domain documented" '(?i)polish.*hedonic|hedonic.*polish|`hedonic`' "$readme_content"
 
 # =====================================================================
 # 14. Quickstart / first-run example

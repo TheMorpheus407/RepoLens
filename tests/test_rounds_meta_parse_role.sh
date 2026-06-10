@@ -163,6 +163,7 @@ assert_eq "tuple parse leaves role empty for bare entry" "" "$role"
 
 echo ""
 echo "Test 3: parser preserves role/focus/anchor/exclude on LENS"
+REPOLENS_META_ORCH_DISPATCH_CAP=4
 cat > "$TMPDIR/meta-role.txt" <<'EOF'
 ## Round 2 dispatch plan
 - LENS: injection role=deeper focus=`lib/db.dart:142` anchor=finding-1 - drill into a prior cluster.
@@ -188,6 +189,7 @@ assert_contains "dispatch keeps missed_angle on GENERIC" "focus=\"auth callback 
 assert_contains "dispatch keeps exclude on GENERIC" "exclude=f3" "$dispatch"
 assert_contains "dispatch keeps CUSTOM directive" "CUSTOM: auth-followup" "$dispatch"
 assert_contains "dispatch preserves CUSTOM draft prompt" "Investigate token refresh path" "$dispatch"
+unset REPOLENS_META_ORCH_DISPATCH_CAP
 
 echo ""
 echo "Test 4: parser still accepts flat LENS (backward compatibility)"

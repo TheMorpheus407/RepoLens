@@ -25,6 +25,7 @@ source "$SCRIPT_DIR/tests/status_test_lib.sh"
 source "$SCRIPT_DIR/lib/status.sh"
 trap status_cleanup EXIT
 
+# shellcheck disable=SC2329 # Invoked indirectly by write_status_snapshot in sourced lib/status.sh.
 log_warn() {
   :
 }
@@ -53,6 +54,7 @@ cat > "$SUMMARY_FILE" <<'JSON'
 JSON
 printf '%s\n' "security/xss" > "$LENSES_FILE"
 
+# shellcheck disable=SC2329 # Command override invoked by write_status_snapshot.
 mv() {
   local args=("$@")
   local argc="${#args[@]}"
@@ -159,6 +161,55 @@ write_status_snapshot \
   "$LENSES_FILE"
 
 assert_jq "Running snapshot does not overwrite existing interrupted terminal state" "$STATUS_FILE" '.state == "interrupted"'
+
+write_status_snapshot \
+  "rate-limit-pending" \
+  "status-race" \
+  "$LOG_BASE" \
+  "$HEARTBEAT_DIR" \
+  "$COMPLETED_FILE" \
+  "$SUMMARY_FILE" \
+  "$STATUS_TEST_TMPDIR/project" \
+  "owner/repo" \
+  "audit" \
+  "codex" \
+  "true" \
+  "2" \
+  "$LENSES_FILE"
+
+write_status_snapshot \
+  "running" \
+  "status-race" \
+  "$LOG_BASE" \
+  "$HEARTBEAT_DIR" \
+  "$COMPLETED_FILE" \
+  "$SUMMARY_FILE" \
+  "$STATUS_TEST_TMPDIR/project" \
+  "owner/repo" \
+  "audit" \
+  "codex" \
+  "true" \
+  "2" \
+  "$LENSES_FILE"
+
+assert_jq "Running snapshot does not overwrite existing rate-limit-pending terminal state" "$STATUS_FILE" '.state == "rate-limit-pending"'
+
+REPOLENS_STATUS_ALLOW_RUNNING_OVER_TERMINAL=true write_status_snapshot \
+  "running" \
+  "status-race" \
+  "$LOG_BASE" \
+  "$HEARTBEAT_DIR" \
+  "$COMPLETED_FILE" \
+  "$SUMMARY_FILE" \
+  "$STATUS_TEST_TMPDIR/project" \
+  "owner/repo" \
+  "audit" \
+  "codex" \
+  "true" \
+  "2" \
+  "$LENSES_FILE"
+
+assert_jq "Resume override allows running snapshot to replace terminal state" "$STATUS_FILE" '.state == "running"'
 
 touch \
   "$LOG_BASE/status.json.tmp.123" \

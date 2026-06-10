@@ -151,20 +151,50 @@ _synthesize_normalize_manifest_severities() {
   rm -f "$next"
 }
 
+_synthesize_content_mode_enabled() {
+  local mode="${REPOLENS_MODE:-${MODE:-}}"
+  [[ "$mode" == "content" ]]
+}
+
+_synthesize_log_min_severity_info() {
+  local message="$1"
+  if declare -F log_info >/dev/null 2>&1 && [[ -n "${_REPOLENS_LOG_FILE:-}" ]]; then
+    log_info "$message"
+  fi
+}
+
+_synthesize_log_min_severity_warn() {
+  local message="$1"
+  if declare -F log_warn >/dev/null 2>&1; then
+    log_warn "$message"
+  else
+    printf '[WARN] %s\n' "$message" >&2
+  fi
+}
+
 # _synthesize_filter_manifest_min_severity <manifest_path> <min_severity> [verification_path]
 #   Filters create-issue manifest entries below the configured severity
-#   threshold. Comment cross-link actions attached to filtered entries are
-#   preserved in a sidecar consumed by lib/filing.sh, but only when the
-#   original entry would pass the same WRONG-source verification rule used for
-#   manifest entries.
+#   threshold. Comment cross-link actions attached to valid severity-bearing
+#   entries below the threshold are preserved in a sidecar consumed by
+#   lib/filing.sh, but only when the original entry would pass the same
+#   WRONG-source verification rule used for manifest entries.
 _synthesize_filter_manifest_min_severity() {
-  local manifest="${1:-}" min_severity="${2:-}" verification="${3:-}" tmp preserved preserved_tmp verification_json
+  local manifest="${1:-}" min_severity="${2:-}" verification="${3:-}" tmp preserved preserved_tmp verification_json content_mode
 
   [[ -n "$manifest" && -f "$manifest" ]] || return 2
   [[ -n "$min_severity" ]] || return 0
 
   min_severity="$(severity_normalize "$min_severity")"
   [[ -n "$min_severity" ]] || return 2
+
+  if ! _synthesize_normalize_manifest_severities "$manifest"; then
+    return 1
+  fi
+
+  content_mode=0
+  if _synthesize_content_mode_enabled; then
+    content_mode=1
+  fi
 
   tmp="${manifest}.filtered.$$"
   preserved="$(dirname "$manifest")/cross-link-actions.preserved.json"
@@ -177,18 +207,64 @@ _synthesize_filter_manifest_min_severity() {
     }
   fi
 
-  if ! jq --arg min "$min_severity" '
+  local filter_decisions
+  filter_decisions="$(jq -c --arg min "$min_severity" --argjson content_mode "$content_mode" '
+    def is_content_priority_proposal:
+      (.title // "" | test("^\\[[Pp][0-3]\\][[:space:]]*"));
     def order: ["low","medium","high","critical"];
     def rank($s): order | index($s);
-    [ .[] | select(rank(.severity) >= rank($min)) ]
+    .[]
+    | select(type == "object")
+    | select(($content_mode == 1 and is_content_priority_proposal) | not)
+    | rank(.severity) as $severity_rank
+    | if $severity_rank == null then
+        {
+          type: "invalid",
+          domain: (.domain // "<unknown>" | tostring),
+          lens: (.lens // "<unknown>" | tostring),
+          title: (.title // "<untitled>" | tostring),
+          severity: (if has("severity") then (.severity // "" | tostring) else "" end)
+        }
+      elif $severity_rank < rank($min) then
+        {
+          type: "below",
+          domain: (.domain // "<unknown>" | tostring),
+          lens: (.lens // "<unknown>" | tostring),
+          title: (.title // "<untitled>" | tostring),
+          severity: (.severity | tostring)
+        }
+      else empty end
+  ' "$manifest" 2>/dev/null)" || {
+    rm -f "$tmp" "$preserved_tmp"
+    return 1
+  }
+
+  if ! jq --arg min "$min_severity" --argjson content_mode "$content_mode" '
+    def is_content_priority_proposal:
+      (.title // "" | test("^\\[[Pp][0-3]\\][[:space:]]*"));
+    def order: ["low","medium","high","critical"];
+    def rank($s): order | index($s);
+    def keep_for_min_severity:
+      if $content_mode == 1 and is_content_priority_proposal then true
+      elif rank(.severity) == null then false
+      else rank(.severity) >= rank($min)
+      end;
+    [ .[] | select(keep_for_min_severity) ]
   ' "$manifest" > "$tmp"; then
     rm -f "$tmp"
     return 1
   fi
 
-  if ! jq --arg min "$min_severity" --argjson verification "$verification_json" '
+  if ! jq --arg min "$min_severity" --argjson content_mode "$content_mode" --argjson verification "$verification_json" '
+    def is_content_priority_proposal:
+      (.title // "" | test("^\\[[Pp][0-3]\\][[:space:]]*"));
     def order: ["low","medium","high","critical"];
     def rank($s): order | index($s);
+    def preserve_as_below_threshold:
+      if $content_mode == 1 and is_content_priority_proposal then false
+      elif rank(.severity) == null then false
+      else rank(.severity) < rank($min)
+      end;
     def wrong_only_paths($v):
       ([ $v[]? | select(.status == "WRONG") | .source_finding_path // empty ] | unique) as $wrong
       | [ $v[]? | select(.status != "WRONG") | .source_finding_path // empty ] as $notwrong
@@ -197,7 +273,7 @@ _synthesize_filter_manifest_min_severity() {
     wrong_only_paths($verification) as $wrong_only
     | [
       .[]
-      | select(rank(.severity) < rank($min))
+      | select(preserve_as_below_threshold)
       | . as $entry
       | (($entry.source_finding_paths // []) | length) as $path_count
       | ([($entry.source_finding_paths // [])[] | . as $path | select(($wrong_only | index($path)) != null)] | length) as $wrong_count
@@ -221,7 +297,36 @@ _synthesize_filter_manifest_min_severity() {
     }
   fi
 
-  mv "$tmp" "$manifest"
+  if ! mv "$tmp" "$manifest"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  local filtered_count=0
+  if [[ -n "$filter_decisions" ]]; then
+    local decision decision_type domain lens title severity
+    while IFS= read -r decision; do
+      [[ -n "$decision" ]] || continue
+      decision_type="$(jq -r '.type' <<< "$decision")"
+      domain="$(jq -r '.domain' <<< "$decision")"
+      lens="$(jq -r '.lens' <<< "$decision")"
+      title="$(jq -r '.title' <<< "$decision")"
+      severity="$(jq -r '.severity' <<< "$decision")"
+      case "$decision_type" in
+        below)
+          _synthesize_log_min_severity_info "[$domain/$lens] Dropped finding \"$title\" (severity=$severity < min=$min_severity)"
+          ;;
+        invalid)
+          _synthesize_log_min_severity_warn "[$domain/$lens] Finding \"$title\" has invalid severity: \"$severity\" (expected critical, high, medium, or low) - skipping"
+          ;;
+      esac
+      filtered_count=$((filtered_count + 1))
+    done <<< "$filter_decisions"
+  fi
+
+  if (( filtered_count > 0 )) && [[ -n "${SUMMARY_FILE:-}" ]] && declare -F increment_findings_filtered >/dev/null 2>&1; then
+    increment_findings_filtered "$SUMMARY_FILE" "$filtered_count" || return 1
+  fi
 }
 
 # _synthesize_title_ngrams <normalized_title>
@@ -311,7 +416,11 @@ validate_manifest() {
     return 1
   fi
 
-  local errors=0 entry_count
+  local errors=0 entry_count content_mode
+  content_mode=0
+  if _synthesize_content_mode_enabled; then
+    content_mode=1
+  fi
   entry_count="$(jq 'length' "$manifest")" || return 1
 
   if (( entry_count == 0 )); then
@@ -324,12 +433,16 @@ validate_manifest() {
   fi
 
   local schema_errors
-  schema_errors="$(jq -r '
+  schema_errors="$(jq -r --argjson content_mode "$content_mode" '
+    def is_content_priority_proposal:
+      (.title // "" | test("^\\[[Pp][0-3]\\][[:space:]]*"));
     def is_nonempty_string: type == "string" and length > 0;
     def severities: ["critical","high","medium","low"];
     def granularities: ["independent","cluster"];
     def cross_link_types: ["comment","reopen-suggestion"];
     def verification_statuses: ["verified","stale","wrong","unknown"];
+    def severity_required($v):
+      ($content_mode != 1) or (($v | is_content_priority_proposal) | not);
 
     to_entries[] as $e
     | $e.key as $i
@@ -342,7 +455,7 @@ validate_manifest() {
         if ($v.root_cause_category // "" | is_nonempty_string | not) then "entry \($i): missing or empty root_cause_category" else empty end,
         if ($v.domain // "" | is_nonempty_string | not) then "entry \($i): missing or empty domain" else empty end,
         if ($v.lens // "" | is_nonempty_string | not) then "entry \($i): missing or empty lens" else empty end,
-        if (severities | index($v.severity // "")) == null then "entry \($i): invalid severity \($v.severity // null | tostring)" else empty end,
+        if severity_required($v) and (severities | index($v.severity // "")) == null then "entry \($i): invalid severity \($v.severity // null | tostring)" else empty end,
         if (granularities | index($v.granularity // "")) == null then "entry \($i): invalid granularity \($v.granularity // null | tostring)" else empty end,
         if ($v | has("verification_status")) and (verification_statuses | index($v.verification_status // "")) == null then "entry \($i): invalid verification_status \($v.verification_status // null | tostring)" else empty end,
         if ($v.source_finding_paths | type) != "array" then "entry \($i): source_finding_paths must be an array"
@@ -710,13 +823,6 @@ run_synthesizer() {
     return 1
   fi
 
-  if ! validate_manifest "$candidate"; then
-    rm -f "$candidate"
-    rm -f "$final_dir/manifest.json"
-    rm -f "$final_dir/cross-link-actions.preserved.json"
-    return 5
-  fi
-
   if [[ -n "${REPOLENS_MIN_SEVERITY:-}" ]]; then
     if ! _synthesize_filter_manifest_min_severity "$candidate" "$REPOLENS_MIN_SEVERITY" "$final_dir/verification.json"; then
       echo "run_synthesizer: failed to apply min-severity filter" >&2
@@ -725,6 +831,13 @@ run_synthesizer() {
       rm -f "$final_dir/cross-link-actions.preserved.json"
       return 1
     fi
+  fi
+
+  if ! validate_manifest "$candidate"; then
+    rm -f "$candidate"
+    rm -f "$final_dir/manifest.json"
+    rm -f "$final_dir/cross-link-actions.preserved.json"
+    return 5
   fi
 
   # Last line of defense: even if the synthesizer prompt is bypassed or buggy,

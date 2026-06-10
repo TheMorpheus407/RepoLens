@@ -133,6 +133,7 @@ LOG_LINES=()
 
 echo ""
 echo "Test 1: parser extracts valid directives and drops hallucinated lenses"
+REPOLENS_META_ORCH_DISPATCH_CAP=4
 cat > "$TMPDIR/meta-output.txt" <<'EOF'
 ## Round 2 dispatch plan
 LENS: injection
@@ -169,6 +170,7 @@ assert_contains "dispatch preserves bullet custom prompt block" "Review this ris
 assert_contains "hypotheses contains extracted block" "Verify auth follow-up." "$hypotheses"
 assert_not_contains "hypotheses stop at next heading" "This should not be copied" "$hypotheses"
 assert_contains "invalid lens warning is logged" "hallucinated-lens" "${LOG_LINES[*]}"
+unset REPOLENS_META_ORCH_DISPATCH_CAP
 
 echo ""
 echo "Test 1b: prompt vars escape pipe-delimited injection"
@@ -458,12 +460,12 @@ run_rounds 2 LENSES
 rc=$?
 assert_eq "custom-only dispatch run exits successfully" "0" "$rc"
 assert_eq "round 2 runs only generated custom lens" \
-          "security/injection code-quality/dead-code custom/risk-review" \
+          "security/injection code-quality/dead-code custom/r2-risk-review" \
           "${RUN_LENS_CALLS[*]}"
 assert_contains "custom-only dispatch handoff is logged" \
                 "Using meta-orchestrator dispatch (1 lens(es))" \
                 "${LOG_LINES[*]}"
-custom_lens_file="$LOG_BASE/rounds/round-1/custom-lenses/custom/risk-review.md"
+custom_lens_file="$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-risk-review.md"
 if [[ -f "$custom_lens_file" ]]; then
   custom_lens_state="present"
 else

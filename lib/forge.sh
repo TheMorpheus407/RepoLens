@@ -532,7 +532,8 @@ forge_label_create() {
 #   gh  → `gh label list -R <owner/repo> --limit 1000 --json name`, parsed via jq.
 #   tea → `tea labels list ... --output json`, bound to
 #         $FORGE_PROJECT_PATH/$FORGE_REMOTE_NAME or $FORGE_TEA_LOGIN, parsed via jq.
-#   fj  → `fj -H <host> --style json repo labels <owner/repo> list`, parsed via jq.
+#   fj  → `fj -H <host> repo labels <owner/repo> list`, parsed from official
+#         minimal/CSV-like output.
 forge_label_list_names() {
   local repo="${1:-}"
   [[ -n "$repo" ]] \
@@ -616,10 +617,10 @@ forge_label_list_names() {
       local fj_err fj_out fj_rc
       fj_err="$(mktemp 2>/dev/null)" || fj_err=""
       if [[ -n "$fj_err" ]]; then
-        fj_out="$(fj -H "$FORGE_HOST" --style json repo labels "$repo" list 2>"$fj_err")"
+        fj_out="$(fj -H "$FORGE_HOST" repo labels "$repo" list 2>"$fj_err")"
         fj_rc=$?
       else
-        fj_out="$(fj -H "$FORGE_HOST" --style json repo labels "$repo" list 2>/dev/null)"
+        fj_out="$(fj -H "$FORGE_HOST" repo labels "$repo" list 2>/dev/null)"
         fj_rc=$?
       fi
       if [[ "$fj_rc" -ne 0 ]]; then
@@ -634,13 +635,66 @@ forge_label_list_names() {
       [[ -n "$fj_err" ]] && rm -f "$fj_err"
 
       local parsed
-      if ! parsed="$(printf '%s' "$fj_out" | jq -r '.[].name // empty' 2>/dev/null)"; then
-        _forge_warn "forge_label_list_names: jq failed to parse fj output for repo=$repo"
-        return 1
-      fi
-      if [[ -z "$parsed" && -n "$fj_out" && "$fj_out" != "[]" ]]; then
-        _forge_warn "forge_label_list_names: jq failed to parse fj output for repo=$repo"
-        return 1
+      if [[ -z "$fj_out" ]]; then
+        return 0
+      elif [[ "$fj_out" =~ ^[[:space:]]*[\[\{] ]]; then
+        if ! parsed="$(printf '%s' "$fj_out" | jq -r '
+          def items:
+            if type == "array" then .
+            elif (.labels? | type) == "array" then .labels
+            elif (.data? | type) == "array" then .data
+            else []
+            end;
+          items[]?.name // empty
+        ' 2>/dev/null)"; then
+          _forge_warn "forge_label_list_names: jq failed to parse fj output for repo=$repo"
+          return 1
+        fi
+      else
+        if ! parsed="$(printf '%s\n' "$fj_out" | awk '
+          function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+          }
+          BEGIN { FS = ","; name_col = 0; mode = "" }
+          /^[[:space:]]*$/ { next }
+          mode == "" {
+            first = trim($0)
+            if (index(first, ",") > 0) {
+              for (i = 1; i <= NF; i++) {
+                field = tolower(trim($i))
+                if (field == "name") {
+                  name_col = i
+                }
+              }
+              if (name_col == 0) {
+                exit 2
+              }
+              mode = "csv"
+              next
+            }
+            mode = "minimal"
+          }
+          mode == "csv" {
+            if (NF < name_col) {
+              exit 2
+            }
+            name = trim($name_col)
+            if (name != "") {
+              print name
+            }
+            next
+          }
+          mode == "minimal" {
+            name = trim($0)
+            if (name != "") {
+              print name
+            }
+          }
+        ' 2>/dev/null)"; then
+          _forge_warn "forge_label_list_names: failed to parse fj output for repo=$repo"
+          return 1
+        fi
       fi
       [[ -n "$parsed" ]] && printf '%s\n' "$parsed"
       return 0
@@ -818,6 +872,189 @@ forge_label_bootstrap() {
   return 0
 }
 
+_forge_backlog_inline_text() {
+  local value="${1:-}" max_len="${2:-3000}"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//$'\t'/ }"
+  while [[ "$value" == *"  "* ]]; do
+    value="${value//  / }"
+  done
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ "$max_len" =~ ^[0-9]+$ && "$max_len" -gt 0 && "${#value}" -gt "$max_len" ]]; then
+    value="${value:0:max_len}..."
+  fi
+  printf '%s' "$value"
+}
+
+_forge_format_open_backlog_json() {
+  local repo="$1" json="$2" rows number title body labels url count=0
+
+  if ! rows="$(printf '%s' "$json" | jq -r '
+    def items:
+      if type == "array" then .
+      elif (.issues? | type) == "array" then .issues
+      elif (.data? | type) == "array" then .data
+      else []
+      end;
+    def issue_number: .number // .index // .id // "";
+    def clean:
+      if . == null then ""
+      else tostring | gsub("[\t\r\n]+"; " ") | gsub("  +"; " ")
+      end;
+    def label_name:
+      if type == "object" then (.name // .title // .Name // .Title // empty)
+      else tostring
+      end;
+    items
+    | sort_by((issue_number | tostring | tonumber?) // 0)
+    | .[]
+    | [
+        (issue_number | tostring),
+        (.title | clean),
+        ((.body // .description // .content // "") | clean),
+        ([ (.labels // [])[]? | label_name ] | join(", ") | clean),
+        ((.url // .html_url // .web_url // .HTMLURL // "") | clean)
+      ]
+    | @tsv
+  ' 2>/dev/null)"; then
+    _forge_warn "forge_open_issue_backlog_snapshot: jq failed to parse issue list for repo=$repo"
+    return 1
+  fi
+
+  while IFS=$'\t' read -r number title body labels url; do
+    [[ -n "$number$title$body$labels$url" ]] || continue
+    count=$((count + 1))
+    number="$(_forge_backlog_inline_text "$number" 80)"
+    title="$(_forge_backlog_inline_text "$title" 500)"
+    body="$(_forge_backlog_inline_text "$body" 3000)"
+    labels="$(_forge_backlog_inline_text "$labels" 500)"
+    url="$(_forge_backlog_inline_text "$url" 500)"
+
+    [[ -n "$number" ]] || number="?"
+    [[ -n "$title" ]] || title="<untitled>"
+    [[ -n "$labels" ]] || labels="<none>"
+
+    printf '### Open issue #%s: %s\n' "$number" "$title"
+    printf -- '- URL: %s\n' "${url:-<unknown>}"
+    printf -- '- Labels: %s\n' "$labels"
+    if [[ -n "$body" ]]; then
+      printf -- '- Body excerpt: %s\n' "$body"
+    else
+      printf -- '- Body excerpt: <empty>\n'
+    fi
+    printf '\n'
+  done <<< "$rows"
+
+  if (( count == 0 )); then
+    printf 'No current open forge issues were found for %s.\n' "$repo"
+  fi
+}
+
+# forge_open_issue_backlog_snapshot <owner/repo>
+#   Emits a bounded markdown snapshot of all currently open issues on the
+#   target repo. This is planning context for greenfield deduplication, not the
+#   label-scoped accounting path used by forge_issue_list_count.
+forge_open_issue_backlog_snapshot() {
+  local repo="${1:-}"
+  [[ -n "$repo" ]] || die "forge_open_issue_backlog_snapshot: missing repo"
+
+  case "${FORGE_PROVIDER:-}" in
+    gh)
+      local gh_err gh_out gh_rc
+      gh_err="$(mktemp 2>/dev/null)" || gh_err=""
+      if [[ -n "$gh_err" ]]; then
+        gh_out="$(gh issue list -R "$repo" --state open --limit 1000 \
+          --json number,title,body,labels,url 2>"$gh_err")"
+        gh_rc=$?
+      else
+        gh_out="$(gh issue list -R "$repo" --state open --limit 1000 \
+          --json number,title,body,labels,url 2>/dev/null)"
+        gh_rc=$?
+      fi
+      if [[ "$gh_rc" -ne 0 ]]; then
+        local first_err=""
+        if [[ -n "$gh_err" && -s "$gh_err" ]]; then
+          first_err="$(head -n1 "$gh_err" 2>/dev/null || true)"
+        fi
+        [[ -n "$gh_err" ]] && rm -f "$gh_err"
+        _forge_warn "forge_open_issue_backlog_snapshot: gh failed for repo=$repo rc=$gh_rc err=${first_err:-<empty>}"
+        return 1
+      fi
+      [[ -n "$gh_err" ]] && rm -f "$gh_err"
+      _forge_format_open_backlog_json "$repo" "$gh_out"
+      return $?
+      ;;
+    tea)
+      local -a tea_target_flags=()
+      if [[ -n "${FORGE_PROJECT_PATH:-}" ]]; then
+        tea_target_flags=(--repo "$FORGE_PROJECT_PATH" --remote "${FORGE_REMOTE_NAME:-origin}")
+      elif [[ -n "${FORGE_TEA_LOGIN:-}" ]]; then
+        tea_target_flags=(--repo "$repo" --login "$FORGE_TEA_LOGIN")
+      else
+        die "forge_open_issue_backlog_snapshot: tea backend requires FORGE_PROJECT_PATH or FORGE_TEA_LOGIN for target binding"
+      fi
+
+      local tea_err tea_out tea_rc
+      tea_err="$(mktemp 2>/dev/null)" || tea_err=""
+      if [[ -n "$tea_err" ]]; then
+        tea_out="$(tea issues list "${tea_target_flags[@]}" --state open \
+          --limit 1000 --output json 2>"$tea_err")"
+        tea_rc=$?
+      else
+        tea_out="$(tea issues list "${tea_target_flags[@]}" --state open \
+          --limit 1000 --output json 2>/dev/null)"
+        tea_rc=$?
+      fi
+      if [[ "$tea_rc" -ne 0 ]]; then
+        local first_err=""
+        if [[ -n "$tea_err" && -s "$tea_err" ]]; then
+          first_err="$(head -n1 "$tea_err" 2>/dev/null || true)"
+        fi
+        [[ -n "$tea_err" ]] && rm -f "$tea_err"
+        _forge_warn "forge_open_issue_backlog_snapshot: tea failed for repo=$repo rc=$tea_rc err=${first_err:-<empty>}"
+        return 1
+      fi
+      [[ -n "$tea_err" ]] && rm -f "$tea_err"
+      _forge_format_open_backlog_json "$repo" "$tea_out"
+      return $?
+      ;;
+    fj)
+      [[ -n "${FORGE_HOST:-}" ]] \
+        || die "forge_open_issue_backlog_snapshot: fj backend requires FORGE_HOST"
+
+      local fj_err fj_out fj_rc
+      fj_err="$(mktemp 2>/dev/null)" || fj_err=""
+      if [[ -n "$fj_err" ]]; then
+        fj_out="$(fj -H "$FORGE_HOST" --style minimal issue search \
+          --repo "$repo" --state open 2>"$fj_err")"
+        fj_rc=$?
+      else
+        fj_out="$(fj -H "$FORGE_HOST" --style minimal issue search \
+          --repo "$repo" --state open 2>/dev/null)"
+        fj_rc=$?
+      fi
+      if [[ "$fj_rc" -ne 0 ]]; then
+        local first_err=""
+        if [[ -n "$fj_err" && -s "$fj_err" ]]; then
+          first_err="$(head -n1 "$fj_err" 2>/dev/null || true)"
+        fi
+        [[ -n "$fj_err" ]] && rm -f "$fj_err"
+        _forge_warn "forge_open_issue_backlog_snapshot: fj failed for repo=$repo rc=$fj_rc err=${first_err:-<empty>}"
+        return 1
+      fi
+      [[ -n "$fj_err" ]] && rm -f "$fj_err"
+      _forge_format_open_backlog_json "$repo" "$fj_out"
+      return $?
+      ;;
+    *)
+      _forge_warn "forge_open_issue_backlog_snapshot: unknown provider '${FORGE_PROVIDER:-}' (expected gh|tea|fj)"
+      return 1
+      ;;
+  esac
+}
+
 # forge_issue_list_count <owner/repo> <label>
 #   Counts open issues carrying <label> on the target repository.
 #   Prints the integer count on stdout and returns 0 on success.
@@ -968,11 +1205,11 @@ forge_issue_list_count() {
       local fj_err fj_out fj_rc
       fj_err="$(mktemp 2>/dev/null)" || fj_err=""
       if [[ -n "$fj_err" ]]; then
-        fj_out="$(fj -H "$FORGE_HOST" --style json issue search \
+        fj_out="$(fj -H "$FORGE_HOST" --style minimal issue search \
           --repo "$repo" --labels "$label" --state open 2>"$fj_err")"
         fj_rc=$?
       else
-        fj_out="$(fj -H "$FORGE_HOST" --style json issue search \
+        fj_out="$(fj -H "$FORGE_HOST" --style minimal issue search \
           --repo "$repo" --labels "$label" --state open 2>/dev/null)"
         fj_rc=$?
       fi
@@ -987,19 +1224,9 @@ forge_issue_list_count() {
       fi
       [[ -n "$fj_err" ]] && rm -f "$fj_err"
 
-      # Prefer structured JSON output: `jq 'length'` mirrors gh and tea.
-      if [[ -n "$fj_out" ]]; then
-        local n
-        if n="$(printf '%s' "$fj_out" | jq 'length' 2>/dev/null)" \
-           && [[ "$n" =~ ^[0-9]+$ ]]; then
-          printf '%s\n' "$n"
-          return 0
-        fi
-      fi
-
-      # Fallback: fj versions without --style json still emit the
-      # minimal-style "N issue(s)" leading line. Lowercase to tolerate
-      # case drift ("2 Issues") that broke the original strict regex.
+      # Official fj emits the minimal-style "N issue(s)" leading line.
+      # Lowercase to tolerate case drift ("2 Issues") that broke the
+      # original strict regex.
       local first_line
       first_line="$(printf '%s\n' "$fj_out" | sed -n '1p')"
       if [[ "${first_line,,}" =~ ^[[:space:]]*([0-9]+)[[:space:]]+issues?[[:space:]]*$ ]]; then

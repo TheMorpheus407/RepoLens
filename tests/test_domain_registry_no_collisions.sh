@@ -16,11 +16,10 @@
 # Tests for issue #237: lens-id collisions in config/domains.json.
 #
 # The meta-orchestrator dispatch protocol (lib/rounds.sh) keys on the bare
-# lens id when resolving `LENS: <id>` directives. Two domains using the
-# same lens id silently makes the second-by-order lens unreachable in
-# round 2+ dispatch. This guard fails when any bare lens id appears more
-# than once across domains, so future contributors cannot reintroduce
-# the foot-gun silently.
+# lens id after the active mode has selected its domain set. Two domains in
+# the same effective mode using the same lens id silently make one lens
+# unreachable in round 2+ dispatch. Cross-mode reuse is allowed when the
+# modes are mutually exclusive, such as audit-visible and polish lenses.
 
 set -uo pipefail
 
@@ -78,29 +77,43 @@ else
 fi
 
 echo ""
-echo "Test 2: no bare lens id appears more than once across domains"
+echo "Test 2: no bare lens id appears more than once within the same mode"
 # Supports both string-form lens entries and object-form entries
 # (issue #230's `skip_modes` shape: `{"id": "<id>", "skip_modes": [...]}`).
 duplicates="$(jq -r '
-  .domains[].lenses[]
-  | if type == "string" then . else .id end
+  .domains[] as $d
+  | (($d.mode // "audit-visible") | if . == "" then "audit-visible" else . end) as $mode
+  | $d.lenses[]
+  | (if type == "string" then . else .id end) as $id
+  | "\($mode)\t\($id)"
 ' "$DOMAINS_FILE" | sort | uniq -d)"
-assert_empty "no duplicate lens ids" "$duplicates"
+assert_empty "no duplicate lens ids within a mode" "$duplicates"
 
 echo ""
-echo "Test 3: every registered lens id resolves to exactly one (domain, lens) pair"
+echo "Test 3: every registered lens id resolves to one domain per mode"
 ambiguous="$(jq -r '
   .domains[] as $d
+  | (($d.mode // "audit-visible") | if . == "" then "audit-visible" else . end) as $mode
   | $d.lenses[]
   | if type == "string" then . else .id end
   | . as $id
-  | "\($id)\t\($d.id)"
+  | "\($mode)\t\($id)\t\($d.id)"
 ' "$DOMAINS_FILE" \
-  | awk -F'\t' '{ count[$1]++; domains[$1] = (domains[$1] ? domains[$1] "," : "") $2 } END { for (id in count) if (count[id] > 1) printf "%s -> %s\n", id, domains[id] }')"
-assert_empty "no lens id resolves to more than one domain" "$ambiguous"
+  | awk -F'\t' '{ key=$1 "\t" $2; count[key]++; domains[key] = (domains[key] ? domains[key] "," : "") $3 } END { for (key in count) if (count[key] > 1) printf "%s -> %s\n", key, domains[key] }')"
+assert_empty "no lens id resolves to more than one domain in a mode" "$ambiguous"
 
 echo ""
-echo "Test 4: every registered lens id matches a prompt file on disk"
+echo "Test 4: intentional cross-mode empty-states reuse is mode-isolated"
+empty_states_modes="$(jq -r '
+  .domains[] as $d
+  | (($d.mode // "audit-visible") | if . == "" then "audit-visible" else . end) as $mode
+  | select([ $d.lenses[] | if type == "string" then . else .id end ] | index("empty-states"))
+  | "\($d.id):\($mode)"
+' "$DOMAINS_FILE" | sort | paste -sd' ' -)"
+assert_eq "empty-states exists only in audit-visible and polish domains" "effort-signal:polish information-architecture:audit-visible" "$empty_states_modes"
+
+echo ""
+echo "Test 5: every registered lens id matches a prompt file on disk"
 missing_files=""
 while IFS=$'\t' read -r domain lens_id; do
   [[ -z "$domain" || -z "$lens_id" ]] && continue
@@ -118,7 +131,7 @@ missing_files="${missing_files%$'\n'}"
 assert_empty "every registered lens has a prompt file" "$missing_files"
 
 echo ""
-echo "Test 5: every prompt file's frontmatter id matches its filename basename"
+echo "Test 6: every prompt file's frontmatter id matches its filename basename"
 mismatched=""
 while IFS= read -r prompt_file; do
   base="${prompt_file##*/}"

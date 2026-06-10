@@ -75,6 +75,37 @@ assert_not_contains() {
   fi
 }
 
+assert_jq() {
+  local desc="$1" file="$2" filter="$3"
+  TOTAL=$((TOTAL + 1))
+  if [[ -f "$file" ]] && jq -e "$filter" "$file" >/dev/null 2>&1; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (file='$file' filter='$filter')"
+  fi
+}
+
+assert_next_action_delta_between_updated_at() {
+  local desc="$1" file="$2" min_delta="$3" max_delta="$4"
+  TOTAL=$((TOTAL + 1))
+  if [[ -f "$file" ]] && jq -e \
+    --argjson min_delta "$min_delta" \
+    --argjson max_delta "$max_delta" \
+    '.state == "rate-limit-pending"
+     and (.next_action.earliest_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+     and (((.next_action.earliest_at | fromdateiso8601) - (.updated_at | fromdateiso8601)) as $delta
+          | ($delta >= $min_delta and $delta <= $max_delta))' \
+    "$file" >/dev/null 2>&1; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (file='$file' expected delta ${min_delta}..${max_delta}s)"
+  fi
+}
+
 assert_numeric_between() {
   local desc="$1" actual="$2" min="$3" max="$4"
   TOTAL=$((TOTAL + 1))
@@ -181,6 +212,7 @@ exit_code=$?
 run_id="$(parse_run_id "$OUT_FILE")"
 [[ -n "${run_id:-}" ]] && RUN_IDS+=("$run_id")
 summary_file="$SCRIPT_DIR/logs/$run_id/summary.json"
+status_file="$SCRIPT_DIR/logs/$run_id/status.json"
 log_contents="$(cat "$OUT_FILE")"
 
 assert_eq "Run exits 0 after sleeping and retrying" "0" "$exit_code"
@@ -245,6 +277,7 @@ exit_code=$?
 run_id="$(parse_run_id "$OUT_FILE")"
 [[ -n "${run_id:-}" ]] && RUN_IDS+=("$run_id")
 summary_file="$SCRIPT_DIR/logs/$run_id/summary.json"
+status_file="$SCRIPT_DIR/logs/$run_id/status.json"
 log_contents="$(cat "$OUT_FILE")"
 
 TOTAL=$((TOTAL + 1))
@@ -258,6 +291,9 @@ fi
 assert_eq "Cap abort invokes codex only once" "1" "$(cat "$STATE" 2>/dev/null || echo 0)"
 assert_eq "Cap abort does not sleep" "0" "$(count_lines_or_zero "$SLEEP_LOG")"
 assert_contains "Cap abort falls back to existing abort path" "rate-limited / quota exceeded" "$log_contents"
+assert_next_action_delta_between_updated_at \
+  "Cap abort status persists the parsed seven-hour retry time" \
+  "$status_file" 25080 25260
 
 echo ""
 echo "=== Stale parsed resume time aborts without sleeping ==="
@@ -294,6 +330,7 @@ exit_code=$?
 run_id="$(parse_run_id "$OUT_FILE")"
 [[ -n "${run_id:-}" ]] && RUN_IDS+=("$run_id")
 summary_file="$SCRIPT_DIR/logs/$run_id/summary.json"
+status_file="$SCRIPT_DIR/logs/$run_id/status.json"
 log_contents="$(cat "$OUT_FILE")"
 
 TOTAL=$((TOTAL + 1))
@@ -308,6 +345,8 @@ assert_eq "Stale resume abort invokes codex only once" "1" "$(cat "$STATE" 2>/de
 assert_eq "Stale resume abort does not sleep" "0" "$(count_lines_or_zero "$SLEEP_LOG")"
 assert_not_contains "Stale resume abort does not enter sleep/retry path" "Agent rate-limited. Resume at" "$log_contents"
 assert_contains "Stale resume abort falls back to existing abort path" "rate-limited / quota exceeded" "$log_contents"
+assert_jq "Stale resume status omits next_action retry metadata" "$status_file" \
+  '.state == "rate-limit-pending" and (has("next_action") | not)'
 if [[ -f "$summary_file" ]]; then
   summary_sleep="$(jq '[.lenses[] | select(.status == "rate-limited") | .rate_limit_sleep_seconds] | .[0]' "$summary_file")"
   assert_eq "Stale resume summary records zero sleep" "0" "$summary_sleep"
@@ -348,6 +387,7 @@ exit_code=$?
 run_id="$(parse_run_id "$OUT_FILE")"
 [[ -n "${run_id:-}" ]] && RUN_IDS+=("$run_id")
 summary_file="$SCRIPT_DIR/logs/$run_id/summary.json"
+status_file="$SCRIPT_DIR/logs/$run_id/status.json"
 log_contents="$(cat "$OUT_FILE")"
 
 TOTAL=$((TOTAL + 1))
@@ -362,6 +402,8 @@ assert_eq "Unparseable resume abort invokes codex only once" "1" "$(cat "$STATE"
 assert_eq "Unparseable resume abort does not sleep" "0" "$(count_lines_or_zero "$SLEEP_LOG")"
 assert_not_contains "Unparseable resume abort does not enter sleep/retry path" "Agent rate-limited. Resume at" "$log_contents"
 assert_contains "Unparseable resume abort falls back to existing abort path" "rate-limited / quota exceeded" "$log_contents"
+assert_jq "Unparseable resume status omits next_action retry metadata" "$status_file" \
+  '.state == "rate-limit-pending" and (has("next_action") | not)'
 if [[ -f "$summary_file" ]]; then
   summary_sleep="$(jq '[.lenses[] | select(.status == "rate-limited") | .rate_limit_sleep_seconds] | .[0]' "$summary_file")"
   assert_eq "Unparseable resume summary records zero sleep" "0" "$summary_sleep"
@@ -443,6 +485,7 @@ exit_code=$?
 run_id="$(parse_run_id "$OUT_FILE")"
 [[ -n "${run_id:-}" ]] && RUN_IDS+=("$run_id")
 summary_file="$SCRIPT_DIR/logs/$run_id/summary.json"
+status_file="$SCRIPT_DIR/logs/$run_id/status.json"
 log_contents="$(cat "$OUT_FILE")"
 
 TOTAL=$((TOTAL + 1))
@@ -456,6 +499,9 @@ fi
 assert_eq "Second-hit run invokes codex twice" "2" "$(cat "$STATE" 2>/dev/null || echo 0)"
 assert_eq "Second-hit run sleeps only once" "1" "$(count_lines_or_zero "$SLEEP_LOG")"
 assert_contains "Second-hit run eventually logs terminal abort" "rate-limited / quota exceeded" "$log_contents"
+assert_next_action_delta_between_updated_at \
+  "Second-hit status persists the parsed short retry time" \
+  "$status_file" -15 15
 if [[ -f "$summary_file" ]]; then
   iterations="$(jq '[.lenses[] | select(.status == "rate-limited") | .iterations] | .[0]' "$summary_file")"
   assert_eq "Second-hit abort records two iterations" "2" "$iterations"

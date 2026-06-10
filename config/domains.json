@@ -634,6 +634,59 @@
         "iac-networking",
         "iac-compliance"
       ]
+    },
+    {
+      "id": "greenfield",
+      "name": "Greenfield Planning",
+      "mode": "greenfield",
+      "order": 33,
+      "lenses": [
+        "backlog-planning"
+      ]
+    },
+    {
+      "id": "fluency",
+      "name": "Fluency",
+      "mode": "polish",
+      "order": 34,
+      "polish_surfaces": [
+        "visual-ui"
+      ],
+      "lenses": [
+        "contrast-figure-ground",
+        "alignment-symmetry",
+        "spacing-consistency",
+        "motion-consistency",
+        "convention-match",
+        "typographic-rhythm"
+      ]
+    },
+    {
+      "id": "effort-signal",
+      "name": "Effort Signal",
+      "mode": "polish",
+      "order": 35,
+      "lenses": [
+        "empty-states",
+        "error-and-404-grace",
+        "edge-case-thoughtfulness",
+        "loading-transparency",
+        "forgotten-corners",
+        "offline-and-failure-grace"
+      ]
+    },
+    {
+      "id": "hedonic",
+      "name": "Hedonic",
+      "mode": "polish",
+      "order": 36,
+      "description": "Experimental polish lenses for hedonic quality and reflective identity; evidence is weak and suggestions require strong project voice-profile fit.",
+      "lenses": [
+        "voice-and-microcopy",
+        "identity-and-ownership",
+        "stimulation-moments",
+        "fitting-easter-eggs"
+      ]
     }
   ]
 }

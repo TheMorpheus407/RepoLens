@@ -71,6 +71,21 @@ fresh_sem() {
 echo "=== parallel.sh semaphore cleanup on abnormal exit (issue #112) ==="
 
 # ---------------------------------------------------------------------------
+# 0. Issue #276 abort marker guard — a parent waiting for parallel capacity
+#    must treat a child-written rate-limit sleep interrupt marker as an abort
+#    signal even if it observes that marker independently.
+# ---------------------------------------------------------------------------
+LOG_BASE="$TMPROOT/abort-marker"
+mkdir -p "$LOG_BASE"
+_parallel_agent_abort_pending; abort_rc=$?
+assert_eq "No abort marker: parallel abort check is clear" "1" "$abort_rc"
+: > "$LOG_BASE/.rate-limit-sleep-interrupt"
+_parallel_agent_abort_pending; abort_rc=$?
+assert_eq "Rate-limit sleep interrupt marker trips parallel abort check" "0" "$abort_rc"
+rm -f "$LOG_BASE/.rate-limit-sleep-interrupt"
+unset LOG_BASE
+
+# ---------------------------------------------------------------------------
 # 1. Happy path — callback returns 0, token released, wait_all == 0.
 # ---------------------------------------------------------------------------
 cb_ok() { return 0; }

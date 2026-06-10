@@ -35,8 +35,8 @@ _REPOLENS_CLEANUP_FORCE_KILL=0
 
 _parallel_agent_abort_pending() {
   [[ -n "${LOG_BASE:-}" ]] || return 1
-  [[ -f "$LOG_BASE/.rate-limit-abort" || -f "$LOG_BASE/.agent-no-progress-abort" \
-    || -f "$LOG_BASE/.systemic-failure-abort" ]]
+  [[ -f "$LOG_BASE/.rate-limit-abort" || -f "$LOG_BASE/.rate-limit-sleep-interrupt" \
+    || -f "$LOG_BASE/.agent-no-progress-abort" || -f "$LOG_BASE/.systemic-failure-abort" ]]
 }
 
 # init_parallel <sem_dir> <max_parallel>

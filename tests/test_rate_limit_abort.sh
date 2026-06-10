@@ -115,6 +115,7 @@ assert_eq "Fake codex is first on PATH" "$FAKE_BIN/codex" "$which_codex"
 # Uses --local to avoid needing gh auth.
 OUT_FILE="$TMPDIR/run.log"
 set +e
+REPOLENS_RATE_LIMIT_MAX_SLEEP=0 \
 bash "$SCRIPT_DIR/repolens.sh" \
   --project "$PROJECT" \
   --agent codex \

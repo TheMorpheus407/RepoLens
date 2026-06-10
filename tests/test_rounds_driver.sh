@@ -129,9 +129,9 @@ log_warn() {
   LOG_LINES+=("WARN:$*")
 }
 
-# shellcheck disable=SC1090
+# shellcheck disable=SC1090,SC1091
 source "$SCRIPT_DIR/lib/streak.sh"
-# shellcheck disable=SC1090
+# shellcheck disable=SC1090,SC1091
 source "$SCRIPT_DIR/lib/template.sh"
 # shellcheck disable=SC1090
 source "$ROUNDS_LIB"
@@ -232,13 +232,17 @@ reset_case() {
   META_RC=0
   WAIT_ALL_RC=0
   WAIT_ALL_TOUCH_RATE_LIMIT=false
+  REMOTE_TARGET=""
+  REMOTE_FAIL_ON_CALL=0
   COMPLETED_LENSES=""
   completed_lenses_file="$LOG_BASE/.completed"
   : > "$completed_lenses_file"
 
+  ACTIONS=()
   LOG_LINES=()
   RUN_LENS_CALLS=()
   RUN_LENS_SKIPS=()
+  REMOTE_CHECK_CALLS=()
   META_CALLS=()
   INIT_PARALLEL_CALLS=()
   SPAWN_CALLS=()
@@ -256,6 +260,7 @@ run_lens() {
     return 0
   fi
 
+  ACTIONS+=("run:$lens_entry")
   RUN_LENS_CALLS+=("$lens_entry")
   if [[ "$lens_entry" == "$RATE_LIMIT_ON_LENS" ]]; then
     : > "$LOG_BASE/.rate-limit-abort"
@@ -278,6 +283,7 @@ init_parallel() {
 
 spawn_lens() {
   local lens_entry="$1" callback="$2" callback_arg="$3"
+  ACTIONS+=("spawn:$lens_entry")
   SPAWN_CALLS+=("$lens_entry:$callback:$callback_arg")
   if [[ "$lens_entry" == "$RATE_LIMIT_ON_SPAWN" ]]; then
     : > "$LOG_BASE/.rate-limit-abort"
@@ -285,11 +291,22 @@ spawn_lens() {
 }
 
 wait_all() {
+  ACTIONS+=("wait")
   WAIT_ALL_CALLS+=("wait")
   if $WAIT_ALL_TOUCH_RATE_LIMIT; then
     : > "$LOG_BASE/.rate-limit-abort"
   fi
   return "$WAIT_ALL_RC"
+}
+
+remote_check_master() {
+  local check_number=$(( ${#REMOTE_CHECK_CALLS[@]} + 1 ))
+  ACTIONS+=("remote-check:$check_number")
+  REMOTE_CHECK_CALLS+=("$check_number")
+  if [[ "${REMOTE_FAIL_ON_CALL:-0}" == "$check_number" ]]; then
+    return 1
+  fi
+  return 0
 }
 
 is_lens_completed() {
@@ -445,6 +462,41 @@ assert_eq "single-round resume does not create a round-local lens completion fil
           "$single_round_completion_state"
 
 echo ""
+echo "Test 3c: sequential remote runs check the ControlMaster before each lens"
+reset_case "sequential-remote-checks"
+REMOTE_TARGET="deploy@remote.example"
+run_rounds 1 LENSES
+rc=$?
+assert_eq "sequential remote run exits successfully" "0" "$rc"
+assert_eq "sequential remote check runs before each lens" \
+          "remote-check:1 run:security/injection remote-check:2 run:quality/dead-code" \
+          "$(join_by " " "${ACTIONS[@]}")"
+assert_eq "sequential remote check is called once per lens" \
+          "1 2" \
+          "$(join_by " " "${REMOTE_CHECK_CALLS[@]}")"
+
+echo ""
+echo "Test 3d: sequential remote check failure skips remaining lenses"
+reset_case "sequential-remote-check-failure"
+REMOTE_TARGET="deploy@remote.example"
+REMOTE_FAIL_ON_CALL=2
+run_rounds 1 LENSES
+rc=$?
+assert_nonzero "sequential remote check failure returns non-zero" "$rc"
+assert_eq "sequential remote check failure stops before the second lens" \
+          "remote-check:1 run:security/injection remote-check:2" \
+          "$(join_by " " "${ACTIONS[@]}")"
+assert_eq "sequential remote check failure records remaining lens as skipped" \
+          "quality/dead-code:0:skipped" \
+          "$(join_by " " "${RECORDED_LENSES[@]}")"
+assert_contains "sequential remote check failure records stopped_reason" \
+                "remote-controlmaster-lost" \
+                "$(join_by " " "${STOP_REASONS[@]}")"
+assert_eq "sequential remote check failure does not mark the round complete" \
+          "" \
+          "$(join_by " " "${MARKED_ROUNDS[@]}")"
+
+echo ""
 echo "Test 4: parallel mode reinitializes semaphore state once per round"
 reset_case "parallel-two"
 PARALLEL=true
@@ -459,6 +511,46 @@ assert_eq "spawn_lens receives each lens and run_lens callback per round" \
           "$(join_by " " "${SPAWN_CALLS[@]}")"
 assert_eq "wait_all is called once per round" \
           "wait wait" \
+          "$(join_by " " "${WAIT_ALL_CALLS[@]}")"
+
+echo ""
+echo "Test 4b: parallel remote runs check the ControlMaster before each spawn"
+reset_case "parallel-remote-checks"
+PARALLEL=true
+REMOTE_TARGET="deploy@remote.example"
+run_rounds 1 LENSES
+rc=$?
+assert_eq "parallel remote run exits successfully" "0" "$rc"
+assert_eq "parallel remote check runs before each spawn" \
+          "remote-check:1 spawn:security/injection remote-check:2 spawn:quality/dead-code wait" \
+          "$(join_by " " "${ACTIONS[@]}")"
+assert_eq "parallel remote check is called once per lens" \
+          "1 2" \
+          "$(join_by " " "${REMOTE_CHECK_CALLS[@]}")"
+
+echo ""
+echo "Test 4c: parallel remote check failure waits and skips unspawned lenses"
+reset_case "parallel-remote-check-failure"
+PARALLEL=true
+REMOTE_TARGET="deploy@remote.example"
+REMOTE_FAIL_ON_CALL=2
+run_rounds 1 LENSES
+rc=$?
+assert_nonzero "parallel remote check failure returns non-zero" "$rc"
+assert_eq "parallel remote check failure stops before the second spawn and waits" \
+          "remote-check:1 spawn:security/injection remote-check:2 wait" \
+          "$(join_by " " "${ACTIONS[@]}")"
+assert_eq "parallel remote check failure records unspawned lens as skipped" \
+          "quality/dead-code:0:skipped" \
+          "$(join_by " " "${RECORDED_LENSES[@]}")"
+assert_contains "parallel remote check failure records stopped_reason" \
+                "remote-controlmaster-lost" \
+                "$(join_by " " "${STOP_REASONS[@]}")"
+assert_eq "parallel remote check failure does not mark the round complete" \
+          "" \
+          "$(join_by " " "${MARKED_ROUNDS[@]}")"
+assert_eq "parallel remote check failure waits for already spawned children" \
+          "wait" \
           "$(join_by " " "${WAIT_ALL_CALLS[@]}")"
 
 echo ""

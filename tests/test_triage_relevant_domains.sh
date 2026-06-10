@@ -139,6 +139,7 @@ assert_contains "default-mode ids include concurrency" "concurrency" "$ids_outpu
 assert_not_contains "default-mode ids exclude discovery (mode=discover)" "discovery" "$ids_output"
 assert_not_contains "default-mode ids exclude deployment (mode=deploy)" "deployment" "$ids_output"
 assert_not_contains "default-mode ids exclude android (mode=deploy)" $'\nandroid\n' $'\n'"$ids_output"$'\n'
+assert_not_contains "default-mode ids exclude greenfield (mode=greenfield)" "greenfield" "$ids_output"
 
 echo ""
 echo "=== _triage_extract_relevant_domains ==="

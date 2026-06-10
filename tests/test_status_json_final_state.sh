@@ -19,6 +19,8 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+# shellcheck source=tests/status_test_lib.sh
 source "$SCRIPT_DIR/tests/status_test_lib.sh"
 trap status_cleanup EXIT
 
@@ -63,7 +65,9 @@ SUMMARY_FILE="$STATUS_TEST_ROOT/logs/$RUN_ID/summary.json"
 
 assert_eq "RepoLens run exits cleanly" "0" "$run_rc"
 assert_jq "Final status file is valid JSON" "$STATUS_FILE" '.'
-assert_jq "Final status records finished state" "$STATUS_FILE" '.state == "finished"'
+assert_jq "Final status records terminal finished state" "$STATUS_FILE" '.state | IN("finished", "finished-empty")'
+assert_jq "Final status exposes unset stopped reason as null" "$STATUS_FILE" \
+  'has("stopped_reason") and .stopped_reason == null'
 assert_jq "Final status has no active lenses" "$STATUS_FILE" '.counts.active == 0 and (.active | length == 0)'
 assert_jq "Final status marks the focused lens completed" "$STATUS_FILE" \
   '.total_lenses == 1

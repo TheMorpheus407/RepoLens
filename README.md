@@ -5,7 +5,7 @@
 [![CI](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMorpheus407/RepoLens/actions/workflows/ci.yml)
 [![GitHub Stars](https://img.shields.io/github/stars/TheMorpheus407/RepoLens?style=social)](https://github.com/TheMorpheus407/RepoLens)
 
-**Multi-lens code audit tool.** Runs 335 specialist lenses across 32 domains against any git repository, live server, or Android APK and creates remote issues for real findings. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, infrastructure auditing, and Android auditing — all with deep specialization.
+**Multi-lens code audit tool.** Runs 336 specialist lenses across 33 domains against any git repository, live server, Android APK, or product specification and creates remote issues for real findings, backlog work, or polishing shortlists. The polish pass also writes ranked suggestion artifacts for review. Think automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, infrastructure auditing, Android auditing, spec-to-backlog planning, and polishing — all with deep specialization.
 
 > [!IMPORTANT]
 > **RepoLens runs AI agents with shell access against your repository, and a full audit can cost hundreds of dollars in API charges.** It is NOT a sandboxed security tool, comes with NO warranty, and you use it entirely at your own risk. **Read [Warnings & Limits](#warnings--limits) before your first run** — especially the cost and security sections.
@@ -26,7 +26,7 @@
 
 ### Supported forges
 
-Supported forges are GitHub (`gh`), Gitea (`tea`), and Codeberg/Forgejo (`fj`). RepoLens reads `git remote get-url origin` from the target project and uses the origin host to choose the forge backend. Pass `--forge <gh|tea|fj>` to override auto-detection. Use `--local` to write markdown findings without any remote forge CLI.
+Supported forges are GitHub (`gh`), Gitea (`tea`), and Codeberg/Forgejo (`fj`). RepoLens reads `git remote get-url origin` from the target project and uses the origin host to choose the forge backend. Pass `--forge <gh|tea|fj>` to override auto-detection. Use `--local` to write local output files without any remote forge CLI.
 
 | Forge              | Provider | CLI           | Auto-detection               | Install / auth                                                                                                                   |
 | ------------------ | -------- | ------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -131,7 +131,7 @@ RepoLens is a power tool. Before you point it at anything you care about — or 
 ### Cost — RepoLens can be very expensive
 
 > [!CAUTION]
-> A default full audit runs **248 audit-visible lenses across 27 code/toolgate/logs domains**. RepoLens has 335 lenses across 32 domains in total, but `discover`, `deploy`, `opensource`, and `content` lenses are mode-specific and do not run in the default audit mode. Each audit lens loops until the agent emits `DONE` three times in a row. That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
+> A default full audit runs **248 audit-visible lenses across 27 code/toolgate/logs domains**. RepoLens has 336 lenses across 33 domains in total for issue and backlog modes, but `discover`, `deploy`, `opensource`, `content`, and `greenfield` lenses are mode-specific and do not run in the default audit mode. The separate polish pass has its own 16 suggestion lenses and also does not run in the default audit mode. Each audit lens loops until the agent emits `DONE` three times in a row. That adds up to **hundreds — often thousands — of agent invocations per run**, and cost scales with your model choice (Claude Opus is dramatically more expensive than smaller models or Codex). Real-world runs can easily reach hundreds of dollars on a single repo.
 
 **Before launching a full audit:**
 
@@ -143,7 +143,7 @@ RepoLens is a power tool. Before you point it at anything you care about — or 
 
 You are responsible for every dollar of API spend. Know your per-token pricing.
 
-**Cost scales with `depth × rounds`.** Both flags multiply the per-lens iteration cost: raising `--depth` (within-lens iterations) and `--rounds` (cross-lens orchestration) compounds. A `--depth 5 --rounds 3` run is roughly **5× the per-lens iteration cost and 3× the lens-pass count** compared to defaults. Preview the resolved estimate with `--dry-run` before launching.
+**Cost scales with `depth × rounds`.** Both flags multiply the per-lens iteration cost: raising `--depth` (within-lens iterations) and `--rounds` (cross-lens orchestration) compounds. In `bugreport` mode, a `--depth 5 --rounds 3` run is roughly **5× the per-lens iteration cost and 3× the lens-pass count** compared to defaults. Preview the resolved estimate with `--dry-run` before launching.
 
 **`--rounds >= 4` requires explicit cost acknowledgement.** RepoLens refuses to launch unless you pass `--i-know-this-is-expensive` (or the equivalent `--max-cost <dollars>` + `--yes` combination). The hard-ceiling environment variable `REPOLENS_MAX_ROUNDS` (default `5`) caps `--rounds` and cannot be bypassed by `--i-know-this-is-expensive` — to exceed it, set `REPOLENS_MAX_ROUNDS` explicitly before launching.
 
@@ -155,7 +155,7 @@ You are responsible for every dollar of API spend. Know your per-token pricing.
 - **GitHub API / Gitea API / Forgejo API.** Authenticated `gh` calls count against GitHub API quotas; authenticated `tea` and `fj` calls count against your Gitea or Forgejo account/API quotas. Large runs can trip rate limits. Use `--max-issues <n>` to cap output, or `--local` to skip remote forge calls entirely.
 - **Concurrent same-repo runs.** Starting multiple runs against the same repository is supported. Remote label setup is coordinated per repository; repeated runs with the same desired label set can reuse a fresh bootstrap result, while other runs create only missing labels when the forge supports label listing. Per-lens issue checks still run independently, so lower `--max-parallel` when running several modes at once against the same forge account.
 - **AI provider rate limits.** Every iteration consumes Anthropic / OpenAI tokens. Free and low-tier accounts will hit their RPM (requests-per-minute) and TPM (tokens-per-minute) ceilings immediately under `--parallel`. Verify your account is on a tier sized for concurrent agent traffic before scaling.
-- **Automatic agent retry.** If an agent exits non-zero with a recognized rate-limit message and a parseable resume time within `REPOLENS_RATE_LIMIT_MAX_SLEEP`, RepoLens sleeps until that time plus 60 seconds and retries the same lens once. Unparseable waits, waits beyond the cap, or a second rate-limit after retry abort the run so you can resume or adjust concurrency manually.
+- **Automatic agent retry.** If an agent exits non-zero with a recognized rate-limit message and a parseable resume time within `REPOLENS_RATE_LIMIT_MAX_SLEEP`, RepoLens sleeps until that time plus 60 seconds and retries the same lens once. If RepoLens cannot use that retry path during lens execution, the run finalizes as `rate-limit-pending`, exits `3`, and leaves unfinished lenses resumable. When RepoLens knows the provider retry time for a terminal pending run, `status.json.next_action.earliest_at` exposes it as a UTC timestamp. If the retry sleep is interrupted by SIGHUP, SIGINT, or SIGTERM, the run finalizes as `interrupted` with stopped reason `interrupted-sighup`, `interrupted-sigint`, or `interrupted-sigterm` and exits `129`, `130`, or `143`.
 - **Terms of Service & abuse risk.** Do **not** point RepoLens at repositories you do not own or have explicit permission to audit. Automated bulk issue creation against third-party repos can be treated as spam by your forge provider and may get your account flagged or suspended.
 
 Start small with `--focus <lens-id>` or one `--domain`, then scale up with `--parallel --max-parallel 2` before raising concurrency. The default is `--max-parallel 8`.
@@ -169,6 +169,7 @@ Under the hood, RepoLens spawns AI agents (claude, codex, etc.) with shell acces
 
 - **Prompt injection is trivial.** A README, code comment, commit message, or docstring in the scanned repo can instruct the agent to do arbitrary things.
 - **`--spec` files from untrusted sources are dangerous.** Spec content is embedded in the agent prompt. While RepoLens sanitizes known tag-breakout vectors (e.g., `</spec>` injection), a malicious spec file can still influence agent behavior through indirect prompt injection. Only use `--spec` with files you wrote or trust completely.
+- **Greenfield backlog text is prompt input.** In `--mode greenfield`, current open issue bodies or local draft markdown files may be shown to the planner so it can avoid duplicate backlog items. Treat issue text and draft files as untrusted content that can influence planning.
 - **Scripts in the scanned repo can execute.** A hostile `docker-compose.yml`, `Makefile`, `package.json` postinstall hook, or shell script could be invoked by the agent while investigating.
 - **Deploy mode runs live shell commands** against whatever host you point it at — see also [Legal → Deploy Mode](#deploy-mode--authorization-required) for the authorization requirements.
 
@@ -199,7 +200,7 @@ For the full legal text, see [LICENSE](LICENSE) (Apache License, Version 2.0, Se
 
 ## Modes
 
-RepoLens supports 9 modes. Each mode controls which domains/lenses are visible and how the agent iterates.
+RepoLens supports 11 modes. Each mode controls which domains/lenses are visible and how the agent iterates. `polish` is a suggestion workflow that writes ranked JSON artifacts and grouped polishing shortlists.
 
 | Mode         | DONE Streak | Domains                                    | Description                                                                   |
 | ------------ | ----------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
@@ -212,6 +213,8 @@ RepoLens supports 9 modes. Each mode controls which domains/lenses are visible a
 | `custom`     | 1×          | 27 code/toolgate/logs domains (248 lenses) | Change impact analysis — identifies what needs adapting after a change        |
 | `opensource` | 1×          | `open-source-readiness` domain (13 lenses) | Open-source readiness — checks if a repo can go public safely                 |
 | `content`    | 1×          | `content-quality` domain (17 lenses)       | Content audit & creation — audits or creates content from `--source` material |
+| `greenfield` | 1×          | `greenfield` domain (1 lenses)             | Spec-to-backlog planning — requires `--spec`, checks the current open issue or local draft backlog, and creates non-duplicate `[P0]`-`[P3]` implementation issues without inspecting repository code |
+| `polish`     | 1×          | `fluency`, `effort-signal`, and `hedonic` domains (16 lenses) | Ranked polishing shortlists — proposes small, additive craft refinements with voice-fit evidence |
 
 ### Mode Examples
 
@@ -259,6 +262,12 @@ RepoLens supports 9 modes. Each mode controls which domains/lenses are visible a
 # Content — audit or create educational content
 ./repolens.sh --project ~/my-app --agent claude --mode content --source ~/docs/math-book.pdf
 
+# Greenfield — plan implementation backlog from a product spec
+./repolens.sh --project ~/my-app --agent claude --mode greenfield --spec ~/docs/product-spec.md
+
+# Polish — file ranked polishing shortlists
+./repolens.sh --project ~/my-app --agent claude --mode polish
+
 # Logs — point runtime log analysis lenses at a log corpus
 ./repolens.sh --project ~/AutoDev --agent claude --logs ~/CybersecurityAssessment/logs/auto-develop/ --domain logs --parallel
 
@@ -278,6 +287,55 @@ RepoLens supports 9 modes. Each mode controls which domains/lenses are visible a
 ./repolens.sh --project ~/my-app --agent claude --mode deploy --dry-run
 ```
 
+## Greenfield planning
+
+Use `greenfield` before implementation starts, when you have a product spec, PRD, roadmap, or launch brief and need an implementation backlog. Use `feature` when you want RepoLens to inspect existing code for missing capabilities, `audit` when you want defects, security issues, and quality risks in existing code, and `bugreport` when you are starting from a symptom or user-reported failure.
+
+Greenfield is a planning mode, not an implementation mode. The product owner puts all human product intent in the `--spec` file. RepoLens reads that spec and the current backlog snapshot; it does not inspect repository code, dependencies, configuration, tests, docs, or implementation details to discover work. The greenfield planner turns the spec into implementation-sized `[P0]`-`[P3]` backlog items and resolves remaining non-human product and implementation decisions into the issue details so AutoDev receives decision-complete work.
+
+Run RepoLens greenfield to completion first, then run AutoDev on the created issues or local drafts. Do not run AutoDev concurrently against the same backlog while greenfield planning is still running, because each RepoLens planning iteration deduplicates against the current backlog snapshot.
+
+Forge-backed run:
+
+```bash
+./repolens.sh --project ~/my-app --agent claude --mode greenfield \
+  --spec ~/docs/product-spec.md --max-issues 3
+```
+
+Local draft run:
+
+```bash
+./repolens.sh --project ~/my-app --agent claude --mode greenfield \
+  --spec ~/docs/product-spec.md --local --output ~/reports/my-app-backlog \
+  --max-issues 3
+```
+
+`--local` changes the output sink, not the planning agent. In forge mode, RepoLens creates issues on the detected or selected forge and deduplicates against currently open issues. In `--local` mode, RepoLens writes markdown backlog drafts under `<output-dir>/greenfield/backlog-planning/` and deduplicates against existing drafts there. The greenfield prompt and backlog-planning lens are otherwise the same.
+
+Use `--max-issues` for controlled planning batches. `--max-issues 1` is useful for a first smoke-test issue; small batches such as `--max-issues 3` or `--max-issues 5` let you review, edit, or prioritize the generated backlog before rerunning greenfield. The next run uses the current open issues or local drafts as backlog coverage.
+
+Before every planning iteration, RepoLens refreshes the current backlog snapshot: forge runs read all currently open issues, and `--local` runs read the existing draft markdown files under the greenfield output directory. The planner uses that snapshot to skip spec slices that are already covered and emits `DONE` when there is no non-duplicate implementation issue left to file. With `--local`, seed `<output-dir>/greenfield/backlog-planning/*.md` before a run if you want drafts created elsewhere to count as existing backlog. In forge mode, if RepoLens cannot load the current open issue backlog, it tells the planner not to create a new issue while duplicate checks are unavailable.
+
+## Polish mode
+
+Use `polish` when nothing is necessarily broken, but you want small, additive refinements that make the project feel more fluent, cared-for, and voice-fit. Polish mode runs one pass over the `fluency`, `effort-signal`, and `hedonic` domains, builds a project voice profile for the run, and asks each lens for structured polish suggestions.
+
+Polish suggestions are not filed during lens execution. Each lens writes JSON suggestions with tags such as `voice_fit`, `voice_fit_justification`, `location_expectedness`, and `polish_family`. After the lenses finish, RepoLens writes the sorted artifact:
+
+```text
+logs/<run-id>/polish/ranked-suggestions.json
+```
+
+Each entry in that file includes the original suggestion fields plus `fluency_baseline`, `soul_fit`, `effort_gap_multiplier`, and `polish_rank_x1000`. RepoLens computes those fields deterministically from the structured tags and orders the suggestions highest-first. Lens agents do not compute the rank, and off-brand suggestions sort to the bottom.
+
+After ranking, RepoLens groups the ranked suggestions by lens and emits one `[POLISH] <domain>/<lens-id> polishing shortlist` per lens with usable suggestions. Each shortlist includes that lens's top-N ranked suggestions, defaults to 3 items, and includes a one-line voice-fit justification for every listed item. Set `REPOLENS_POLISH_TOP_N` to a positive integer to change the per-lens shortlist size. `--max-issues` still caps the total number of emitted polishing shortlists, so `--max-issues 1` files only the highest-ranked lens shortlist.
+
+In forge mode, polishing shortlists are created as remote issues with `polish:<domain>/<lens-id>` and `enhancement` labels. In `--local` mode, RepoLens writes the same grouped markdown drafts under:
+
+```text
+logs/<run-id>/polish/filed/
+```
+
 ## Remote deploy mode
 
 Remote deploy mode lets you run deploy-mode server lenses from your workstation while inspecting a server over SSH. Use it only for server targets; it is rejected with `--hosted` and Android deploy targets.
@@ -295,7 +353,7 @@ Forge actions still happen on the operator workstation. `gh`, `tea`, or `fj` iss
 These flags scale RepoLens beyond the simple [Quickstart](#quickstart) invocations. They compound cost — read [Warnings & Limits → Cost](#cost--repolens-can-be-very-expensive) before raising either.
 
 - **`--depth N`** — within-lens iteration depth. The DONE-streak length the agent must reach (the agent outputs `DONE` as the first or last word `N` times consecutively) before the lens is considered complete. Defaults to `3` for `audit`, `feature`, and `bugfix`; defaults to `1` for every other mode (including `bugreport`). Supersedes the legacy `DONE_STREAK_REQUIRED` env var (honored as a fallback when `--depth` is unset, deprecated). Must be between `1` and `19`.
-- **`--rounds N`** — multi-round investigation orchestrated by a meta-orchestrator that re-prioritizes lenses across rounds based on prior-round findings. Defaults to `1` for every pre-existing mode (single round, identical to pre-rounds runs); `bugreport` defaults to `3`. Per-mode caps: `audit`, `feature`, `bugfix`, `custom`, and `bugreport` accept `1`–`10`; `deploy`, `opensource`, `content`, and `discover` are locked to `1`.
+- **`--rounds N`** — multi-round investigation orchestrated by a meta-orchestrator that re-prioritizes lenses across rounds based on prior-round findings. Defaults to `1` except `bugreport`, which defaults to `3`. Only `bugreport` accepts values above `1` (cap `10`); `audit`, `feature`, `bugfix`, `custom`, `deploy`, `opensource`, `content`, `discover`, `greenfield`, and `polish` are locked to `1`.
 
 ### Example invocations
 
@@ -325,6 +383,7 @@ See [METHODOLOGY.md](METHODOLOGY.md) for the design rationale behind within-lens
 ```
 Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
        repolens.sh status [run-id] [OPTIONS]
+       repolens.sh clean [OPTIONS]
 ```
 
 ### Commands
@@ -332,6 +391,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | Command           | Description                                                                                                                                                    |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `status [run-id]` | Show a live run snapshot from `logs/<run-id>/status.json`. If `run-id` is omitted, RepoLens selects the newest run that has a status file. Requires only `jq`. |
+| `clean [OPTIONS]`  | Remove old run directories under `logs/`. Only genuine run dirs are considered; resume candidates are kept by default, and currently-live runs are always kept. Needs no `--project`/`--agent`. See [Cleaning Up Old Runs](#cleaning-up-old-runs). |
 
 ### Required Flags
 
@@ -344,7 +404,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 
 | Flag                   | Description                                                                                                                                                                                                                                                                                              |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--mode <mode>`        | `audit` (default) \| `feature` \| `bugfix` \| `bugreport` \| `discover` \| `deploy` \| `custom` \| `opensource` \| `content`                                                                                                                                                                            |
+| `--mode <mode>`        | `audit` (default) \| `feature` \| `bugfix` \| `bugreport` \| `discover` \| `deploy` \| `custom` \| `opensource` \| `content` \| `greenfield` \| `polish`                                                                                                                                             |
 | `--bug-report <file\|text>` | Required for `--mode bugreport`. Path to a text file or inline symptom text (read verbatim). Env fallback: `REPOLENS_BUG_REPORT_PATH`. 100 KB max for file mode.                                                                                                                                  |
 | `--change <statement>` | Change impact statement (implies `--mode custom`)                                                                                                                                                                                                                                                        |
 | `--source <file>`      | Source material (PDF, text, markdown) for content creation or reference                                                                                                                                                                                                                                  |
@@ -357,13 +417,14 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--parallel`           | Run lenses in parallel (one agent process per lens)                                                                                                                                                                                                                                                      |
 | `--max-parallel <n>`   | Max concurrent agents in parallel mode (default: 8)                                                                                                                                                                                                                                                      |
 | `--resume <run-id>`    | Resume a previous interrupted run                                                                                                                                                                                                                                                                        |
-| `--spec <file>`        | Spec/PRD/roadmap to guide analysis (any text file, max 100 KB)                                                                                                                                                                                                                                           |
-| `--max-issues <n>`     | Stop after creating _n_ total issues                                                                                                                                                                                                                                                                     |
+| `--spec <file>`        | Spec/PRD/roadmap to guide analysis (any text file, max 100 KB). Required for `--mode greenfield`; greenfield treats it as product-owner intent for backlog planning.                                                                                                                                    |
+| `--max-issues <n>`     | Stop after creating _n_ total issues. In polish mode, this caps emitted polishing shortlist issues rather than individual suggestions                                                                                                                                                                    |
+| `--min-severity <level>` | Only file findings at or above `critical`, `high`, `medium`, or `low`. Filtered findings are counted in `summary.json` and reported in final stdout when the count is non-zero. No effect in non-severity modes such as `discover`, `feature`, `custom`, `greenfield`, and `polish`. Env fallback: `REPOLENS_MIN_SEVERITY`. |
 | `--depth <n>`          | DONE streak depth per lens. Defaults to `3` for `audit`, `feature`, and `bugfix`; defaults to `1` for all other modes. Must be between `1` and `19`                                                                                        |
-| `--rounds <n>`         | Validated cross-lens round count for multi-round orchestration. Defaults to `1` for every pre-existing mode; `bugreport` defaults to `3`. `audit`, `feature`, `bugfix`, `custom`, and `bugreport` accept `1`-`10`; `deploy`, `opensource`, `content`, and `discover` are locked to `1`. `--rounds >= 4` requires `--i-know-this-is-expensive`. The resolved value is shown by `--dry-run` and sizes the `logs/<run-id>/rounds/round-N/` artifact layout |
+| `--rounds <n>`         | Validated cross-lens round count for multi-round orchestration. Defaults to `1` except `bugreport`, which defaults to `3`. Only `bugreport` accepts values above `1`; `audit`, `feature`, `bugfix`, `custom`, `deploy`, `opensource`, `content`, `discover`, `greenfield`, and `polish` are locked to `1`. `--rounds >= 4` requires `--i-know-this-is-expensive`. The resolved value is shown by `--dry-run` and sizes the `logs/<run-id>/rounds/round-N/` artifact layout |
 | `--strategy <name>`    | Bugreport round-1 dispatch strategy: `fanout` (default — every lens runs in round 1, identical to today's `--mode bugreport`) \| `waves` (a narrow set of triage-seeded GENERIC investigators dispatch in round 1; subsequent rounds use the existing role-aware dispatch). `waves` requires `--mode bugreport` and rejects with a clear error on any other mode. The resolved value is shown by `--dry-run` under `--mode bugreport`. Env fallback: `REPOLENS_STRATEGY`. Wave width is controlled by `REPOLENS_WAVE_WIDTH` (default `7`, clamped to `1..50`). |
-| `--local`              | Write findings as local markdown files instead of creating remote issues. No forge CLI required                                                                                                                                                                                                          |
-| `--output <path>`      | Output directory for local markdown files (requires `--local`, default: `logs/<run-id>/rounds/round-1/lens-outputs/`)                                                                                                                                                                                   |
+| `--local`              | Write local output files instead of creating remote issues. Most modes write markdown; polish mode writes JSON suggestion objects and grouped polishing shortlist drafts. No forge CLI required                                                                                                         |
+| `--output <path>`      | Output directory for local output files (requires `--local`, default: `logs/<run-id>/rounds/round-1/lens-outputs/`)                                                                                                                                                                                     |
 | `--forge <provider>`   | Override forge auto-detection: `gh` for GitHub, `tea` for Gitea, `fj` for Forgejo/Codeberg. Codeberg is auto-detected; use this for self-hosted Gitea/Forgejo remotes whose hostname is not auto-detected. Self-hosted Forgejo needs an HTTPS or SSH `origin` remote so RepoLens can pass `fj -H <host>` |
 | `--hosted`             | Spin up Docker Compose for DAST scanning (used with `toolgate` domain)                                                                                                                                                                                                                                   |
 | `--remote <ssh-target>` | Remote deploy server target. Accepts `host`, `host:port`, `user@host`, or `user@host:port`; only valid with `--mode deploy` server targets; incompatible with `--hosted` and Android deploy targets. The target is validated, exported to deploy agents, shown in `--dry-run`, and repeated in deploy authorization and normal run confirmation prompts. |
@@ -443,8 +504,11 @@ REPOLENS_AGENT_TIMEOUT_OPENCODE=3600 ./repolens.sh --project ~/my-app --agent op
 | `REPOLENS_AGENT_TIMEOUT_CUSTOM`      | `1800`   | Custom/change-impact timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `REPOLENS_AGENT_TIMEOUT_OPENSOURCE`  | `1800`   | Open-source readiness timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `REPOLENS_AGENT_TIMEOUT_CONTENT`     | `1800`   | Content-mode timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `REPOLENS_AGENT_TIMEOUT_GREENFIELD`  | `1800`   | Greenfield-mode timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `REPOLENS_AGENT_TIMEOUT_POLISH`      | `1800`   | Polish-mode timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `REPOLENS_AGENT_TIMEOUT_BUGREPORT`   | `1800`   | Bug-report mode timeout when no agent-specific or global override is set.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `REPOLENS_RATE_LIMIT_MAX_SLEEP`      | `21600`  | Maximum parsed agent rate-limit wait in seconds before RepoLens falls back to the terminal rate-limit abort path. When an agent exits non-zero with a known rate-limit signature and a parseable resume time within this cap, RepoLens sleeps until that time plus a 60-second buffer, retries the same lens once, and records `rate_limit_sleep_seconds` in `summary.json`. Unparseable resume times, waits beyond this cap, or a second rate-limit after retry abort the run.                                                                                 |
+| `REPOLENS_POLISH_TOP_N`              | `3`      | Number of ranked suggestions to include in each per-lens polishing shortlist. Must be a positive integer.                                                                                                                                                                                                                                                                                                                                       |
+| `REPOLENS_RATE_LIMIT_MAX_SLEEP`      | `21600`  | Maximum parsed agent rate-limit wait in seconds before RepoLens falls back to the terminal rate-limit abort path. When an agent exits non-zero with a known rate-limit signature and a parseable resume time within this cap, RepoLens sleeps until that time plus a 60-second buffer, retries the same lens once, and records `rate_limit_sleep_seconds` in `summary.json`. During lens execution, unparseable resume times, waits beyond this cap, a second rate-limit after retry, or a non-signal retry sleep failure finish as `rate-limit-pending` and exit `3`; SIGHUP, SIGINT, or SIGTERM during the sleep preserve `interrupted` and exit `129`, `130`, or `143`. |
 | `REPOLENS_NO_PROGRESS_LIMIT`         | `3`      | Consecutive degraded iterations allowed before RepoLens stops the lens with summary status `agent-no-progress`. A degraded iteration is a non-zero agent exit or near-empty output without `DONE`, issue URLs, or newly created local findings. Must be a positive integer no greater than the per-lens safety cap.                                                                                                                                                                                            |
 | `REPOLENS_NO_PROGRESS_MIN_BYTES`     | `512`    | Output-size threshold, in bytes, used by the no-progress guard. Agent output below this size is treated as degraded unless the iteration still shows progress through `DONE`, issue URLs, or local findings. Must be a non-negative integer up to `1048576`.                                                                                                                                                                                                                                                     |
 | `REPOLENS_DEGENERATE_THRESHOLD`      | `90`     | Percentage of run lenses that may end with status `max-iterations` before a zero-finding run is treated as broken. Must be an integer from `1` to `100`.                                                                                                                                                                                                                                                                                                                                                      |
@@ -459,8 +523,12 @@ REPOLENS_AGENT_TIMEOUT_OPENCODE=3600 ./repolens.sh --project ~/my-app --agent op
 | `REPOLENS_SCOPE_BY_KEYWORDS`         | unset    | Fallback for `--scope-by-keywords` when the CLI flag is unset. Truthy values (`1`, `true`, `yes`, `on`) enable the deterministic keyword-based domain pruner; falsy or unrecognized values leave it disabled. CLI `--scope-by-keywords` wins when both are set. Only effective in `--mode bugreport`.                                                                                                                                                              |
 | `REPOLENS_HEARTBEAT_INTERVAL`        | `60` for parallel log output, `15` for per-lens files | Shared heartbeat interval in seconds. While more than one parallel child is still running, `wait_all` logs `[heartbeat] N running: domain/lens (elapsed)` through the standard logging channels. Active lenses also write JSON heartbeat files under `logs/<run-id>/.heartbeat/` when `REPOLENS_LENS_HEARTBEAT_INTERVAL` is unset. Set to `0` to disable parallel log heartbeats and, when no lens-specific override is set, per-lens heartbeat files.                                                                      |
 | `REPOLENS_LENS_HEARTBEAT_INTERVAL`   | unset    | Per-lens heartbeat file interval override in seconds. Wins over `REPOLENS_HEARTBEAT_INTERVAL` for files only; default file interval is `15` seconds when both variables are unset. Set to `0` to disable per-lens heartbeat files without changing parallel log heartbeats.                                                                                                                                                                                                                                     |
-| `REPOLENS_STATUS_INTERVAL`           | `10`     | Whole-run `logs/<run-id>/status.json` refresh interval in seconds. Must be a positive integer; invalid values and `0` fall back to `10`. RepoLens writes the first snapshot immediately after run setup, then refreshes it while the run is active and writes a final `finished`, `finished-empty`, `failed`, or `interrupted` snapshot on exit.                                                                                                                                                                  |
+| `REPOLENS_STATUS_INTERVAL`           | `10`     | Whole-run `logs/<run-id>/status.json` refresh interval in seconds. Must be a positive integer; invalid values and `0` fall back to `10`. RepoLens writes the first snapshot immediately after run setup, then refreshes it while the run is active and writes a final `finished`, `finished-empty`, `failed`, `interrupted`, or `rate-limit-pending` snapshot on exit.                                                                                                                                                |
 | `REPOLENS_CLEANUP_GRACE`             | `5`      | Interrupt cleanup grace in seconds for tracked parallel workers. When a parallel run receives Ctrl-C or TERM, RepoLens asks tracked workers to stop, waits up to this many seconds, then force-stops any workers still running so cleanup returns. Set to `0` to skip the grace wait. Must be a non-negative integer.                                                                                                                                                                                            |
+| `REPOLENS_AUTO_CLEAN`                | `false`  | Set to `true` to prune old run directories under `logs/` in the background at startup, using `REPOLENS_RETENTION_DAYS` and `REPOLENS_KEEP_LAST`. The prune logs an INFO line with the resolved retention settings, never blocks or fails the run, keeps resume candidates and live runs, and applies the same safe selector as `repolens.sh clean`. Off by default; equivalent to running `clean` by hand.                                                                                                     |
+| `REPOLENS_RETENTION_DAYS`            | `30`     | Age threshold in days for the `REPOLENS_AUTO_CLEAN` startup prune — runs older than this are eligible for removal. Non-numeric values fall back to the default. No effect unless `REPOLENS_AUTO_CLEAN=true`.                                                                                                                                                                                                                                                                                                   |
+| `REPOLENS_KEEP_LAST`                 | `50`     | Number of most-recent runs the `REPOLENS_AUTO_CLEAN` startup prune always protects, regardless of age. Non-numeric values fall back to the default. No effect unless `REPOLENS_AUTO_CLEAN=true`.                                                                                                                                                                                                                                                                                                               |
+| `REPOLENS_ITERATION_KEEP`            | `3`      | Number of most-recent per-lens forensic `iteration-N-TIMESTAMP.txt` captures kept uncompressed after a lens finishes. Older captures are gzipped to `.txt.gz` to save disk; this is forensic-only data and never read by synthesis, verification, or `--resume`. Compression is skipped silently when `gzip` is unavailable.                                                                                                                                                                                  |
 
 ### Per-Lens Heartbeat Files
 
@@ -514,11 +582,40 @@ Refresh the terminal view until Ctrl-C:
 
 Omit the watch interval to use the 5-second default. Use `--no-color` when piping output or capturing snapshots without ANSI color.
 
-`status.json` is refreshed atomically at `REPOLENS_STATUS_INTERVAL` seconds and is safe for humans, scripts, and monitoring tools to read while RepoLens is running. It includes run metadata, `state`, `health`, `total_lenses`, `completion_percentage`, aggregate `counts`, and the `active`, `queued`, and `completed` lens lists.
+`status.json` is refreshed atomically at `REPOLENS_STATUS_INTERVAL` seconds and is safe for humans, scripts, and monitoring tools to read while RepoLens is running. It includes run metadata, `state`, `health`, `total_lenses`, `completion_percentage`, aggregate `counts`, and the `active`, `queued`, and `completed` lens lists. Terminal `rate-limit-pending` snapshots also include `next_action.earliest_at` when RepoLens knows the provider retry time; the value is a UTC timestamp such as `2026-05-14T21:30:00Z` and is omitted for other final states or pending runs without a known retry time.
 
-The `state` value is `running` during execution, then `finished` when at least one finding was created, `finished-empty` when no findings were created without a degenerate failure, `failed` when the run health gate detects a broken zero-finding run, or `interrupted` after Ctrl-C or TERM. Final snapshots also include `health`: `ok` when findings exist, `no-findings` for a clean zero-finding run, `empty` when no lenses ran, or `broken` when zero findings were created and at least `REPOLENS_DEGENERATE_THRESHOLD` percent of run lenses ended as `max-iterations`. `active` entries come from per-lens heartbeat files and include `pid`, `iteration`, `started_at`, `last_heartbeat_at`, `age_seconds`, and `heartbeat_age_seconds`; stale heartbeat files are still reported. `queued` lists resolved lenses that are neither active nor completed. `completed` reflects completed lenses, including existing completed state when using `--resume`. `counts.issues_created` comes from `logs/<run-id>/summary.json`.
+The `state` value is `running` during execution, then `finished` when at least one finding was created, `finished-empty` when no findings were created without a degenerate failure, `failed` when the run health gate detects a broken zero-finding run, `interrupted` after Ctrl-C, SIGHUP, or TERM, or `rate-limit-pending` when a lens-level agent rate-limit abort leaves unfinished work to resume. The CLI exits `3` for `rate-limit-pending`; interrupted rate-limit retry sleeps preserve signal exit codes `129`, `130`, and `143`. Final snapshots also include `health`: `ok` when findings exist, `no-findings` for a clean zero-finding run, `empty` when no lenses ran, or `broken` when zero findings were created and at least `REPOLENS_DEGENERATE_THRESHOLD` percent of run lenses ended as `max-iterations`. `active` entries come from per-lens heartbeat files and include `pid`, `iteration`, `started_at`, `last_heartbeat_at`, `age_seconds`, and `heartbeat_age_seconds`; stale heartbeat files are still reported. `queued` lists resolved lenses that are neither active nor completed. `completed` reflects completed lenses, including existing completed state when using `--resume`. `counts.issues_created` comes from `logs/<run-id>/summary.json`.
 
-## Domains & Lenses (335 total across 32 domains)
+### Cleaning Up Old Runs
+
+Run directories under `logs/` accumulate over time and are never removed automatically by default. The `clean` subcommand prunes old ones:
+
+```bash
+# Remove runs older than 30 days, always keeping the 50 most recent (defaults)
+./repolens.sh clean
+
+# Remove runs older than a week
+./repolens.sh clean --older-than 7d
+
+# Preview what would be removed without deleting anything
+./repolens.sh clean --dry-run
+```
+
+`clean` is deliberately conservative. It only ever considers a direct child of `logs/` whose name is a genuine run id and that carries a `summary.json` or `status.json` — AutoDev working state, partial directories, and anything else under `logs/` are never touched. By default, it also keeps any run that is still resumable (incomplete, interrupted, failed, or with a recorded stop reason). Runs that a process is using right now are always kept.
+
+| Option                | Default | Description                                                                                                                    |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--older-than <dur>`  | `30d`   | Remove runs older than this age. Suffix `d`/`h`/`m` for days/hours/minutes, or pass a bare number of seconds.                   |
+| `--keep-last <n>`     | `50`    | Always protect the N most recent runs, regardless of age.                                                                       |
+| `--keep-incomplete`   | on      | Keep resume-candidate runs (running/interrupted/failed, a non-null stop reason, or an abort sentinel). On by default.           |
+| `--remove-incomplete` | —       | Opposite of `--keep-incomplete`: also remove resume candidates that are otherwise eligible.                                     |
+| `--dry-run`           | —       | Print the run ids that would be removed and delete nothing.                                                                     |
+| `--force`             | —       | Skip the confirmation prompt. The prompt is also skipped automatically when stdin is not an interactive terminal (CI/AutoDev). |
+| `-h`, `--help`        | —       | Show `clean` help.                                                                                                              |
+
+To prune automatically at startup instead of running `clean` by hand, set `REPOLENS_AUTO_CLEAN=true` (see [Environment Variables](#environment-variables)). RepoLens logs the resolved retention settings at INFO before starting the background prune. This is off by default.
+
+## Domains & Lenses (336 total across 33 domains)
 
 ### Code Analysis Domains (used by `audit`, `feature`, `bugfix`, `custom`)
 
@@ -561,10 +658,14 @@ The `state` value is `running` during execution, then `finished` when at least o
 | **Android**               | `deploy`     | 17 lenses | APK overview, package metadata, bundled dependency CVE inventory, native `.so` inventory, JNI surface, binary hardening, AndroidManifest permissions and component flags, exported IPC components, intent filters, deeplinks, App Links, Android intent fuzzing for exported activities, providers, broadcasts, and malformed IPC inputs, drozer attack-surface enumeration for exported activities, services, receivers, providers, backup posture, and shared UID exposure, APK secrets, credentials, internal URLs, WebView security settings, JavaScript bridges, Network Security Config, TLS trust, certificate pinning, MITM traffic observation, logcat sensitive-data leaks, Frida runtime behavior hooks for crypto, file I/O, network, process, reflection, IPC, logging anomalies, anti-tamper and detection-bypass robustness, Android KeyStore, EncryptedSharedPreferences, SQLCipher/Realm secure-storage misuse, Android Lint, detekt, ktlint, Spotless, Gradle SDK consistency, manifest merger, R8/ProGuard posture, suppressions, baselines, and device-aware Android audit context |
 | **Open Source Readiness** | `opensource` | 13 lenses | Secret leaks, license compliance, dependency licensing, internal exposure, git history secrets, community readiness, documentation gaps, monetization exposure, PII, build reproducibility, security posture, code attribution, trademarks           |
 | **Content Quality**       | `content`    | 17 lenses | Content inventory, metadata, staleness, accessibility, linking, duplication, completeness, consistency, code examples, PII, multimedia, versioning, audience targeting, localization, topic extraction, planning, exercise design                    |
+| **Greenfield Planning**   | `greenfield` | 1 lens | Spec-led backlog planning for new or skeletal projects; creates one implementation-sized `[P0]`-`[P3]` issue per invocation, then continues until existing issues sufficiently cover the spec |
+| **Fluency**               | `polish`     | 6 lenses | Visual-UI processing-fluency refinements for contrast, alignment, spacing, motion, conventions, and typographic rhythm |
+| **Effort Signal**         | `polish`     | 6 lenses | Polishing forgotten corners, empty states, loading transparency, edge cases, errors, and offline or failure states |
+| **Hedonic**               | `polish`     | 4 lenses | Experimental polish lenses for voice, microcopy, identity, stimulation moments, and fitting hidden delights that require strong voice-profile fit |
 
 ## How It Works
 
-1. Validates target repo, server, APK target, or Android source tree, agent CLI, and forge CLI auth (skipped with `--local`)
+1. Validates target repo, server, APK target, Android source tree, or greenfield product spec, agent CLI, and forge CLI auth (skipped with `--local`)
 2. Resolves lens list (all, `--domain`, `--focus`, or `--lens`) and creates the run artifact layout under `logs/<run-id>/`
 3. If `--dry-run`: prints mode, agent, project path, resolved round count, remote target metadata when `--remote` is set, and the full lens list, then exits — no agents run, no prompts are shown, and no Android Gradle build is executed
 4. For `--agent claude`: prompts for acknowledgment that `--dangerously-skip-permissions` only skips interactive permission prompts, not safety filters. `--yes` bypasses this prompt
@@ -575,9 +676,11 @@ The `state` value is `running` during execution, then `finished` when at least o
 9. For each lens:
    - Composes prompt from base template + lens expert focus
    - Runs agent in target repo directory
-   - Agent reads code, finds issues, and creates remote issues (or writes markdown files in `--local` mode)
+   - Agent follows the selected mode: code modes read code, deploy modes inspect the target, content modes inspect content/source material, greenfield plans from `--spec` using the current open issue or local draft backlog without inspecting repository code, and polish mode looks for voice-fit refinements
+   - Agent creates remote issues, writes local files, or writes polish suggestion JSON depending on the selected mode
    - Loops until DONE detected (3× streak for audit/feature/bugfix, 1× for other modes)
-10. Writes `logs/<run-id>/status.json` while the run is active and generates `logs/<run-id>/summary.json`
+10. For polish mode, ranks collected suggestions and emits grouped polishing shortlists
+11. Writes `logs/<run-id>/status.json` while the run is active and generates `logs/<run-id>/summary.json`
 
 For a deeper look at the methodology — how lenses are composed, how agents iterate, and how streak detection works — see [METHODOLOGY.md](METHODOLOGY.md).
 
@@ -605,24 +708,25 @@ That's it. No code changes needed.
 
 ## Resume
 
-If a run is interrupted (Ctrl+C, crash), resume it:
+If a run is interrupted, crashes, or ends as `rate-limit-pending`, resume it:
 
 ```bash
 ./repolens.sh --project ~/my-app --agent claude --resume 20260315T120000Z-a1b2c3d4
 ```
 
-Completed lenses are skipped. The run ID is printed at startup and found in `logs/`.
+Completed lenses are skipped; unfinished and rate-limited lenses are retried. The run ID is printed at startup and found in `logs/`.
 
 ## Output
 
-- **Remote Issues** — Created directly in the target repo with severity-prefixed titles and domain labels (default)
-- **Local Markdown** — With `--local`, findings are written as individual markdown files to `<output-dir>/<domain>/<lens-id>/NNN-slug.md` with YAML frontmatter (title, severity, domain, lens, labels). Default output directory: `logs/<run-id>/rounds/round-1/lens-outputs/`
+- **Remote Issues** — Created directly in the target repo with severity-prefixed titles and domain labels for issue-filing modes. Polish mode creates `[POLISH]` lens-scoped polishing shortlist issues instead
+- **Local Output** — With `--local`, findings or backlog items are written as individual markdown files to `<output-dir>/<domain>/<lens-id>/NNN-slug.md` with YAML frontmatter (title, severity or priority, domain, lens, labels). Polish lenses write JSON suggestion objects, then RepoLens writes grouped polishing shortlist drafts under `logs/<run-id>/polish/filed/`. Default output directory: `logs/<run-id>/rounds/round-1/lens-outputs/`. In greenfield mode, existing draft files in that directory are treated as the current draft backlog on later planning iterations
+- **Polish Ranked Suggestions** — Polish runs write `logs/<run-id>/polish/ranked-suggestions.json`, sorted by deterministic polish rank with `fluency_baseline`, `soul_fit`, `effort_gap_multiplier`, and `polish_rank_x1000` on each suggestion
 - **Round Artifacts** — Every run creates `logs/<run-id>/rounds/round-N/` for each resolved round, including `metadata.json`, `lens-outputs/`, and `digest.md`. `round-N/.completed` appears only after that round finishes cleanly. Multi-round runs write between-round `dispatch.md` handoff files on completed rounds before the final round
 - **Final Artifacts** — Every run creates `logs/<run-id>/final/` and `logs/<run-id>/final/filed/`. Successful multi-round runs promote a schema-validated `logs/<run-id>/final/manifest.json`; later filing stages record filed issue links under `final/filed/`
-- **Logs** — `logs/<run-id>/<domain>/<lens>/iteration-N-TIMESTAMP.txt`
+- **Logs** — `logs/<run-id>/<domain>/<lens>/iteration-N-TIMESTAMP.txt`. After a lens finishes, all but the most recent `REPOLENS_ITERATION_KEEP` (default `3`) of these forensic captures are gzipped to `.txt.gz`. Prune whole run directories with `./repolens.sh clean`
 - **Heartbeats** — Active lenses write `logs/<run-id>/.heartbeat/<domain>__<lens-id>.json`; files are removed after clean lens completion and left behind if a worker exits abnormally
 - **Status** — `logs/<run-id>/status.json`, refreshed during the run with queued, active, completed, issue-count, completion-percentage, run-health, and final-state data; render it with `./repolens.sh status [run-id]`
-- **Summary** — `logs/<run-id>/summary.json`, including per-lens status, iterations, issue counts, `rate_limit_sleep_seconds`, final `health`, and run-level `stopped_reason` when an agent abort guard or the run-health gate stops the run
+- **Summary** — `logs/<run-id>/summary.json`, including per-lens status, iterations, issue counts, `findings_filtered`, `rate_limit_sleep_seconds`, final `health`, and run-level `stopped_reason` when an agent abort guard, signal interruption, or the run-health gate stops the run. When `findings_filtered` is non-zero, final stdout prints `Findings filtered by --min-severity: N` before the `=== RepoLens Run Summary ===` JSON dump
 
 ## Development
 
@@ -728,10 +832,11 @@ Most first-run failures fall into one of these patterns. Errors are quoted verba
 | `--hosted requires a docker-compose.yml or compose.yml in the project`                                                               | No compose file at project root                                                                              | Add a compose file, or drop `--hosted` and audit statically                                                                                                                         |
 | `All discovered hosted HTTP services are unhealthy or unreachable`                                                                   | Every discovered hosted HTTP target failed its Compose health status or HTTP probe                           | Check `docker compose ps`, service logs, healthchecks, and the service root HTTP paths before spending DAST scan iterations                                                         |
 | `Lens '…' not found in domains.json`                                                                                                 | Typo in `--focus` / `--lens` lens id, or wrong mode                                                          | List available lenses: `jq -r '.domains[].lenses[]' config/domains.json`                                                                                                            |
-| `Domain '…' not found in domains.json`                                                                                               | Typo in `--domain` id, or mode mismatch                                                                      | `discover` / `deploy` / `opensource` / `content` modes only see their own domain — see the [Modes](#modes) table                                                                    |
+| `Domain '…' not found in domains.json`                                                                                               | Typo in `--domain` id, or mode mismatch                                                                      | `discover` / `deploy` / `opensource` / `content` / `greenfield` / `polish` modes only see their own domain — see the [Modes](#modes) table                                           |
 | `Mode 'custom' requires --change "your change statement"`                                                                            | `--mode custom` without a change statement                                                                   | Pass `--change "your statement"`                                                                                                                                                    |
+| `Mode 'greenfield' requires --spec <file>`                                                                                            | `--mode greenfield` without a product specification                                                          | Pass `--spec path/to/spec.md`                                                                                                                                                       |
 | `Hit safety cap (N iterations). Stopping lens.`                                                                                      | Agent never emitted `DONE` 3× in a row                                                                       | Inspect `logs/<run-id>/<domain>/<lens>.log` — usually a model output-format issue, rate limit, or context overflow. Retry with a smaller `--max-parallel` or a different `--agent`. |
-| `Agent rate-limited / quota exceeded. Aborting run.`                                                                                 | Agent hit a provider quota and RepoLens could not use the one-shot sleep retry                               | Inspect the lens log for the provider message, then wait for quota reset, retry with lower `--max-parallel`, rerun with `--resume <run-id>`, or raise `REPOLENS_RATE_LIMIT_MAX_SLEEP` before starting a new run. |
+| `Agent rate-limited / quota exceeded. Aborting run.`                                                                                 | Agent hit a provider quota and RepoLens could not complete the one-shot sleep retry                          | Lens-level aborts end with `status.json.state: "rate-limit-pending"` and exit `3`; bugreport phase aborts can end as `failed` with a `rate-limited-*` stopped reason. Inspect the relevant log for the provider message, then wait for quota reset, retry with lower `--max-parallel`, rerun with `--resume <run-id>`, or raise `REPOLENS_RATE_LIMIT_MAX_SLEEP` before starting a new run. |
 | `No-progress circuit breaker tripped`                                                                                                | The agent repeatedly exited non-zero or produced near-empty output without `DONE`, issue URLs, or local findings | Inspect the lens log for provider outages, auth failures, crashed agent CLIs, or unexpected empty output. Fix the agent/backend issue, then rerun with `--resume <run-id>`. Tune `REPOLENS_NO_PROGRESS_LIMIT` or `REPOLENS_NO_PROGRESS_MIN_BYTES` only for agents that are expected to be unusually terse. |
 | `Run health: BROKEN`                                                                                                                  | The run created zero findings and at least `REPOLENS_DEGENERATE_THRESHOLD` percent of run lenses stopped at `max-iterations` | Inspect the affected lens logs for agents that repeatedly missed the required `DONE` streak. Retry with a smaller scope or different agent, lower concurrency if provider instability is suspected, or set `REPOLENS_ALLOW_DEGENERATE=true` only when CI should accept this known-broken result while preserving `summary.health="broken"`. |
 | `Pricing data is N days old — estimates may be inaccurate`                                                                           | `config/agent-pricing.json` has not been refreshed in over 60 days                                           | Update the pricing file with current model prices from your AI provider's pricing page, and set the top-level `updated_at` field to today's date                                    |

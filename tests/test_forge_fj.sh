@@ -20,12 +20,11 @@
 #   - forge_label_create <label> <color> <owner/repo> calls
 #     `fj -H <host> repo labels <owner/repo> create <label> <color>`
 #     and keeps label creation best-effort by swallowing fj failures.
-#   - forge_issue_list_count <owner/repo> <label> calls
-#     `fj -H <host> --style json issue search --repo <owner/repo>
-#      --labels <label> --state open`, parses the JSON array length via jq
-#     (preferred), and falls back to a case-insensitive `N issue(s)` line
-#     regex on the same output when jq cannot parse it (issue #244 hardening).
-#     Preserves the same success/failure contract as the gh/tea branches.
+#   - forge_issue_list_count <owner/repo> <label> works with the official
+#     forgejo-cli contract: `--style` only accepts `fancy|minimal`, so the
+#     wrapper must not pass `--style json`. It uses host-scoped issue search,
+#     parses the leading minimal-style `N issue(s)` line, and preserves the
+#     same success/failure contract as the gh/tea branches.
 #   - fj never relies on current-directory repository inference; every call
 #     gets an explicit FORGE_HOST-derived `-H` argument.
 #
@@ -122,6 +121,14 @@ if [[ -n "${REPOLENS_FAKE_FJ_ARGV_DUMP+x}" ]]; then
     done
   } > "$REPOLENS_FAKE_FJ_ARGV_DUMP"
 fi
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "--style" && "$arg" == "json" ]]; then
+    printf "error: invalid value 'json' for '--style <STYLE>'\n" >&2
+    exit 2
+  fi
+  previous="$arg"
+done
 if [[ -n "${REPOLENS_FAKE_FJ_STDERR+x}" ]]; then
   printf '%s\n' "$REPOLENS_FAKE_FJ_STDERR" >&2
 fi
@@ -288,8 +295,8 @@ argv_content="$(cat "$argv_dump" 2>/dev/null || true)"
 assert_rc_zero "zero fj issues is a successful count" "$rc"
 assert_eq "stdout is 0 for legitimately zero matching open Forgejo issues" "0" "$out"
 assert_eq "stderr is empty on successful fj count" "" "$(cat "$err_file")"
-assert_eq "fj issue-search argv matches the accepted flags and order (JSON-first)" \
-  "-H codeberg.org --style json issue search --repo owner/repo --labels audit:demo --state open" "$logged"
+assert_eq "fj issue-search argv uses official minimal style and accepted flags" \
+  "-H codeberg.org --style minimal issue search --repo owner/repo --labels audit:demo --state open" "$logged"
 assert_eq "fj issue-search argv has the expected argument count" "12" "$(sed -n '1p' "$argv_dump" 2>/dev/null || true)"
 assert_contains "fj issue-search argv includes owner/repo as one argument" "<owner/repo>" "$argv_content"
 
@@ -328,8 +335,8 @@ out="$(run_wrapper forge_issue_list_count owner/repo audit:demo 2>/dev/null)"
 rc=$?
 assert_rc_zero "self-hosted fj issue count exits zero" "$rc"
 assert_eq "stdout is 2 for two matching open Forgejo issues" "2" "$out"
-assert_eq "self-hosted fj issue-search argv preserves the HTTPS host (JSON-first)" \
-  "-H https://forge.example.com:3000 --style json issue search --repo owner/repo --labels audit:demo --state open" "$(cat "$fj_log")"
+assert_eq "self-hosted fj issue-search argv preserves the HTTPS host with minimal style" \
+  "-H https://forge.example.com:3000 --style minimal issue search --repo owner/repo --labels audit:demo --state open" "$(cat "$fj_log")"
 
 echo ""
 echo "Test 11: fj issue search failure returns non-zero, empty stdout, and warning"
@@ -392,30 +399,30 @@ assert_contains "missing issue label reports missing argument" "missing argument
 assert_log_empty "missing issue label does not call fj" "$fj_log"
 
 echo ""
-echo "Test 15: fj --style json returns a JSON array -> count is parsed via jq length (issue #244)"
+echo "Test 15: official fj rejects --style json but minimal output still counts"
 reset_fake_fj
 fj_log="$TMPDIR/t15-fj.log"
 : > "$fj_log"
 FORGE_HOST=codeberg.org
 REPOLENS_FAKE_FJ_RC=0
-REPOLENS_FAKE_FJ_STDOUT='[{"number":1},{"number":2},{"number":3}]'
+REPOLENS_FAKE_FJ_STDOUT='3 issues'
 REPOLENS_FAKE_FJ_LOG="$fj_log"
 err_file="$TMPDIR/t15.err"
 out="$(run_wrapper forge_issue_list_count owner/repo audit:demo 2>"$err_file")"
 rc=$?
-assert_rc_zero "JSON-array fj output is a successful count" "$rc"
-assert_eq "stdout is the JSON array length on JSON happy path" "3" "$out"
-assert_eq "stderr is empty when JSON parses cleanly" "" "$(cat "$err_file")"
-assert_contains "fj is invoked with --style json on the JSON-first probe" "--style json" "$(cat "$fj_log")"
+assert_rc_zero "official-minimal fj output is a successful count" "$rc"
+assert_eq "stdout is the parsed minimal count" "3" "$out"
+assert_eq "stderr is empty when minimal output parses cleanly" "" "$(cat "$err_file")"
+assert_eq "fj is invoked with official minimal style, not invalid JSON style" \
+  "-H codeberg.org --style minimal issue search --repo owner/repo --labels audit:demo --state open" "$(cat "$fj_log")"
 
 echo ""
 echo "Test 16: minimal-style output with capitalized 'Issues' still parses via case-insensitive fallback (issue #244)"
 reset_fake_fj
 FORGE_HOST=codeberg.org
 REPOLENS_FAKE_FJ_RC=0
-# fj versions that don't honour --style json may still emit the minimal
-# leading-count line; the title-cased 'Issues' form was the original
-# regression that motivated #244.
+# Official fj emits a minimal leading-count line; the title-cased 'Issues'
+# form was the original regression that motivated #244.
 REPOLENS_FAKE_FJ_STDOUT='2 Issues'
 err_file="$TMPDIR/t16.err"
 out="$(run_wrapper forge_issue_list_count owner/repo audit:demo 2>"$err_file")"
@@ -453,30 +460,22 @@ else
 fi
 
 echo ""
-echo "Test 18: fj --style json returns an empty JSON array -> jq length=0, silent success (issue #244)"
-# The natural 'zero matches' shape in JSON mode is '[]'. Pre-#244, the only
-# zero-count test fed '0 issues' (minimal-style), which now exercises the
-# fallback regex path rather than the JSON probe. Without this test, the
-# JSON-probe branch producing 0 is unobserved -- a regression that swapped
-# '[]' for, say, jq's '.length' (typo) or that demoted the JSON probe to
-# only succeed for non-zero counts would slip through. The empty array
-# *must not* fall through to the regex fallback (regex requires
-# 'N issue(s)' shape, which '[]' does not satisfy), so a passing rc + '0'
-# stdout here unambiguously proves the JSON probe handled it.
+echo "Test 18: minimal output with whitespace around zero still prints 0"
 reset_fake_fj
 fj_log="$TMPDIR/t18-fj.log"
 : > "$fj_log"
 FORGE_HOST=codeberg.org
 REPOLENS_FAKE_FJ_RC=0
-REPOLENS_FAKE_FJ_STDOUT='[]'
+REPOLENS_FAKE_FJ_STDOUT='  0 Issues  '
 REPOLENS_FAKE_FJ_LOG="$fj_log"
 err_file="$TMPDIR/t18.err"
 out="$(run_wrapper forge_issue_list_count owner/repo audit:demo 2>"$err_file")"
 rc=$?
-assert_rc_zero "empty JSON array is a successful zero count" "$rc"
-assert_eq "stdout is 0 for an empty JSON array (jq length=0)" "0" "$out"
-assert_eq "stderr is empty on JSON zero-count (no fallback warn leak)" "" "$(cat "$err_file")"
-assert_contains "fj is still invoked with --style json on the zero-count probe" "--style json" "$(cat "$fj_log")"
+assert_rc_zero "whitespace-padded minimal zero-count exits zero" "$rc"
+assert_eq "stdout is 0 for a whitespace-padded minimal zero count" "0" "$out"
+assert_eq "stderr is empty on minimal zero-count" "" "$(cat "$err_file")"
+assert_eq "zero-count fj call uses official minimal style" \
+  "-H codeberg.org --style minimal issue search --repo owner/repo --labels audit:demo --state open" "$(cat "$fj_log")"
 
 echo ""
 echo "================================"

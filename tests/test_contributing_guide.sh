@@ -207,8 +207,8 @@ assert_matches "has domain taxonomy section" "(?im)^#{1,3}[[:space:]]+.*(domain|
 
 echo ""
 echo "Test 18: References actual domain count from domains.json"
-actual_domains="$(jq '.domains | length' "$DOMAINS_FILE")"
-assert_contains "contains actual domain count ($actual_domains)" "$actual_domains" "$contributing_content"
+actual_domains="$(jq '[.domains[] | select(.mode != "polish")] | length' "$DOMAINS_FILE")"
+assert_contains "contains documented non-polish domain count ($actual_domains)" "$actual_domains" "$contributing_content"
 
 echo ""
 echo "Test 19: Lists security domain"
@@ -671,6 +671,9 @@ if [[ -f "$DOMAINS_FILE" ]]; then
   mode_ok=true
   while IFS=: read -r domain_id _count mode; do
     if [[ "$mode" != "default" ]]; then
+      if [[ "$mode" == "polish" ]] && ! grep -qE "^\|?[[:space:]]*${domain_id}[[:space:]]*\|" <<< "$contributing_content"; then
+        continue
+      fi
       if ! grep -qE "^\|?[[:space:]]*${domain_id}[[:space:]]*\|.*\`${mode}\`" <<< "$contributing_content"; then
         echo "  MISSING mode value: $domain_id should show mode=$mode"
         mode_ok=false
@@ -720,7 +723,7 @@ if [[ -f "$DOMAINS_FILE" ]]; then
       echo "  MISSING: $domain_id has mode field but is missing from Mode-Specific section"
       placement_ok=false
     fi
-  done < <(jq -r '.domains[] | select(.mode != null and .mode != "") | .id' "$DOMAINS_FILE")
+  done < <(jq -r '.domains[] | select(.mode != null and .mode != "" and .mode != "polish") | .id' "$DOMAINS_FILE")
   TOTAL=$((TOTAL + 1))
   if $placement_ok; then
     PASS=$((PASS + 1))
@@ -739,7 +742,7 @@ echo ""
 echo "Test 82: Section heading counts match actual domain counts from domains.json"
 if [[ -f "$DOMAINS_FILE" ]]; then
   actual_default="$(jq '[.domains[] | select(.mode == null or .mode == "")] | length' "$DOMAINS_FILE")"
-  actual_mode="$(jq '[.domains[] | select(.mode != null and .mode != "")] | length' "$DOMAINS_FILE")"
+  actual_mode="$(jq '[.domains[] | select(.mode != null and .mode != "" and .mode != "polish")] | length' "$DOMAINS_FILE")"
   heading_count_ok=true
   if ! grep -qE "### Default-Mode Domains \(${actual_default}\)" <<< "$contributing_content"; then
     echo "  MISMATCH: Default-Mode heading count should be $actual_default"

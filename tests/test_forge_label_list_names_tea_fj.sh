@@ -33,9 +33,9 @@
 #   - forge_label_list_names <owner/repo> with FORGE_PROVIDER=fj:
 #       * Requires FORGE_HOST; missing host dies before invoking fj.
 #       * On success: returns 0, prints one label name per line on stdout.
-#         The arm may choose JSON or CSV output style — the stub below
-#         responds to either flag so the test asserts behavior, not the
-#         specific output-format choice.
+#         The official path parses minimal/CSV-like output without passing
+#         the unsupported `--style json` flag, while still accepting
+#         structured JSON if a compatible CLI emits it.
 #       * On fj failure: returns 1, empty stdout, warn includes
 #         `fj failed`, `repo=<slug>`, `rc=<exit>`, and the first stderr
 #         line as `err=...`.
@@ -164,13 +164,12 @@ exit "${REPOLENS_FAKE_TEA_RC:-0}"
 SH
 chmod +x "$FAKE_BIN/tea"
 
-# Fake fj — same shape, but additionally supports format-aware output so
-# the test passes regardless of whether the implementation chooses JSON
-# (`--style json`) or CSV (`--style csv`) as the labels-list output mode.
-# When REPOLENS_FAKE_FJ_LABELS_NAMES is set (space-separated), the stub
-# inspects its argv for `--style json` vs `--style csv` and emits the
-# matching wire format. When unset, it falls back to whatever
-# REPOLENS_FAKE_FJ_STDOUT was configured to.
+# Fake fj — same shape, but models the official forgejo-cli parser: global
+# `--style json` is invalid. When REPOLENS_FAKE_FJ_LABELS_NAMES is set
+# (space-separated), the stub emits official minimal label output: one label
+# name per line.
+# When unset, it falls back to whatever REPOLENS_FAKE_FJ_STDOUT was configured
+# to.
 cat > "$FAKE_BIN/fj" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${REPOLENS_FAKE_FJ_LOG:-/dev/null}"
@@ -182,26 +181,21 @@ if [[ -n "${REPOLENS_FAKE_FJ_ARGV_DUMP+x}" ]]; then
     done
   } > "$REPOLENS_FAKE_FJ_ARGV_DUMP"
 fi
+previous=""
+for arg in "$@"; do
+  if [[ "$previous" == "--style" && "$arg" == "json" ]]; then
+    printf "error: invalid value 'json' for '--style <STYLE>'\n" >&2
+    exit 2
+  fi
+  previous="$arg"
+done
 if [[ -n "${REPOLENS_FAKE_FJ_STDERR+x}" ]]; then
   printf '%s\n' "$REPOLENS_FAKE_FJ_STDERR" >&2
 fi
 if [[ -n "${REPOLENS_FAKE_FJ_LABELS_NAMES+x}" ]]; then
-  if [[ "$*" == *"--style json"* ]]; then
-    printf '['
-    sep=""
-    for name in $REPOLENS_FAKE_FJ_LABELS_NAMES; do
-      printf '%s{"name":"%s"}' "$sep" "$name"
-      sep=","
-    done
-    printf ']\n'
-  else
-    printf 'id,name,color,description\n'
-    i=1
-    for name in $REPOLENS_FAKE_FJ_LABELS_NAMES; do
-      printf '%s,%s,#aabbcc,\n' "$i" "$name"
-      i=$((i + 1))
-    done
-  fi
+  for name in $REPOLENS_FAKE_FJ_LABELS_NAMES; do
+    printf '%s\n' "$name"
+  done
 elif [[ -n "${REPOLENS_FAKE_FJ_STDOUT+x}" ]]; then
   printf '%s\n' "$REPOLENS_FAKE_FJ_STDOUT"
 fi
@@ -388,7 +382,85 @@ assert_contains "fj label list argv passes the explicit FORGE_HOST" \
 assert_contains "fj label list argv targets the owner/repo slug" "owner/repo" "$logged"
 assert_contains "fj label list argv invokes the labels-list subcommand" \
   "labels" "$logged"
+assert_not_contains "fj label list argv does not request invalid JSON style" \
+  "--style json" "$logged"
 assert_contains "fj label list argv keeps owner/repo as one argument" "<owner/repo>" "$argv_content"
+
+echo ""
+echo "Test 6b: fj labels list preserves structured JSON compatibility without invalid style"
+reset_fake_fj
+FORGE_HOST="codeberg.org"
+fj_log="$TMPDIR/t6b-fj.log"
+: > "$fj_log"
+REPOLENS_FAKE_FJ_RC=0
+REPOLENS_FAKE_FJ_STDOUT='{"data":[{"name":"audit:foo"},{"name":"enhancement"}]}'
+REPOLENS_FAKE_FJ_LOG="$fj_log"
+err_file="$TMPDIR/t6b.err"
+out="$(run_wrapper fj forge_label_list_names owner/repo 2>"$err_file")"
+rc=$?
+assert_rc_zero "fj JSON-compatible label output exits zero" "$rc"
+assert_eq "fj JSON-compatible label output prints names one per line" \
+  $'audit:foo\nenhancement' "$out"
+assert_eq "fj JSON-compatible label output is silent on stderr" "" "$(cat "$err_file")"
+assert_not_contains "fj JSON-compatible path still avoids invalid style" \
+  "--style json" "$(cat "$fj_log")"
+
+echo ""
+echo "Test 6c: fj labels list preserves CSV/header parsing without invalid style"
+reset_fake_fj
+FORGE_HOST="codeberg.org"
+fj_log="$TMPDIR/t6c-fj.log"
+: > "$fj_log"
+REPOLENS_FAKE_FJ_RC=0
+REPOLENS_FAKE_FJ_STDOUT=$'id,color,name,description\n1,#aabbcc,audit:foo,\n2,#ddeeff,enhancement,'
+REPOLENS_FAKE_FJ_LOG="$fj_log"
+err_file="$TMPDIR/t6c.err"
+out="$(run_wrapper fj forge_label_list_names owner/repo 2>"$err_file")"
+rc=$?
+assert_rc_zero "fj CSV-compatible label output exits zero" "$rc"
+assert_eq "fj CSV-compatible label output prints names one per line" \
+  $'audit:foo\nenhancement' "$out"
+assert_eq "fj CSV-compatible label output is silent on stderr" "" "$(cat "$err_file")"
+assert_not_contains "fj CSV-compatible path still avoids invalid style" \
+  "--style json" "$(cat "$fj_log")"
+
+echo ""
+echo "Test 6d: fj labels list accepts top-level JSON arrays without invalid style"
+reset_fake_fj
+FORGE_HOST="codeberg.org"
+fj_log="$TMPDIR/t6d-fj.log"
+: > "$fj_log"
+REPOLENS_FAKE_FJ_RC=0
+REPOLENS_FAKE_FJ_STDOUT='[{"name":"audit:foo"},{"name":"enhancement"}]'
+REPOLENS_FAKE_FJ_LOG="$fj_log"
+err_file="$TMPDIR/t6d.err"
+out="$(run_wrapper fj forge_label_list_names owner/repo 2>"$err_file")"
+rc=$?
+assert_rc_zero "fj top-level JSON array label output exits zero" "$rc"
+assert_eq "fj top-level JSON array output prints names one per line" \
+  $'audit:foo\nenhancement' "$out"
+assert_eq "fj top-level JSON array output is silent on stderr" "" "$(cat "$err_file")"
+assert_not_contains "fj top-level JSON array path still avoids invalid style" \
+  "--style json" "$(cat "$fj_log")"
+
+echo ""
+echo "Test 6e: fj labels list accepts labels-keyed JSON objects without invalid style"
+reset_fake_fj
+FORGE_HOST="codeberg.org"
+fj_log="$TMPDIR/t6e-fj.log"
+: > "$fj_log"
+REPOLENS_FAKE_FJ_RC=0
+REPOLENS_FAKE_FJ_STDOUT='{"labels":[{"name":"audit:foo"},{"name":"enhancement"}]}'
+REPOLENS_FAKE_FJ_LOG="$fj_log"
+err_file="$TMPDIR/t6e.err"
+out="$(run_wrapper fj forge_label_list_names owner/repo 2>"$err_file")"
+rc=$?
+assert_rc_zero "fj labels-keyed JSON object output exits zero" "$rc"
+assert_eq "fj labels-keyed JSON object output prints names one per line" \
+  $'audit:foo\nenhancement' "$out"
+assert_eq "fj labels-keyed JSON object output is silent on stderr" "" "$(cat "$err_file")"
+assert_not_contains "fj labels-keyed JSON object path still avoids invalid style" \
+  "--style json" "$(cat "$fj_log")"
 
 echo ""
 echo "Test 7: fj labels list works against an HTTPS self-hosted host"
@@ -441,35 +513,48 @@ assert_contains "missing label-list FORGE_HOST reports the required host binding
 assert_log_empty "missing label-list FORGE_HOST does not call fj" "$fj_log"
 
 echo ""
-echo "Test 9b: fj labels list returning malformed JSON returns non-zero with empty stdout"
-# Symmetric coverage for the tea malformed-JSON case (Test 3). Locks in the
-# fj parse-guard path at lib/forge.sh:572-580 — without this test, the empty
-# stdout from a permissive jq run on garbage could be silently mis-read as
-# "no labels exist" instead of "parse failed → fall back to create-all".
+echo "Test 9b: fj labels list returning unparseable CSV output returns non-zero with empty stdout"
+# Symmetric coverage for the tea malformed-output case (Test 3). Official
+# minimal output is plain names, so the non-JSON failure sample must be a
+# structured listing that cannot identify a name column.
 reset_fake_fj
 FORGE_HOST="codeberg.org"
 REPOLENS_FAKE_FJ_RC=0
-REPOLENS_FAKE_FJ_STDOUT='not json either'
+REPOLENS_FAKE_FJ_STDOUT=$'id,title,color\n1,audit:foo,#aabbcc'
 err_file="$TMPDIR/t9b.err"
 out="$(run_wrapper fj forge_label_list_names owner/repo 2>"$err_file")"
 rc=$?
-assert_rc_nonzero "malformed fj JSON is observable to callers" "$rc"
-assert_eq "malformed fj JSON produces empty stdout" "" "$out"
+assert_rc_nonzero "unparseable fj label output is observable to callers" "$rc"
+assert_eq "unparseable fj label output produces empty stdout" "" "$out"
+assert_contains "warning identifies forge_label_list_names for fj parse failure" \
+  "forge_label_list_names" "$(cat "$err_file")"
+
+echo ""
+echo "Test 9c: fj labels list returning malformed JSON returns non-zero with empty stdout"
+reset_fake_fj
+FORGE_HOST="codeberg.org"
+REPOLENS_FAKE_FJ_RC=0
+REPOLENS_FAKE_FJ_STDOUT='{"data":'
+err_file="$TMPDIR/t9c.err"
+out="$(run_wrapper fj forge_label_list_names owner/repo 2>"$err_file")"
+rc=$?
+assert_rc_nonzero "malformed fj JSON label output is observable to callers" "$rc"
+assert_eq "malformed fj JSON label output produces empty stdout" "" "$out"
 assert_contains "warning mentions jq parse failure for fj" \
   "jq failed to parse fj output" "$(cat "$err_file")"
 
 # ---------------------------------------------------------------------------
 # Group 2b: empty label-set carve-out — rc=0 with empty stdout
 # ---------------------------------------------------------------------------
-# The parse guard at lib/forge.sh:541,577 explicitly excludes the literal
-# "[]" so that a forge with zero existing labels returns success (rc=0,
-# empty stdout) and the bootstrap creates all desired labels via the diff
-# path, rather than incorrectly falling through to the create-all fallback.
+# Empty successful label output must return success with empty stdout so the
+# bootstrap creates all desired labels via the diff path, rather than
+# incorrectly falling through to the create-all fallback. tea reports this as
+# JSON []; official fj minimal output is empty.
 echo ""
 echo "--- Group 2b: empty label set returns rc=0 ---"
 echo ""
 
-echo "Test 9c: tea returning [] is success with empty stdout (not a parse failure)"
+echo "Test 9d: tea returning [] is success with empty stdout (not a parse failure)"
 reset_fake_tea
 FORGE_PROJECT_PATH="$FORGE_TEST_PROJECT"
 FORGE_REMOTE_NAME="origin"
@@ -484,11 +569,11 @@ assert_eq "empty tea label set produces empty stdout" "" "$out"
 assert_eq "empty tea label set emits no warning" "" "$(cat "$err_file")"
 
 echo ""
-echo "Test 9d: fj returning [] is success with empty stdout (not a parse failure)"
+echo "Test 9e: fj returning an empty official label listing is success with empty stdout"
 reset_fake_fj
 FORGE_HOST="codeberg.org"
 REPOLENS_FAKE_FJ_RC=0
-REPOLENS_FAKE_FJ_STDOUT='[]'
+REPOLENS_FAKE_FJ_STDOUT=''
 err_file="$TMPDIR/t9d.err"
 out="$(run_wrapper fj forge_label_list_names owner/repo 2>"$err_file")"
 rc=$?
@@ -497,7 +582,7 @@ assert_eq "empty fj label set produces empty stdout" "" "$out"
 assert_eq "empty fj label set emits no warning" "" "$(cat "$err_file")"
 
 echo ""
-echo "Test 9e: tea defaults FORGE_REMOTE_NAME to 'origin' when only FORGE_PROJECT_PATH is set"
+echo "Test 9f: tea defaults FORGE_REMOTE_NAME to 'origin' when only FORGE_PROJECT_PATH is set"
 # Test 1 sets FORGE_REMOTE_NAME explicitly. Locks the default at
 # lib/forge.sh:509 (`--remote "${FORGE_REMOTE_NAME:-origin}"`) so the
 # cascade does not regress to passing an empty --remote flag, which would
@@ -579,10 +664,9 @@ EOF
 out="$(run_wrapper fj forge_label_bootstrap owner/repo "$desired_file" 2>/dev/null)"
 rc=$?
 unset REPOLENS_LABEL_CACHE_DIR REPOLENS_LABEL_CACHE_TTL
-# fj label-list invocation may use `repo labels owner/repo list` (issue
-# proposal) or `--style json repo labels owner/repo list` (plan B). The
-# observable contract is the same: one list call, then create only the
-# missing labels. We grep on "labels" plus " list" to be robust to either.
+# The observable contract is one official-compatible list call, then create
+# only the missing labels. We grep on "labels" plus " list" to avoid coupling
+# this test to unrelated flag ordering.
 list_count="$(grep -c 'repo labels .* list' "$fj_log" 2>/dev/null || true)"
 create_count="$(grep -c 'repo labels .* create' "$fj_log" 2>/dev/null || true)"
 assert_rc_zero "fj bootstrap succeeds" "$rc"

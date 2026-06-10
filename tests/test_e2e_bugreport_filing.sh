@@ -293,6 +293,8 @@ if [[ -n "$RUN_ID" && -d "$RUN_LOG_DIR" ]]; then
   assert_file_exists "dedup marker failed exists" "$RUN_LOG_DIR/final/filed/mock-round-handoff.failed"
   assert_contains "dedup marker records dedup hit" "DEDUP_HIT: #204" "$RUN_LOG_DIR/final/filed/mock-round-handoff.failed"
   assert_contains "dedup run logs filing completion" "Filing: batch complete" "$run_output"
+  assert_jq "dedup status remains successful without filing stop reason" "$RUN_LOG_DIR/status.json" \
+    'has("stopped_reason") and .state != "failed" and .stopped_reason == null'
 fi
 
 run_bugreport_case "verification-failed" "fail"
@@ -302,6 +304,9 @@ if [[ -n "$RUN_ID" && -d "$RUN_LOG_DIR" ]]; then
   assert_file_exists "verification failure marker exists" "$RUN_LOG_DIR/final/filed/mock-round-handoff.failed"
   assert_contains "verification marker records failure" "VERIFICATION_FAILED: mock filing failure" "$RUN_LOG_DIR/final/filed/mock-round-handoff.failed"
   assert_contains "verification failure logs incomplete batch" "Filing: incomplete batch (failed=1, dedup=0, missing=0)" "$run_output"
+  assert_file_exists "verification failure status exists" "$RUN_LOG_DIR/status.json"
+  assert_jq "verification failure status records filing failure" "$RUN_LOG_DIR/status.json" \
+    '.state == "failed" and .stopped_reason == "filing-failed"'
 fi
 
 run_bugreport_case "missing" "missing"
@@ -309,6 +314,9 @@ assert_eq "missing filing sentinel exits non-zero" "1" "$run_rc"
 assert_eq "missing sentinel run id is discoverable" "set" "$([[ -n "$RUN_ID" ]] && printf 'set' || printf 'missing')"
 if [[ -n "$RUN_ID" && -d "$RUN_LOG_DIR" ]]; then
   assert_contains "missing sentinel logs incomplete batch" "Filing: incomplete batch (failed=0, dedup=0, missing=1)" "$run_output"
+  assert_file_exists "missing sentinel status exists" "$RUN_LOG_DIR/status.json"
+  assert_jq "missing sentinel status records filing failure" "$RUN_LOG_DIR/status.json" \
+    '.state == "failed" and .stopped_reason == "filing-failed"'
 fi
 
 finish

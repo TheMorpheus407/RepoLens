@@ -15,7 +15,26 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint shell scripts
-        run: shellcheck repolens.sh lib/*.sh tests/*.sh
+        run: shellcheck repolens.sh lib/*.sh tests/*.sh ci/*.sh
+
+  changelog:
+    name: CHANGELOG touched
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify CHANGELOG.md touched
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" | bash ./ci/check-changelog-touched.sh
 
   test:
     name: Tests

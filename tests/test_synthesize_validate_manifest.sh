@@ -619,8 +619,8 @@ compose_calls=$(wc -l < "$COMPOSE_LOG" | tr -d ' ')
 assert_eq "run_agent not called when rounds directory is missing" "0" "$agent_calls"
 assert_eq "compose_prompt not called when rounds directory is missing" "0" "$compose_calls"
 
-# Min-severity filtering happens after schema validation, so valid
-# below-threshold entries are removed while invalid severities still fail.
+# Pre-validation min-severity filtering removes below-threshold entries before
+# validate_manifest and turns invalid severities into warning-and-drop skips.
 : > "$COMPOSE_LOG"
 : > "$AGENT_LOG"
 stub_compose_prompt
@@ -667,7 +667,7 @@ run_synthesizer "run-min-filter" 2>"$TMPDIR/run-min-filter.err"
 status=$?
 unset REPOLENS_MIN_SEVERITY
 assert_success "run_synthesizer succeeds after min-severity filtering" "$status"
-assert_eq "post-validation filter keeps only high entry" "high::kept" "$(jq -r '.[].cluster_id' "$RUN_LOG/final/manifest.json")"
+assert_eq "pre-validation min-severity filter keeps only high entry" "high::kept" "$(jq -r '.[].cluster_id' "$RUN_LOG/final/manifest.json")"
 
 : > "$COMPOSE_LOG"
 : > "$AGENT_LOG"
@@ -700,8 +700,11 @@ export REPOLENS_MIN_SEVERITY=high
 run_synthesizer "run-min-invalid" 2>"$TMPDIR/run-min-invalid.err"
 status=$?
 unset REPOLENS_MIN_SEVERITY
-assert_failure "invalid severity fails before min-severity filtering" "$status"
-assert_file_missing "invalid min-severity run does not promote manifest" "$RUN_LOG/final/manifest.json"
+assert_success "invalid severity is skipped during min-severity filtering" "$status"
+assert_eq "invalid min-severity run promotes empty manifest" "[]" "$(jq -c '.' "$RUN_LOG/final/manifest.json")"
+assert_contains "invalid min-severity run warns about skipped finding" \
+  "has invalid severity: \"urgent\"" \
+  "$(cat "$TMPDIR/run-min-invalid.err")"
 
 # Failure path: agent emits invalid manifest (duplicate titles)
 : > "$COMPOSE_LOG"
@@ -822,6 +825,7 @@ assert_file_missing "agent invocation failure removes stale preserved cross-link
 
 orchestrator_synth_case="$(awk '/case "\$synth_rc" in/{flag=1} flag{print} flag && /esac/{exit}' "$SCRIPT_DIR/repolens.sh")"
 orchestrator_warning="$(
+  # shellcheck disable=SC2034
   synth_rc=6
   log_warn() {
     printf '%s\n' "$*"

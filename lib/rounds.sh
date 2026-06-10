@@ -489,7 +489,7 @@ _rounds_meta_slug() {
 }
 
 _rounds_meta_custom_category_from_payload() {
-  local payload="$1" line trimmed category attribute_start
+  local payload="$1" line trimmed category
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     trimmed="$(_rounds_meta_trim "$line")"
@@ -789,7 +789,7 @@ _rounds_meta_active_lens_entries() {
     fi
   done < <(
     jq -r --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
-      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
+      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
   )
 }
 
@@ -817,7 +817,7 @@ _rounds_meta_all_lens_entries() {
     fi
   done < <(
     jq -r --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
-      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
+      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
   )
 }
 
@@ -1402,6 +1402,55 @@ _round_digest_warn() {
   fi
 }
 
+_round_digest_info() {
+  if declare -F log_info >/dev/null 2>&1 && [[ -n "${_REPOLENS_LOG_FILE:-}" ]]; then
+    log_info "$*"
+  fi
+}
+
+_round_digest_filtered_state_file() {
+  [[ -n "${SUMMARY_FILE:-}" ]] || return 1
+  printf '%s/.local-min-severity-filtered' "$(dirname "$SUMMARY_FILE")"
+}
+
+_round_digest_record_filtered_locked() {
+  local state_file="$1" key="$2"
+
+  if [[ -f "$state_file" ]] && grep -Fxq -- "$key" "$state_file" 2>/dev/null; then
+    return 0
+  fi
+
+  increment_findings_filtered "$SUMMARY_FILE" 1 || return 1
+  printf '%s\n' "$key" >> "$state_file"
+}
+
+_round_digest_record_filtered() {
+  local file="$1" decision_type="$2" title="$3" severity="$4" state_file key
+
+  [[ -n "${SUMMARY_FILE:-}" && -f "${SUMMARY_FILE:-}" ]] || return 0
+  declare -F increment_findings_filtered >/dev/null 2>&1 || return 0
+
+  state_file="$(_round_digest_filtered_state_file)" || return 0
+  key="${decision_type}"$'\t'"${file}"$'\t'"${title}"$'\t'"${severity}"
+
+  if declare -F with_file_lock >/dev/null 2>&1; then
+    with_file_lock "${state_file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+      _round_digest_record_filtered_locked "$state_file" "$key"
+  else
+    _round_digest_record_filtered_locked "$state_file" "$key"
+  fi
+}
+
+_round_digest_content_mode_enabled() {
+  local mode="${REPOLENS_MODE:-${MODE:-}}"
+  [[ "$mode" == "content" ]]
+}
+
+_round_digest_title_is_content_priority_proposal() {
+  local title="${1:-}"
+  [[ "$title" =~ ^\[[Pp][0-3]\][[:space:]]* ]]
+}
+
 _round_digest_repo_root() {
   local rounds_lib_dir
   rounds_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1428,7 +1477,7 @@ _round_digest_audit_domains() {
       sub(/".*$/, "", mode)
     }
     /^[[:space:]]*}[,]?[[:space:]]*$/ {
-      if (id != "" && mode != "discover" && mode != "deploy" && mode != "opensource" && mode != "content") {
+      if (id != "" && mode != "discover" && mode != "deploy" && mode != "opensource" && mode != "content" && mode != "greenfield" && mode != "polish") {
         print id
       }
       id = ""
@@ -1498,9 +1547,13 @@ _round_digest_frontmatter_block() {
 }
 
 _round_digest_finding_segments() {
-  local file="$1"
+  local file="$1" content_mode=0
 
-  awk '
+  if _round_digest_content_mode_enabled; then
+    content_mode=1
+  fi
+
+  awk -v content_mode="$content_mode" '
     BEGIN {
       segment_sep = sprintf("%c", 30)
       field_sep = sprintf("%c", 31)
@@ -1522,6 +1575,8 @@ _round_digest_finding_segments() {
       has_severity = 0
       has_domain = 0
       has_lens = 0
+      has_content_priority_title = 0
+      has_content_audit_title = 0
       count = split(candidate, lines, "\n")
       for (i = 1; i <= count; i++) {
         if (lines[i] ~ /^[[:space:]]*severity[[:space:]]*:/) {
@@ -1530,9 +1585,13 @@ _round_digest_finding_segments() {
           has_domain = 1
         } else if (lines[i] ~ /^[[:space:]]*(lens_id|lens)[[:space:]]*:/) {
           has_lens = 1
+        } else if (content_mode == 1 && lines[i] ~ /^[[:space:]]*title[[:space:]]*:[[:space:]]*["'\'']?\[[Pp][0-3]\][[:space:]]*/) {
+          has_content_priority_title = 1
+        } else if (content_mode == 1 && lines[i] ~ /^[[:space:]]*title[[:space:]]*:[[:space:]]*["'\'']?\[([Cc][Rr][Ii][Tt][Ii][Cc][Aa][Ll]|[Hh][Ii][Gg][Hh]|[Mm][Ee][Dd][Ii][Uu][Mm]|[Ll][Oo][Ww])\][[:space:]]*/) {
+          has_content_audit_title = 1
         }
       }
-      return has_severity && has_domain && has_lens
+      return (has_severity || has_content_priority_title || has_content_audit_title) && has_domain && has_lens
     }
     NR == 1 && $0 != "---" {
       exit 1
@@ -1786,10 +1845,10 @@ _round_digest_rank_suspect_files() {
 
 build_round_digest() {
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
-  local file segment segment_sep field_sep segments_output frontmatter body severity domain lens category normalized category_seen primary_category
+  local file segment segment_sep field_sep segments_output frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
   local suspect_file audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
   local round_number confidence confidence_rank severity_rank_value score finding_id hypothesis files_display title_text finding_identity
-  local omitted_total
+  local omitted_total content_mode content_priority min_severity log_title
   local tmp_digest digest_lines
   local -a md_files=() sorted_lenses=() touched_domains=() finding_records=() finding_segments=() suspect_files=() display_files=()
   local -A _round_digest_lens_counts=()
@@ -1828,6 +1887,14 @@ build_round_digest() {
   if (( audit_total == 0 )); then
     audit_total=27
   fi
+  content_mode=0
+  if _round_digest_content_mode_enabled; then
+    content_mode=1
+  fi
+  min_severity=""
+  if [[ -n "${REPOLENS_MIN_SEVERITY:-}" ]]; then
+    min_severity="$(severity_normalize "$REPOLENS_MIN_SEVERITY")"
+  fi
 
   if [[ -d "$lens_outputs_dir" ]]; then
     mapfile -t md_files < <(find "$lens_outputs_dir" -type f -name '*.md' -print | LC_ALL=C sort)
@@ -1852,14 +1919,22 @@ build_round_digest() {
       frontmatter="${segment%%"$field_sep"*}"
       body="${segment#*"$field_sep"}"
 
-      severity="$(severity_normalize "$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "severity")")"
+      title_text="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "title" | _round_digest_inline_text 160)"
+      raw_severity="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "severity")"
+      severity="$(severity_normalize "$raw_severity")"
       domain="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "domain")"
       lens="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "lens_id")"
       if [[ -z "$lens" ]]; then
         lens="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "lens")"
       fi
+      log_title="${title_text:-<untitled>}"
 
-      if [[ -z "$severity" || -z "$domain" || -z "$lens" ]]; then
+      content_priority=0
+      if (( content_mode )) && _round_digest_title_is_content_priority_proposal "$title_text"; then
+        content_priority=1
+      fi
+
+      if [[ -z "$domain" || -z "$lens" ]]; then
         _round_digest_warn "Skipping malformed lens output $(basename "$file"): required frontmatter keys severity, domain, and lens_id or lens are required"
         continue
       fi
@@ -1867,8 +1942,31 @@ build_round_digest() {
         _round_digest_warn "Skipping untrusted lens output $(basename "$file"): lens id is not registered"
         continue
       fi
-      if [[ -n "${REPOLENS_MIN_SEVERITY:-}" ]] && ! severity_meets_min "$severity" "$REPOLENS_MIN_SEVERITY"; then
-        continue
+
+      if (( content_priority )); then
+        severity="priority"
+      else
+        if [[ -z "$severity" ]]; then
+          if [[ -n "$min_severity" ]]; then
+            _round_digest_warn "[$domain/$lens] Finding \"$log_title\" has invalid severity: \"$raw_severity\" (expected critical, high, medium, or low) - skipping"
+            _round_digest_record_filtered "$file" "invalid" "$log_title" "$raw_severity" || return 1
+          elif (( content_mode )); then
+            if [[ -n "$raw_severity" ]]; then
+              _round_digest_warn "round digest: dropping content audit finding with invalid severity $raw_severity: $log_title"
+            else
+              _round_digest_warn "round digest: dropping content audit finding with missing severity: $log_title"
+            fi
+          else
+            _round_digest_warn "Skipping malformed lens output $(basename "$file"): required frontmatter keys severity, domain, and lens_id or lens are required"
+          fi
+          continue
+        fi
+
+        if [[ -n "$min_severity" ]] && ! severity_meets_min "$severity" "$min_severity"; then
+          _round_digest_info "[$domain/$lens] Dropped finding \"$log_title\" (severity=$severity < min=$min_severity)"
+          _round_digest_record_filtered "$file" "below" "$log_title" "$severity" || return 1
+          continue
+        fi
       fi
 
       _round_digest_lens_counts["$lens"]=$(( ${_round_digest_lens_counts["$lens"]:-0} + 1 ))
@@ -1919,7 +2017,6 @@ build_round_digest() {
       [[ -n "$round_number" ]] || round_number="0"
       hypothesis="$(printf '%s\n' "$body" | _round_digest_section_text_from_stream "hypothesis" | _round_digest_inline_text 200)"
       [[ -n "$hypothesis" ]] || hypothesis="(missing)"
-      title_text="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "title" | _round_digest_inline_text 160)"
       finding_identity="$title_text"$'\n'"$hypothesis"
       finding_id="$(_round_digest_finding_id "$lens" "$domain" "$round_number" "$file" "$finding_identity" < <(printf '%s\n' "${suspect_files[@]}"))"
       if (( ${#display_files[@]} > 0 )); then
@@ -1992,12 +2089,12 @@ build_round_digest() {
       printf '\n'
 
       printf '## Findings\n'
-      local emitted=0 max_findings=30 record record_score record_lens record_id record_severity record_confidence
+      local emitted=0 max_findings=30 _record_score record_lens record_id record_severity record_confidence
       local record_domain record_category record_files record_hypothesis
       if (( ${#finding_records[@]} == 0 )); then
         printf 'none\n'
       else
-        while IFS=$'\t' read -r record_score record_lens record_id record_severity record_confidence record_domain record_category record_files record_hypothesis; do
+        while IFS=$'\t' read -r _record_score record_lens record_id record_severity record_confidence record_domain record_category record_files record_hypothesis; do
           if (( emitted >= max_findings )); then
             _round_digest_omitted_lens_counts["$record_lens"]=$(( ${_round_digest_omitted_lens_counts["$record_lens"]:-0} + 1 ))
             continue
@@ -2128,6 +2225,12 @@ _rounds_agent_abort_reason() {
   fi
 
   return 1
+}
+
+_rounds_remote_check_master() {
+  [[ -n "${REMOTE_TARGET:-}" ]] || return 0
+  declare -F remote_check_master >/dev/null 2>&1 || return 0
+  remote_check_master
 }
 
 _rounds_build_prior_digest_context() {
@@ -2292,6 +2395,13 @@ run_rounds() {
       return "$round_rc"
     fi
 
+    CURRENT_ROUND_INDEX=""
+    CURRENT_ROUND_TOTAL=""
+    if (( rounds_total > 1 )); then
+      CURRENT_ROUND_INDEX="$round"
+      CURRENT_ROUND_TOTAL="$rounds_total"
+    fi
+
     if (( rounds_total > 1 )); then
       dispatch_path=""
       if (( round == 1 )) \
@@ -2425,6 +2535,14 @@ run_rounds() {
           set_stop_reason "$SUMMARY_FILE" "$abort_reason"
           break
         fi
+        if ! _rounds_remote_check_master; then
+          log_warn "Remote ControlMaster unavailable. Skipping remaining lenses."
+          _rounds_record_skipped_lenses "${active_lens_list[@]:$parallel_count}"
+          set_stop_reason "$SUMMARY_FILE" "remote-controlmaster-lost"
+          wait_all || true
+          _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+          return 1
+        fi
         parallel_count=$((parallel_count + 1))
         if ! spawn_lens "$lens_entry" run_lens "$lens_entry"; then
           if abort_reason="$(_rounds_agent_abort_reason)"; then
@@ -2464,6 +2582,14 @@ run_rounds() {
           _rounds_record_skipped_lenses "${active_lens_list[@]:$local_count}"
           set_stop_reason "$SUMMARY_FILE" "max-issues-reached"
           break
+        fi
+
+        if ! _rounds_remote_check_master; then
+          log_warn "Remote ControlMaster unavailable. Skipping remaining lenses."
+          _rounds_record_skipped_lenses "${active_lens_list[@]:$local_count}"
+          set_stop_reason "$SUMMARY_FILE" "remote-controlmaster-lost"
+          _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+          return 1
         fi
 
         local_count=$((local_count + 1))

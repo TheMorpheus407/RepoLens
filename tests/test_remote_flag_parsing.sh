@@ -24,9 +24,9 @@
 #   - --remote conflicts with --hosted and Android deploy targets.
 #   - --help documents the remote flags.
 #
-# The tests drive the public CLI in --dry-run mode with a fake agent binary.
-# They do not call internal helper functions directly and never invoke a real
-# model or SSH command.
+# The tests drive the public CLI with fake agent and SSH binaries. Dry-run
+# cases stay parse-only; the single-lens remote fixtures exercise the remote
+# lifecycle without invoking a real model or SSH command.
 
 set -uo pipefail
 
@@ -115,6 +115,73 @@ record_run_id() {
   fi
 }
 
+ssh_class_count() {
+  local transcript="$1" class="$2"
+  grep -F -c $'SSH_CALL\t'"$class"$'\t' "$transcript" 2>/dev/null || true
+}
+
+class_lines() {
+  local transcript="$1" class="$2"
+  grep -F $'SSH_CALL\t'"$class"$'\t' "$transcript" 2>/dev/null || true
+}
+
+batchmode_violation_count() {
+  local violations="$1" class="$2"
+  grep -F -c $'missing-batchmode\t'"$class"$'\t' "$violations" 2>/dev/null || true
+}
+
+batchmode_violation_total() {
+  local violations="$1"
+  grep -F -c $'missing-batchmode\t' "$violations" 2>/dev/null || true
+}
+
+assert_class_count_at_least() {
+  local desc="$1" transcript="$2" class="$3" minimum="$4"
+  local count
+  count="$(ssh_class_count "$transcript" "$class")"
+  if [[ "$count" =~ ^[0-9]+$ && "$count" -ge "$minimum" ]]; then
+    record_pass "$desc"
+  else
+    record_fail "$desc (expected at least $minimum '$class' calls, got $count)"
+  fi
+}
+
+assert_all_class_lines_contain() {
+  local desc="$1" transcript="$2" class="$3" needle="$4"
+  local lines missing=0
+  lines="$(class_lines "$transcript" "$class")"
+  if [[ -z "$lines" ]]; then
+    record_fail "$desc (no '$class' calls recorded)"
+    return
+  fi
+  while IFS= read -r line; do
+    [[ "$line" == *"$needle"* ]] || missing=$((missing + 1))
+  done <<< "$lines"
+  if [[ "$missing" -eq 0 ]]; then
+    record_pass "$desc"
+  else
+    record_fail "$desc ($missing '$class' call(s) missing '$needle')"
+  fi
+}
+
+assert_all_class_lines_not_contains() {
+  local desc="$1" transcript="$2" class="$3" needle="$4"
+  local lines present=0
+  lines="$(class_lines "$transcript" "$class")"
+  if [[ -z "$lines" ]]; then
+    record_fail "$desc (no '$class' calls recorded)"
+    return
+  fi
+  while IFS= read -r line; do
+    [[ "$line" != *"$needle"* ]] || present=$((present + 1))
+  done <<< "$lines"
+  if [[ "$present" -eq 0 ]]; then
+    record_pass "$desc"
+  else
+    record_fail "$desc ($present '$class' call(s) unexpectedly contained '$needle')"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Fake agent + fixtures
 # ---------------------------------------------------------------------------
@@ -148,6 +215,108 @@ printf '%s\n' DONE
 exit 0
 SH
 chmod +x "$FAKE_BIN/claude"
+
+cat > "$FAKE_BIN/ssh" <<'SH'
+#!/usr/bin/env bash
+set -uo pipefail
+
+transcript="${FAKE_SSH_TRANSCRIPT:-}"
+state_dir="${FAKE_SSH_STATE_DIR:-}"
+batchmode_violations="${FAKE_SSH_BATCHMODE_VIOLATIONS:-}"
+
+class="unknown"
+operation=""
+socket_path=""
+has_master=0
+has_fN=0
+has_f=0
+has_N=0
+has_preflight=0
+has_batchmode=0
+prev=""
+
+for arg in "$@"; do
+  if [[ "$prev" == "-O" ]]; then
+    operation="$arg"
+  elif [[ "$prev" == "-S" ]]; then
+    socket_path="$arg"
+  elif [[ "$prev" == "-o" && "$arg" == "BatchMode=yes" ]]; then
+    has_batchmode=1
+  fi
+
+  case "$arg" in
+    -oBatchMode=yes) has_batchmode=1 ;;
+    -M) has_master=1 ;;
+    -fN) has_fN=1 ;;
+    -f) has_f=1 ;;
+    -N) has_N=1 ;;
+    "hostname && uname -a") has_preflight=1 ;;
+  esac
+  prev="$arg"
+done
+
+if [[ "$has_preflight" -eq 1 ]]; then
+  class="preflight"
+elif [[ "$operation" == "check" ]]; then
+  class="check"
+elif [[ "$operation" == "exit" ]]; then
+  class="close"
+elif [[ "$has_master" -eq 1 && ( "$has_fN" -eq 1 || ( "$has_f" -eq 1 && "$has_N" -eq 1 ) ) ]]; then
+  class="open"
+fi
+
+call_count=1
+if [[ -n "$state_dir" ]]; then
+  mkdir -p "$state_dir"
+  call_count_file="$state_dir/call-count"
+  call_count="$(cat "$call_count_file" 2>/dev/null || printf '0')"
+  call_count=$((call_count + 1))
+  printf '%s\n' "$call_count" > "$call_count_file"
+fi
+
+if [[ -n "$transcript" ]]; then
+  {
+    printf 'SSH_CALL\t%s\tcall=%s' "$class" "$call_count"
+    for arg in "$@"; do
+      printf '\t%s' "$arg"
+    done
+    printf '\n'
+  } >> "$transcript"
+fi
+
+case "$class" in
+  preflight|open|check|close)
+    if [[ "$has_batchmode" -ne 1 ]]; then
+      if [[ -n "$batchmode_violations" ]]; then
+        printf 'missing-batchmode\t%s\tcall=%s\n' "$class" "$call_count" >> "$batchmode_violations"
+      fi
+      printf '%s\n' "fake ssh: $class missing -o BatchMode=yes" >&2
+      exit 64
+    fi
+    ;;
+esac
+
+if [[ "$class" == "open" && -n "$socket_path" ]]; then
+  if [[ -e "$socket_path" ]]; then
+    printf '%s\n' "simulated ControlMaster socket conflict" >&2
+    exit 255
+  fi
+  mkdir -p "$(dirname "$socket_path")"
+  : > "$socket_path"
+fi
+
+if [[ "$class" == "close" && -n "$socket_path" ]]; then
+  rm -f -- "$socket_path"
+fi
+
+if [[ "$class" == "preflight" ]]; then
+  printf '%s\n' "remote-flag-preflight-host"
+  printf '%s\n' "Linux remote-flag-preflight 6.1.0-test #1 SMP"
+fi
+
+exit 0
+SH
+chmod +x "$FAKE_BIN/ssh"
 export PATH="$FAKE_BIN:$PATH"
 
 PLAIN_DIR="$TMPDIR/plain-target"
@@ -191,9 +360,98 @@ run_dry_deploy() {
     "$@"
 }
 
+run_fake_ssh_missing_batchmode() {
+  local desc="$1" output_file="$2"
+  shift 2
+
+  set +e
+  PATH="$FAKE_BIN:$PATH" \
+  FAKE_SSH_TRANSCRIPT="$MISSING_BATCHMODE_TRANSCRIPT" \
+  FAKE_SSH_BATCHMODE_VIOLATIONS="$MISSING_BATCHMODE_VIOLATIONS" \
+  FAKE_SSH_STATE_DIR="$MISSING_BATCHMODE_STATE" \
+    ssh "$@" >"$output_file" 2>&1
+  local rc=$?
+  set -e
+
+  assert_rc_nonzero "$desc" "$rc"
+}
+
 echo ""
 echo "=== Test Suite: remote deploy CLI flag parsing (issue #196) ==="
 echo ""
+
+# ===========================================================================
+# Test 0: fixture fake ssh rejects lifecycle calls missing BatchMode
+# ===========================================================================
+echo "Test 0: fake ssh rejects lifecycle calls missing BatchMode"
+MISSING_BATCHMODE_TRANSCRIPT="$TMPDIR/missing-batchmode.transcript"
+MISSING_BATCHMODE_VIOLATIONS="$TMPDIR/missing-batchmode.violations"
+MISSING_BATCHMODE_STATE="$TMPDIR/fake-ssh-state-missing-batchmode"
+MISSING_BATCHMODE_CONTROL_DIR="$TMPDIR/missing-batchmode-control"
+MISSING_BATCHMODE_SOCKET="$MISSING_BATCHMODE_CONTROL_DIR/cm.sock"
+: > "$MISSING_BATCHMODE_TRANSCRIPT"
+: > "$MISSING_BATCHMODE_VIOLATIONS"
+rm -rf "$MISSING_BATCHMODE_STATE" "$MISSING_BATCHMODE_CONTROL_DIR"
+mkdir -p "$MISSING_BATCHMODE_STATE" "$MISSING_BATCHMODE_CONTROL_DIR"
+
+if [[ -x "$FAKE_BIN/ssh" ]]; then
+  record_pass "flag parsing fixture installs fake ssh"
+
+  run_fake_ssh_missing_batchmode "preflight without BatchMode is rejected" \
+    "$TMPDIR/missing-batchmode-preflight.out" \
+    -i "$REMOTE_KEY" \
+    -p 2222 \
+    -o ConnectTimeout=10 \
+    -o ControlMaster=no \
+    ubuntu@host.example.com \
+    'hostname && uname -a'
+
+  run_fake_ssh_missing_batchmode "ControlMaster open without BatchMode is rejected" \
+    "$TMPDIR/missing-batchmode-open.out" \
+    -i "$REMOTE_KEY" \
+    -p 2222 \
+    -fN \
+    -M \
+    -S "$MISSING_BATCHMODE_SOCKET" \
+    -o ControlPersist=600 \
+    -o ServerAliveInterval=30 \
+    ubuntu@host.example.com
+
+  run_fake_ssh_missing_batchmode "ControlMaster check without BatchMode is rejected" \
+    "$TMPDIR/missing-batchmode-check.out" \
+    -i "$REMOTE_KEY" \
+    -p 2222 \
+    -O check \
+    -S "$MISSING_BATCHMODE_SOCKET" \
+    ubuntu@host.example.com
+
+  run_fake_ssh_missing_batchmode "ControlMaster close without BatchMode is rejected" \
+    "$TMPDIR/missing-batchmode-close.out" \
+    -i "$REMOTE_KEY" \
+    -p 2222 \
+    -O exit \
+    -S "$MISSING_BATCHMODE_SOCKET" \
+    ubuntu@host.example.com
+
+  assert_eq "preflight missing-BatchMode violation is recorded" \
+    "1" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "preflight")"
+  assert_eq "ControlMaster open missing-BatchMode violation is recorded" \
+    "1" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "open")"
+  assert_eq "ControlMaster check missing-BatchMode violation is recorded" \
+    "1" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "check")"
+  assert_eq "ControlMaster close missing-BatchMode violation is recorded" \
+    "1" "$(batchmode_violation_count "$MISSING_BATCHMODE_VIOLATIONS" "close")"
+  assert_eq "rejected preflight call is transcribed" \
+    "1" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "preflight")"
+  assert_eq "rejected ControlMaster open call is transcribed" \
+    "1" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "open")"
+  assert_eq "rejected ControlMaster check call is transcribed" \
+    "1" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "check")"
+  assert_eq "rejected ControlMaster close call is transcribed" \
+    "1" "$(ssh_class_count "$MISSING_BATCHMODE_TRANSCRIPT" "close")"
+else
+  record_fail "flag parsing fixture installs fake ssh (missing $FAKE_BIN/ssh)"
+fi
 
 # ===========================================================================
 # Test 1: --help documents the remote flags near deploy/hosted options
@@ -422,7 +680,18 @@ echo ""
 echo "Test 15: parsed remote variables are exported to the agent environment"
 LOG15="$TMPDIR/run15.log"
 ENV15="$TMPDIR/claude-env15.log"
-FAKE_CLAUDE_ENV_LOG="$ENV15" run_repolens "$PLAIN_DIR" "$LOG15" \
+SSH15_TRANSCRIPT="$TMPDIR/ssh15.transcript"
+SSH15_VIOLATIONS="$TMPDIR/ssh15.violations"
+SSH15_STATE="$TMPDIR/fake-ssh-state15"
+: > "$SSH15_TRANSCRIPT"
+: > "$SSH15_VIOLATIONS"
+rm -rf "$SSH15_STATE"
+mkdir -p "$SSH15_STATE"
+FAKE_CLAUDE_ENV_LOG="$ENV15" \
+FAKE_SSH_TRANSCRIPT="$SSH15_TRANSCRIPT" \
+FAKE_SSH_BATCHMODE_VIOLATIONS="$SSH15_VIOLATIONS" \
+FAKE_SSH_STATE_DIR="$SSH15_STATE" \
+  run_repolens "$PLAIN_DIR" "$LOG15" \
   --mode deploy \
   --local \
   --yes \
@@ -483,6 +752,33 @@ assert_contains "agent sees SSH control dir owned by current uid" \
   "REPOLENS_REMOTE_SSH_CONTROL_DIR_OWNER=$(id -u)" "$env15"
 metadata15="$(cat "$SCRIPT_DIR/logs/$run15_id/.remote/control-dir" 2>/dev/null || true)"
 assert_eq "remote control dir metadata records socket directory" "$socket15_dir" "$metadata15"
+if [[ -x "$FAKE_BIN/ssh" ]]; then
+  assert_class_count_at_least "single-lens remote deploy records preflight ssh call" \
+    "$SSH15_TRANSCRIPT" "preflight" 1
+  assert_class_count_at_least "single-lens remote deploy records ControlMaster open ssh call" \
+    "$SSH15_TRANSCRIPT" "open" 1
+  assert_class_count_at_least "single-lens remote deploy records ControlMaster check ssh call" \
+    "$SSH15_TRANSCRIPT" "check" 1
+  assert_class_count_at_least "single-lens remote deploy records ControlMaster close ssh call" \
+    "$SSH15_TRANSCRIPT" "close" 1
+  for class in preflight open check close; do
+    assert_all_class_lines_contain "$class lifecycle call uses BatchMode=yes" \
+      "$SSH15_TRANSCRIPT" "$class" $'\t-o\tBatchMode=yes\t'
+    assert_all_class_lines_contain "$class lifecycle call preserves parsed port" \
+      "$SSH15_TRANSCRIPT" "$class" $'\t-p\t2222\t'
+    assert_all_class_lines_contain "$class lifecycle call preserves --remote-key" \
+      "$SSH15_TRANSCRIPT" "$class" $'\t-i\t'"$REMOTE_KEY"$'\t'
+    assert_all_class_lines_contain "$class lifecycle call uses parsed user@host destination" \
+      "$SSH15_TRANSCRIPT" "$class" $'\tubuntu@host.example.com'
+  done
+  ssh_transcript15="$(grep -F $'SSH_CALL\t' "$SSH15_TRANSCRIPT" 2>/dev/null || true)"
+  assert_not_contains "single-lens lifecycle does not pass raw host:port as SSH destination" \
+    "ubuntu@host.example.com:2222" "$ssh_transcript15"
+  assert_eq "single-lens remote deploy records no missing-BatchMode violations" \
+    "0" "$(batchmode_violation_total "$SSH15_VIOLATIONS")"
+else
+  record_fail "single-lens remote deploy is covered by fake ssh lifecycle transcript (missing $FAKE_BIN/ssh)"
+fi
 
 # ===========================================================================
 # Test 15b: unsafe persisted remote control-dir metadata fails closed
@@ -516,7 +812,18 @@ echo ""
 echo "Test 16: --remote-label with pipe text remains literal"
 LOG16="$TMPDIR/run16.log"
 ENV16="$TMPDIR/claude-env16.log"
-FAKE_CLAUDE_ENV_LOG="$ENV16" run_repolens "$PLAIN_DIR" "$LOG16" \
+SSH16_TRANSCRIPT="$TMPDIR/ssh16.transcript"
+SSH16_VIOLATIONS="$TMPDIR/ssh16.violations"
+SSH16_STATE="$TMPDIR/fake-ssh-state16"
+: > "$SSH16_TRANSCRIPT"
+: > "$SSH16_VIOLATIONS"
+rm -rf "$SSH16_STATE"
+mkdir -p "$SSH16_STATE"
+FAKE_CLAUDE_ENV_LOG="$ENV16" \
+FAKE_SSH_TRANSCRIPT="$SSH16_TRANSCRIPT" \
+FAKE_SSH_BATCHMODE_VIOLATIONS="$SSH16_VIOLATIONS" \
+FAKE_SSH_STATE_DIR="$SSH16_STATE" \
+  run_repolens "$PLAIN_DIR" "$LOG16" \
   --mode deploy \
   --local \
   --yes \
@@ -534,6 +841,30 @@ assert_contains "pipe label preserves prompt remote target in agent env" \
   "REPOLENS_REMOTE_TARGET=ubuntu@host.example.com:2222" "$env16"
 assert_contains "pipe label is literal in prompt remote label env" \
   "REPOLENS_REMOTE_LABEL=Prod|REPOLENS_REMOTE_TARGET=" "$env16"
+if [[ -x "$FAKE_BIN/ssh" ]]; then
+  assert_class_count_at_least "pipe-label remote deploy records preflight ssh call" \
+    "$SSH16_TRANSCRIPT" "preflight" 1
+  assert_class_count_at_least "pipe-label remote deploy records ControlMaster open ssh call" \
+    "$SSH16_TRANSCRIPT" "open" 1
+  assert_class_count_at_least "pipe-label remote deploy records ControlMaster check ssh call" \
+    "$SSH16_TRANSCRIPT" "check" 1
+  assert_class_count_at_least "pipe-label remote deploy records ControlMaster close ssh call" \
+    "$SSH16_TRANSCRIPT" "close" 1
+  for class in preflight open check close; do
+    assert_all_class_lines_contain "pipe-label $class lifecycle call uses BatchMode=yes" \
+      "$SSH16_TRANSCRIPT" "$class" $'\t-o\tBatchMode=yes\t'
+    assert_all_class_lines_contain "pipe-label $class lifecycle call preserves parsed port" \
+      "$SSH16_TRANSCRIPT" "$class" $'\t-p\t2222\t'
+    assert_all_class_lines_contain "pipe-label $class lifecycle call uses parsed user@host destination" \
+      "$SSH16_TRANSCRIPT" "$class" $'\tubuntu@host.example.com'
+    assert_all_class_lines_not_contains "pipe-label $class lifecycle call does not require --remote-key" \
+      "$SSH16_TRANSCRIPT" "$class" $'\t-i\t'
+  done
+  assert_eq "pipe-label remote deploy records no missing-BatchMode violations" \
+    "0" "$(batchmode_violation_total "$SSH16_VIOLATIONS")"
+else
+  record_fail "pipe-label remote deploy is covered by fake ssh lifecycle transcript (missing $FAKE_BIN/ssh)"
+fi
 
 echo ""
 echo "================================"

@@ -93,14 +93,14 @@ assert_eq "no lenses outside discovery domain" "" "$non_discovery"
 echo ""
 echo "Test 3: Audit mode excludes discovery domain"
 audit_lenses="$(jq -r --arg mode "audit" \
-  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
+  '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy") elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") end) | .id as $d | .lenses[] | $d + "/" + .' "$DOMAINS_FILE")"
 audit_discovery="$(echo "$audit_lenses" | grep "^discovery/" || true)"
 assert_eq "no discovery lenses in audit mode" "" "$audit_discovery"
 
 echo ""
 echo "Test 4: Audit mode lens count matches domains.json"
 audit_count="$(echo "$audit_lenses" | wc -l)"
-expected_audit_count="$(jq '[.domains[] | select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") | .lenses | length] | add' "$DOMAINS_FILE")"
+expected_audit_count="$(jq '[.domains[] | select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") | .lenses | length] | add' "$DOMAINS_FILE")"
 assert_eq "audit lens count matches domains.json" "$expected_audit_count" "$audit_count"
 
 echo ""
@@ -170,7 +170,7 @@ assert_eq "discovery domain mode is 'discover'" "discover" "$mode_val"
 
 echo ""
 echo "Test 14: Non-modal domains have no mode field"
-mode_domains="$(jq -r '.domains[] | select(.mode != null) | select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content") | .id' "$DOMAINS_FILE")"
+mode_domains="$(jq -r '.domains[] | select(.mode != null) | select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish") | .id' "$DOMAINS_FILE")"
 assert_eq "no non-modal domain has mode field" "" "$mode_domains"
 
 echo ""

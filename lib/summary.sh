@@ -16,6 +16,7 @@
 # RepoLens — JSON summary generation
 
 _SUMMARY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
 # shellcheck source=lib/locking.sh
 source "$_SUMMARY_LIB_DIR/locking.sh"
 
@@ -64,9 +65,59 @@ init_summary() {
   "completed_at": null,
   "stopped_reason": null,
   "lenses": [],
-  "totals": {"lenses_run": 0, "iterations_total": 0, "issues_created": 0}
+  "totals": {"lenses_run": 0, "iterations_total": 0, "issues_created": 0, "findings_filtered": 0}
 }
 ENDJSON
+}
+
+# increment_findings_filtered <summary_file> [count]
+#   Adds to totals.findings_filtered. Missing files are ignored so library
+#   callers without an active summary can still use filtering helpers directly.
+increment_findings_filtered() {
+  local file="${1:-}" count="${2:-1}"
+  [[ -n "$file" && -f "$file" ]] || return 0
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  (( count > 0 )) || return 0
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _increment_findings_filtered_locked "$file" "$count"
+}
+
+_increment_findings_filtered_locked() {
+  local file="$1" count="$2"
+  local tmp
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+  jq --argjson c "$count" \
+    '.totals.findings_filtered = ((.totals.findings_filtered // 0) + $c)' \
+    "$file" > "$tmp" && mv "$tmp" "$file"
+  local rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  return "$rc"
+}
+
+# increment_summary_issues_created <summary_file> [count]
+#   Adds to totals.issues_created for issue emission that happens outside the
+#   per-lens loop, such as grouped polish issue filing after ranking.
+increment_summary_issues_created() {
+  local file="${1:-}" count="${2:-1}"
+  [[ -n "$file" && -f "$file" ]] || return 0
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  (( count > 0 )) || return 0
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _increment_summary_issues_created_locked "$file" "$count"
+}
+
+_increment_summary_issues_created_locked() {
+  local file="$1" count="$2"
+  local tmp
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+  jq --argjson c "$count" \
+    '.totals.issues_created = ((.totals.issues_created // 0) + $c)' \
+    "$file" > "$tmp" && mv "$tmp" "$file"
+  local rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  return "$rc"
 }
 
 # record_lens <summary_file> <domain> <lens_id> <iterations> <status> [issues] [rate_limit_sleep_seconds]
@@ -164,11 +215,16 @@ _set_summary_health_locked() {
 }
 
 # set_stop_reason <summary_file> <reason>
-#   Sets the stopped_reason field in summary.json
+#   Sets the stopped_reason field in summary.json. Stop reasons are persisted
+#   from abort/shutdown paths, so lock contention uses a short local timeout:
+#   if the summary lock cannot be opened or acquired, this returns nonzero and
+#   leaves summary.json unchanged.
 set_stop_reason() {
   local file="$1" reason="${2:-}"
+  local lock_timeout="${REPOLENS_SUMMARY_STOP_REASON_LOCK_TIMEOUT:-1}"
   [[ -n "$reason" ]] || return 0
-  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+  [[ "$lock_timeout" =~ ^[0-9]+$ ]] || lock_timeout=1
+  with_file_lock "${file}.lock" "$lock_timeout" \
     _set_stop_reason_locked "$file" "$reason"
 }
 

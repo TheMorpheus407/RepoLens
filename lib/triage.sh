@@ -144,7 +144,7 @@ _triage_default_mode_domain_ids() {
   jq -r '
     .domains
     | sort_by(.order // 0)
-    | map(select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content"))
+    | map(select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish"))
     | .[].id
   ' "$domains_file" 2>/dev/null || true
 }

@@ -120,6 +120,16 @@ if [[ -f "$METHODOLOGY" ]]; then
   methodology_content="$(cat "$METHODOLOGY")"
 fi
 
+mapfile -t cli_modes < <(
+  bash "$SCRIPT_DIR/repolens.sh" --help |
+    awk '
+      /^Modes:/ { in_modes = 1; next }
+      in_modes && /^$/ { exit }
+      in_modes && /^[[:space:]]+[a-z][a-z0-9-]*[[:space:]]/ { print $1 }
+    '
+)
+actual_mode_count="${#cli_modes[@]}"
+
 # =====================================================================
 # 2. v0.1 labeling — must be explicitly marked as draft/stub
 # =====================================================================
@@ -202,17 +212,17 @@ assert_matches "mentions lens/lenses" "(?i)lens(es)?" "$methodology_content"
 
 echo ""
 echo "Test 18: Lens count matches codebase"
-actual_lens_count="$(jq '[.domains[].lenses | length] | add' "$DOMAINS_FILE")"
-assert_contains "contains actual lens count ($actual_lens_count)" "$actual_lens_count" "$methodology_content"
+actual_lens_count="$(jq '[.domains[] | select(.mode != "polish") | .lenses | length] | add' "$DOMAINS_FILE")"
+assert_contains "contains documented non-polish lens count ($actual_lens_count)" "$actual_lens_count" "$methodology_content"
 
 echo ""
 echo "Test 19: Domain count matches codebase"
-actual_domain_count="$(jq '.domains | length' "$DOMAINS_FILE")"
-assert_contains "contains actual domain count ($actual_domain_count)" "$actual_domain_count" "$methodology_content"
+actual_domain_count="$(jq '[.domains[] | select(.mode != "polish")] | length' "$DOMAINS_FILE")"
+assert_contains "contains documented non-polish domain count ($actual_domain_count)" "$actual_domain_count" "$methodology_content"
 
 echo ""
-echo "Test 20: Mode count — mentions 9 modes"
-assert_matches "mentions 9 modes" "9[[:space:]]+mode" "$methodology_content"
+echo "Test 20: Mode count matches CLI"
+assert_matches "mentions $actual_mode_count modes" "${actual_mode_count}[[:space:]]+mode" "$methodology_content"
 
 # =====================================================================
 # 7. DONE x3 streak content — section must explain the protocol
@@ -228,40 +238,14 @@ echo "Test 22: DONE streak section explains termination"
 assert_matches "explains termination" "(?i)(terminat|complet|exit|finish|stop)" "$methodology_content"
 
 # =====================================================================
-# 8. Mode isolation content — must reference the 9 modes
+# 8. Mode isolation content — must reference the CLI modes
 # =====================================================================
 
 echo ""
-echo "Test 23: Mode isolation references audit mode"
-assert_contains "references audit mode" "audit" "$methodology_content"
-
-echo ""
-echo "Test 24: Mode isolation references deploy mode"
-assert_contains "references deploy mode" "deploy" "$methodology_content"
-
-echo ""
-echo "Test 25: Mode isolation references discover mode"
-assert_contains "references discover mode" "discover" "$methodology_content"
-
-echo ""
-echo "Test 26: Mode isolation references custom mode"
-assert_contains "references custom mode" "custom" "$methodology_content"
-
-echo ""
-echo "Test 27: Mode isolation references opensource mode"
-assert_contains "references opensource mode" "opensource" "$methodology_content"
-
-echo ""
-echo "Test 28: Mode isolation references content mode"
-assert_contains "references content mode" "content" "$methodology_content"
-
-echo ""
-echo "Test 29: Mode isolation references feature mode"
-assert_contains "references feature mode" "feature" "$methodology_content"
-
-echo ""
-echo "Test 30: Mode isolation references bugfix mode"
-assert_contains "references bugfix mode" "bugfix" "$methodology_content"
+echo "Test 23: Mode isolation references every CLI mode"
+for mode in "${cli_modes[@]}"; do
+  assert_contains "references $mode mode" "$mode" "$methodology_content"
+done
 
 # =====================================================================
 # 9. Parallel execution content — must describe the model
@@ -415,7 +399,7 @@ fi
 
 echo ""
 echo "Test 43: Does not claim wrong number of lenses"
-actual_lens_count="$(jq '[.domains[].lenses | length] | add' "$DOMAINS_FILE")"
+actual_lens_count="$(jq '[.domains[] | select(.mode != "polish") | .lenses | length] | add' "$DOMAINS_FILE")"
 for wrong_count in 109 150 200 250 300; do
   if [[ "$wrong_count" -ne "$actual_lens_count" ]]; then
     assert_not_contains "no stale claim of $wrong_count lenses" "$wrong_count expert" "$methodology_content"
@@ -424,8 +408,10 @@ done
 
 echo ""
 echo "Test 44: Does not claim wrong number of modes"
-for wrong_modes in "6 mode" "7 mode" "8 mode" "10 mode"; do
-  assert_not_contains "no stale claim of $wrong_modes" "$wrong_modes" "$methodology_content"
+for wrong_modes in 6 7 8 9 10; do
+  if [[ "$wrong_modes" -ne "$actual_mode_count" ]]; then
+    assert_not_contains "no stale claim of $wrong_modes mode" "$wrong_modes mode" "$methodology_content"
+  fi
 done
 
 # =====================================================================
@@ -439,7 +425,7 @@ assert_contains "contains toolgate lens count ($toolgate_count)" "$toolgate_coun
 
 echo ""
 echo "Test 46: Code analysis lens count matches codebase"
-code_analysis_count="$(jq '[.domains[] | select(.mode == null or (.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content")) | select(.id != "toolgate") | .lenses | length] | add' "$DOMAINS_FILE")"
+code_analysis_count="$(jq '[.domains[] | select(.mode == null or (.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish")) | select(.id != "toolgate") | .lenses | length] | add' "$DOMAINS_FILE")"
 assert_contains "contains code analysis lens count ($code_analysis_count)" "$code_analysis_count code analysis" "$methodology_content"
 
 echo ""
@@ -461,6 +447,11 @@ echo ""
 echo "Test 50: Content quality lens count matches codebase"
 content_count="$(jq '[.domains[] | select(.mode == "content") | .lenses | length] | add' "$DOMAINS_FILE")"
 assert_contains "contains content lens count ($content_count)" "$content_count" "$methodology_content"
+
+echo ""
+echo "Test 50b: Greenfield lens count matches codebase"
+greenfield_count="$(jq '[.domains[] | select(.mode == "greenfield") | .lenses | length] | add' "$DOMAINS_FILE")"
+assert_contains "contains greenfield lens count ($greenfield_count)" "$greenfield_count greenfield" "$methodology_content"
 
 # =====================================================================
 # 18. Cross-referenced constants must match repolens.sh
