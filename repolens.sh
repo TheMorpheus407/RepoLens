@@ -187,7 +187,7 @@ Options:
                            repolens:reopen-candidate issue instead.
   --local                 Write findings as local markdown files instead of creating remote issues
   --output <path>         Output directory for local markdown files (requires --local, default: logs/<run-id>/issues/)
-  --forge <provider>      gh (GitHub) | tea (Gitea) | fj (Forgejo/Codeberg) — overrides auto-detection from origin
+  --forge <provider>      gh (GitHub) | glab (GitLab) | tea (Gitea) | fj (Forgejo/Codeberg) — overrides auto-detection from origin
   --hosted                Spin up project's Docker Compose in isolated network for DAST scanning and testing
   --remote <ssh-target>   Deploy mode server target reachable by SSH (host, user@host, or user@host:port)
   --remote-key <path>     SSH private key path for --remote; must be an existing regular file
@@ -696,7 +696,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --forge)
-      [[ $# -ge 2 ]] || die "Option --forge requires an argument (gh|tea|fj)."
+      [[ $# -ge 2 ]] || die "Option --forge requires an argument (gh|glab|tea|fj)."
       FORGE_PROVIDER="$2"
       shift 2
       ;;
@@ -1709,8 +1709,8 @@ esac
 # --- Resolve and validate forge provider ---
 if [[ -n "$FORGE_PROVIDER" ]]; then
   case "$FORGE_PROVIDER" in
-    gh|tea|fj) ;;
-    *) die "Invalid --forge: $FORGE_PROVIDER (expected gh, tea, or fj)" ;;
+    gh|glab|tea|fj) ;;
+    *) die "Invalid --forge: $FORGE_PROVIDER (expected gh, glab, tea, or fj)" ;;
   esac
 else
   FORGE_PROVIDER="$(detect_forge_provider "$_origin_url")"
@@ -1719,7 +1719,7 @@ unset _origin_url
 
 if ! $LOCAL_MODE; then
   if [[ "$FORGE_PROVIDER" == "unknown" ]]; then
-    die "Could not detect forge provider from origin remote. Pass --forge <gh|tea|fj> explicitly (required for self-hosted Gitea/Forgejo instances)."
+    die "Could not detect forge provider from origin remote. Pass --forge <gh|glab|tea|fj> explicitly (required for self-hosted GitLab/Gitea/Forgejo instances)."
   fi
   if [[ "$FORGE_PROVIDER" == "fj" && -z "${FORGE_HOST:-}" ]]; then
     die "Forgejo fj backend requires an HTTPS or SSH origin remote so RepoLens can pass fj --host; insecure HTTP origins are not supported."
