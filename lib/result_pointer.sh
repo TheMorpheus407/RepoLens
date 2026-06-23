@@ -25,6 +25,67 @@
 # warning and returns 0 so a pointer-write failure never changes the run's exit
 # code. Guarded by `command -v jq`.
 
+# _collect_discarded_runs <logs_dir> <run_id> — print a JSON array of the OTHER
+# genuine run dirs under <logs_dir> (everything except <run_id>), each as
+# {run_id, reason}, where `reason` is derived from the clean.sh predicates:
+#
+#   _clean_is_locked     -> skip (a live run is not "discarded")
+#   _clean_is_incomplete -> "aborted-or-incomplete"
+#   no final/manifest.json AND .totals.issues_created == 0 -> "empty"
+#   otherwise (a prior complete run)                       -> "superseded"
+#
+# Cheap by design: stat-level checks plus a single jq read of summary.json per
+# run dir, no model calls. Always prints a valid JSON array ([] if there is
+# nothing to list, the logs tree is missing/odd, or the _clean_* predicates are
+# not sourced) so the caller can feed it straight into --argjson. Guarded by
+# `declare -F _clean_is_run_dir` so the unit harness that sources only
+# core/logging/result_pointer (not clean.sh) degrades to [] silently.
+_collect_discarded_runs() {
+  local logs_dir="$1" run_id="$2"
+
+  if ! declare -F _clean_is_run_dir >/dev/null 2>&1 || [[ ! -d "$logs_dir" ]]; then
+    printf '[]'
+    return 0
+  fi
+
+  local _lines="" _d _name _reason _issues
+  for _d in "$logs_dir"/*; do
+    _clean_is_run_dir "$_d" || continue
+    _name="${_d##*/}"
+    [[ "$_name" == "$run_id" ]] && continue
+
+    if _clean_is_locked "$_d"; then
+      continue                       # live — not a discarded run
+    elif _clean_is_incomplete "$_d"; then
+      _reason="aborted-or-incomplete"
+    else
+      _issues=0
+      if [[ -f "$_d/summary.json" ]]; then
+        _issues="$(jq -r '.totals.issues_created // 0' "$_d/summary.json" 2>/dev/null || printf '0')"
+        [[ "$_issues" =~ ^[0-9]+$ ]] || _issues=0
+      fi
+      if [[ ! -f "$_d/final/manifest.json" && "$_issues" -eq 0 ]]; then
+        _reason="empty"
+      else
+        _reason="superseded"
+      fi
+    fi
+
+    _lines+="$_name"$'\t'"$_reason"$'\n'
+  done
+
+  if [[ -z "$_lines" ]]; then
+    printf '[]'
+    return 0
+  fi
+
+  local _json
+  _json="$(printf '%s' "$_lines" \
+    | jq -R -n '[inputs | select(length>0) | split("\t") | {run_id: .[0], reason: .[1]}]' 2>/dev/null)"
+  [[ -n "$_json" ]] || _json='[]'
+  printf '%s' "$_json"
+}
+
 # write_latest_result_pointer <logs_dir> <run_id> <mode> <agent> \
 #     <summary_file> <status> <final_dir>
 #
@@ -36,7 +97,9 @@
 #   findings, manifest       — ABSOLUTE paths under <final_dir> (not created here)
 #   counts                   — headline counts by NORMALIZED severity from
 #                              <final_dir>/manifest.json if present, else {}
-#   discarded_runs           — [] placeholder (sibling issue owns it)
+#   discarded_runs           — [{run_id, reason}] for every OTHER genuine run
+#                              dir under <logs_dir> (issue #310; see
+#                              _collect_discarded_runs)
 #
 # Side effects: creates/replaces <logs_dir>/latest-result.json. Never aborts the
 # caller — returns 0 on every path; warnings go to log_warn.
@@ -81,6 +144,12 @@ write_latest_result_pointer() {
     fi
   fi
 
+  # Sibling run dirs that are not the authoritative result, each classified via
+  # clean.sh (issue #310). Always a valid JSON array; [] when nothing to list.
+  local discarded_json
+  discarded_json="$(_collect_discarded_runs "$logs_dir" "$run_id")"
+  [[ -n "$discarded_json" ]] || discarded_json='[]'
+
   # Atomic write: temp file inside logs_dir (same filesystem) + mv. If logs_dir
   # is not a writable directory the mktemp fails and we bail non-fatally.
   local tmp
@@ -99,6 +168,7 @@ write_latest_result_pointer() {
       --arg findings "$findings_path" \
       --arg manifest "$manifest_path" \
       --argjson counts "$counts_json" \
+      --argjson discarded "$discarded_json" \
       '{
         run_id: $run_id,
         mode: $mode,
@@ -109,7 +179,7 @@ write_latest_result_pointer() {
         findings: $findings,
         manifest: $manifest,
         counts: $counts,
-        discarded_runs: []
+        discarded_runs: $discarded
       }' > "$tmp" 2>/dev/null; then
     log_warn "latest-result pointer: failed to build JSON; skipping pointer write"
     rm -f "$tmp" 2>/dev/null
