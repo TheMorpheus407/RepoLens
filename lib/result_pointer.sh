@@ -86,6 +86,59 @@ _collect_discarded_runs() {
   printf '%s' "$_json"
 }
 
+# update_latest_symlink <logs_dir> <run_id> — (re)point <logs_dir>/LATEST at
+# <run_id> as an ergonomic companion to latest-result.json (issue #313). The
+# target is RELATIVE (the run-id only) so the logs tree stays relocatable, and
+# the swap is ATOMIC where the platform supports it: build the link under a
+# temp name (<logs_dir>/.LATEST.tmp) then `mv -T` it over LATEST (a GNU rename
+# over the existing name). On platforms without `mv -T` (BSD/macOS) it falls
+# back to `ln -sfn`. A CLOBBER GUARD refuses to touch LATEST if it is a real
+# (non-symlink) file or directory — `-e` follows symlinks, so a valid OR
+# dangling symlink is repointable, only a genuine file/dir is left alone.
+#
+# Side effects: creates/replaces <logs_dir>/LATEST; removes any stray
+# <logs_dir>/.LATEST.tmp. Strictly non-fatal: every failure path logs a warning
+# and returns 0 so a symlink failure never changes the run's exit code.
+update_latest_symlink() {
+  local logs_dir="$1" run_id="$2"
+  local link="$logs_dir/LATEST"
+  local tmp="$logs_dir/.LATEST.tmp"
+
+  # Refuse to destroy a real file/dir that happens to sit at logs/LATEST.
+  # `-e` follows symlinks, so a valid OR dangling symlink is NOT caught here
+  # (dangling => -e false); only a genuine regular file or directory is.
+  if [[ -e "$link" && ! -L "$link" ]]; then
+    log_warn "LATEST: $link exists as a real file/dir; leaving it untouched"
+    return 0
+  fi
+
+  # Build the new link under a temp name first (relative target = run-id only).
+  rm -f "$tmp" 2>/dev/null
+  if ! ln -s "$run_id" "$tmp" 2>/dev/null; then
+    log_warn "LATEST: cannot create symlink in $logs_dir (filesystem may not support symlinks); skipping"
+    rm -f "$tmp" 2>/dev/null
+    return 0
+  fi
+
+  # Atomic swap: rename the temp link over LATEST. Prefer GNU `mv -T`, which
+  # treats LATEST as a plain name and rename(2)s over it (including an existing
+  # symlink-to-dir); plain `mv` would move the temp link *into* such a dir.
+  if mv -T "$tmp" "$link" 2>/dev/null; then
+    return 0
+  fi
+
+  # `mv -T` unavailable (BSD/macOS) or failed: fall back to `ln -sfn`, then make
+  # sure no stray temp link is left behind.
+  if ln -sfn "$run_id" "$link" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    return 0
+  fi
+
+  log_warn "LATEST: failed to point $link at $run_id; leaving previous state"
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
 # write_latest_result_pointer <logs_dir> <run_id> <mode> <agent> \
 #     <summary_file> <status> <final_dir>
 #
@@ -191,6 +244,10 @@ write_latest_result_pointer() {
     rm -f "$tmp" 2>/dev/null
     return 0
   fi
+
+  # Ergonomic companion to latest-result.json: a relative, atomic LATEST symlink
+  # to this run dir (issue #313). Strictly non-fatal — never changes our rc.
+  update_latest_symlink "$logs_dir" "$run_id"
 
   return 0
 }
