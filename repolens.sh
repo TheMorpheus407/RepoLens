@@ -58,6 +58,8 @@ source "$SCRIPT_DIR/lib/triage.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/synthesize.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/result_pointer.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/filing.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/hosted.sh"
@@ -3591,6 +3593,17 @@ case "$RUN_HEALTH" in
     fi
     ;;
 esac
+
+# Emit the canonical latest-result pointer at the top of the logs tree (#308).
+# Non-fatal: a pointer-write failure logs a warning and never changes exit code.
+write_latest_result_pointer \
+  "$SCRIPT_DIR/logs" \
+  "$RUN_ID" \
+  "$MODE" \
+  "$AGENT" \
+  "$SUMMARY_FILE" \
+  "${REPOLENS_FINAL_STATE:-finished}" \
+  "$LOG_BASE/final" || true
 
 log_info "=============================="
 log_info "RepoLens run $RUN_ID complete"
