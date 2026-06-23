@@ -103,3 +103,119 @@ finding_id() {
 
   printf 'fnd-%s\n' "${hex:0:12}"
 }
+
+# _ledger_severity_normalize <value>
+#   Canonicalizes a severity to critical|high|medium|low (or "" for anything
+#   else). Prefers the shared severity_normalize (lib/core.sh) when it is
+#   already sourced; otherwise falls back to a self-contained replica so
+#   lib/ledger.sh keeps working when sourced on its own (the same defensive
+#   pattern used by _ledger_normalize_title above).
+_ledger_severity_normalize() {
+  if declare -F severity_normalize >/dev/null 2>&1; then
+    severity_normalize "$1"
+    return
+  fi
+
+  # Self-contained replica of lib/core.sh::severity_normalize.
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  if [[ "$value" == \[*\] ]]; then
+    value="${value#\[}"
+    value="${value%\]}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+  fi
+  value="${value,,}"
+  case "$value" in
+    critical|high|medium|low) printf '%s' "$value" ;;
+    *) printf '' ;;
+  esac
+}
+
+# build_findings_jsonl_from_manifest <manifest_path> <out_jsonl_path>
+#   Reads a validated synthesizer manifest (logs/<run-id>/final/manifest.json:
+#   a JSON array of cluster objects) and writes the canonical finding registry
+#   as JSON Lines — one record per cluster, mapped onto the 12-field schema in
+#   docs/finding-registry-schema.md plus a source_finding_paths passthrough.
+#
+#   Pure: reads the manifest, writes the out file. No required globals;
+#   severity_normalize (lib/core.sh) is used when present, else an inline
+#   replica (see _ledger_severity_normalize) keeps this sourceable alone.
+#
+#   Field mapping (notable points):
+#   - id        is content-derived via finding_id with an EMPTY primary_location
+#               (the manifest carries no file:line); stable across runs.
+#   - severity  is run through _ledger_severity_normalize (e.g. "High"->"high").
+#   - status    defaults to "new"; verification_status "wrong" ->
+#               "likely-false-positive", "stale" -> "needs-validation";
+#               everything else (verified/unknown/absent) -> "new"
+#               (conservative — "verified" is still "new" to the registry).
+#   - duplicate_group is SEEDED from cluster_id; the final dedup grouping is
+#               owned by the dedupe agent (#316/#322/#335). cluster_id is a
+#               per-run, non-stable handle and must not be confused with id.
+#   - type/confidence/markdown_path are null and primary_location is "";
+#     validation is an empty object {}. These are owned by sibling agents.
+#   - source_finding_paths is passed through verbatim so siblings can trace
+#     the underlying evidence.
+#
+#   jq owns all quoting/escaping: the whole entry is handed to jq via
+#   --argjson and fields are read inside jq, so titles/paths with quotes,
+#   newlines, shell metacharacters, or unicode survive intact. Only the three
+#   computed scalars (id, severity, status) are passed as --arg.
+#
+#   Empty manifest ([]) -> empty out file (0 lines), exit 0. Output is written
+#   atomically (tmp + mv) so a mid-loop failure leaves no partial registry.
+#   Returns non-zero on missing args, a missing manifest, or non-array JSON
+#   (no output is written in those cases).
+build_findings_jsonl_from_manifest() {
+  local manifest="${1:-}" out="${2:-}"
+  [[ -n "$manifest" ]] || { echo "build_findings_jsonl_from_manifest: missing manifest path" >&2; return 2; }
+  [[ -n "$out" ]]      || { echo "build_findings_jsonl_from_manifest: missing out path" >&2; return 2; }
+  [[ -f "$manifest" ]] || { echo "build_findings_jsonl_from_manifest: manifest not found: $manifest" >&2; return 2; }
+  jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 \
+    || { echo "build_findings_jsonl_from_manifest: not a JSON array: $manifest" >&2; return 1; }
+
+  local tmp="${out}.tmp.$$"
+  : > "$tmp" || return 1
+
+  local count i entry domain lens title raw_sev sev vstatus status id
+  count="$(jq 'length' "$manifest")" || { rm -f "$tmp"; return 1; }
+  for (( i = 0; i < count; i++ )); do
+    entry="$(jq -c --argjson i "$i" '.[$i]' "$manifest")" || { rm -f "$tmp"; return 1; }
+    domain="$(jq -r '.domain // ""'  <<<"$entry")"
+    lens="$(jq -r   '.lens // ""'    <<<"$entry")"
+    title="$(jq -r  '.title // ""'   <<<"$entry")"
+    raw_sev="$(jq -r '.severity // ""' <<<"$entry")"
+    vstatus="$(jq -r '.verification_status // ""' <<<"$entry")"
+
+    id="$(finding_id "$domain" "$lens" "$title")"
+    sev="$(_ledger_severity_normalize "$raw_sev")"
+    status="new"
+    case "$vstatus" in
+      wrong) status="likely-false-positive" ;;
+      stale) status="needs-validation" ;;
+    esac
+
+    jq -cn \
+      --argjson entry "$entry" \
+      --arg id "$id" --arg severity "$sev" --arg status "$status" '
+      {
+        id: $id,
+        title: ($entry.title // ""),
+        severity: $severity,
+        type: null,
+        domain: ($entry.domain // ""),
+        lens: ($entry.lens // ""),
+        status: $status,
+        primary_location: "",
+        confidence: null,
+        duplicate_group: ($entry.cluster_id // null),
+        markdown_path: null,
+        validation: {},
+        source_finding_paths: ($entry.source_finding_paths // [])
+      }' >> "$tmp" || { rm -f "$tmp"; return 1; }
+  done
+
+  mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }
+}
