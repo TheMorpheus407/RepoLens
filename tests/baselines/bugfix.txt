@@ -12,6 +12,7 @@ Mode:         bugfix
 Agent:        codex
 Project:      <TMP_RUN_DIR>/<PROJECT_TAIL>
 Rounds:      1
+Human review: false
 Lenses:       1
 Output:       local markdown (<TMP_RUN_DIR>/issues-bugfix)
 
