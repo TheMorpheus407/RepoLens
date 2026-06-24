@@ -105,7 +105,22 @@ assert_not_contains "no full mode enumeration" 'audit|feature|bugfix|discover|de
 # to verify it handles future additions correctly
 
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+# Idempotent cleanup: the scratch dir plus the planted failing-suite fixture
+# created in Contract 5. A stray tests/test_zzz_tempfail.sh has no license header
+# and exits 1, so a leaked copy fails the license-header and make-check suites on
+# every later run. The inline `rm -f` at the end of Contract 5 covers the happy
+# path; this handler covers crash/interrupt. Both `rm` forms are no-ops when the
+# targets are already gone.
+_cleanup_issue6() {
+  rm -rf "$TMPDIR"
+  rm -f "$SCRIPT_DIR/tests/test_zzz_tempfail.sh"
+}
+# EXIT alone does not fire on SIGINT/SIGTERM (how a timeout typically kills a
+# run, the likely cause of past orphans), so trap those too and re-exit. Running
+# the idempotent cleanup more than once is harmless.
+trap _cleanup_issue6 EXIT
+trap '_cleanup_issue6; exit 130' INT
+trap '_cleanup_issue6; exit 143' TERM
 
 echo ""
 echo "Test 5: pattern matches discover as last mode in case"

@@ -80,6 +80,46 @@ severity_meets_min() {
   (( severity_rank_value >= min_rank_value ))
 }
 
+# finding_type_normalize <value>
+#   Canonicalizes a raw finding-TYPE string to one of the six closed taxonomy
+#   ids (see issue #320 / config/finding-types.json). The set is hardcoded here
+#   to avoid a runtime jq dependency, mirroring severity_normalize. A short,
+#   documented alias set repairs common variants (the schema-doc short forms
+#   plus obvious synonyms). Prints the canonical id on success; prints empty
+#   string for unknown/unrepairable/empty input and never errors under set -u.
+finding_type_normalize() {
+  local value="${1:-}"
+
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  if [[ "$value" == \[*\] ]]; then
+    value="${value#\[}"
+    value="${value%\]}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+  fi
+
+  value="${value,,}"
+  case "$value" in
+    # canonical ids (round-trip to themselves)
+    security-vulnerability) printf '%s\n' 'security-vulnerability' ;;
+    reliability-bug)        printf '%s\n' 'reliability-bug' ;;
+    performance-risk)       printf '%s\n' 'performance-risk' ;;
+    maintainability)        printf '%s\n' 'maintainability' ;;
+    test-gap)               printf '%s\n' 'test-gap' ;;
+    external-dependency)    printf '%s\n' 'external-dependency' ;;
+    # aliases -> canonical (short forms = schema-doc enum + obvious synonyms)
+    security)               printf '%s\n' 'security-vulnerability' ;;
+    bug|correctness|reliability)
+                            printf '%s\n' 'reliability-bug' ;;
+    perf|performance)       printf '%s\n' 'performance-risk' ;;
+    tests|testing)          printf '%s\n' 'test-gap' ;;
+    cve|dependency)         printf '%s\n' 'external-dependency' ;;
+    *) printf '' ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Dependency check
 # ---------------------------------------------------------------------------
