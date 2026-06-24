@@ -41,6 +41,19 @@ Every issue MUST have this structure:
   - `proof_anchors` — EXACT `file:line` references from THIS repository and/or short code quotes that prove the claim
   - `suggested_validation` — a concrete shell command OR test that confirms the finding; a single runnable command when the finding is locally checkable
 
+### How to Fill the `## Validation` Block
+The fields above are a contract; the points below are the quality bar for each. A block that is present but vague is worthless — downstream tooling and reviewers cannot act on it.
+
+- **`proof_anchors`** — Use an EXACT `path:line` reference (e.g. `lib/template.sh:208`) or a verbatim quote of the offending code. Never a vague pointer.
+  - Good: `proof_anchors: lib/template.sh:208` (or a verbatim quote of the offending line).
+  - Bad: `proof_anchors: see the auth code` — there is no `path:line` and nothing to verify.
+- **`suggested_validation`** — Prefer a single runnable LOCAL command that confirms the finding: `grep -n …`, `bash tests/…`, `curl -s http://localhost:PORT/…`, `test …`. A finding you can confirm with a local command is **locally validatable**. Only name an external scanner (e.g. semgrep, trivy, npm audit) when the finding genuinely cannot be confirmed from local source or state — and say so explicitly with the phrase **needs external scanner**. This local-command-vs-external-scanner distinction drives downstream classification, so be precise: a local command marks the finding locally validatable; an external-scanner reference marks it as needs external scanner.
+  - Good (locally validatable): `suggested_validation: grep -n 'patsub_replacement' lib/template.sh`.
+  - Good (needs external scanner): `suggested_validation: needs external scanner — npm audit (the CVE cannot be confirmed from source alone)`.
+  - Bad: `suggested_validation: run a security scan` — neither a runnable local command nor an explicit scanner escalation.
+- **`attacker_source` → `missing_guard` → `sink_effect`** — Tell the source → guard → sink chain: where untrusted input enters, which check is absent or wrong, and what the unguarded path then does. For non-security findings (correctness, performance, docs) where there is no attacker, write `n/a` for these fields.
+- **`preconditions`** — List the conditions that must hold for the issue to trigger, or `none` if it always applies.
+
 ### Quality Standards
 - Only report **real findings** backed by evidence in the code. No hypotheticals.
 - Be specific: file paths, line numbers, function names. Vague findings are worthless.

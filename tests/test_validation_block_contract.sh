@@ -176,5 +176,24 @@ assert_not_contains "polish local branch lacks attacker_source" "attacker_source
 assert_not_contains "polish local branch lacks suggested_validation" "suggested_validation" "$polish_section"
 
 echo ""
+echo "--- Group 5: per-field authoring guidance (#323) ---"
+# audit.md must carry how-to-fill-it-well guidance for the #317 contract, with
+# good/bad contrasts and the local-vs-external-scanner distinction the classifier
+# keys off. Tokens here MUST match the literal prose in prompts/_base/audit.md.
+assert_contains "audit.md has the How to Fill guidance section" "How to Fill the" "$audit_md"
+assert_contains "audit.md requires path:line proof anchors" "path:line" "$audit_md"
+assert_contains "audit.md has a Good: contrast example" "Good:" "$audit_md"
+assert_contains "audit.md has a Bad: contrast example" "Bad:" "$audit_md"
+assert_contains "audit.md names the 'locally validatable' state" "locally validatable" "$audit_md"
+assert_contains "audit.md names the 'needs external scanner' state" "needs external scanner" "$audit_md"
+assert_contains "audit.md states the distinction drives classification" "downstream classification" "$audit_md"
+assert_contains "audit.md documents the n/a allowance" "n/a" "$audit_md"
+assert_contains "audit.md documents the none allowance" "none" "$audit_md"
+# The guidance must also reach agents in the rendered prompt, not just the file.
+assert_contains "audit forge render carries path:line guidance" "path:line" "$audit_forge"
+assert_contains "audit forge render carries locally validatable phrasing" "locally validatable" "$audit_forge"
+assert_contains "audit forge render carries needs external scanner phrasing" "needs external scanner" "$audit_forge"
+
+echo ""
 echo "Results: $PASS/$TOTAL passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
