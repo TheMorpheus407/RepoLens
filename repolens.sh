@@ -67,6 +67,8 @@ source "$SCRIPT_DIR/lib/hosted.sh"
 source "$SCRIPT_DIR/lib/android.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/forge.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/human_review.sh"
 
 VERSION="0.2.0"
 
