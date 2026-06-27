@@ -536,6 +536,7 @@ Each markdown file must contain YAML frontmatter followed by the finding body:
 ---
 title: \"[SEVERITY] Finding title\"
 severity: critical|high|medium|low
+type: security-vulnerability|reliability-bug|performance-risk|maintainability|test-gap|external-dependency
 domain: <domain>
 lens: <lens-id>
 labels:
@@ -565,6 +566,8 @@ labels:
 - proof_anchors — EXACT path:line references from THIS repository and/or short code quotes that prove the claim
 - suggested_validation — a concrete shell command OR test that confirms the finding (a single runnable command when locally checkable)
 \`\`\`
+
+The \`type:\` field is REQUIRED: pick the single best-fit finding type from the closed taxonomy (\`security-vulnerability\`, \`reliability-bug\`, \`performance-risk\`, \`maintainability\`, \`test-gap\`, \`external-dependency\`). Type is orthogonal to severity — a finding of any severity can be any type, so choose the type by what KIND of problem it is, not how bad it is. Use \`external-dependency\` for CVE or otherwise scanner-validatable third-party dependency findings.
 
 ### Deduplication
 Before writing a new finding, check if a file with a similar title already exists in the output directory. If so, skip the duplicate.

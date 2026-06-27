@@ -87,6 +87,7 @@ lens_id: <generated investigator slug for this dispatch>
 domain: generic
 round: {{ROUND_INDEX}}
 severity: critical | high | medium | low
+type: security-vulnerability | reliability-bug | performance-risk | maintainability | test-gap | external-dependency
 confidence: high | medium | low
 role: {{LENS_ROLE}}
 focus: {{LENS_FOCUS}}
@@ -97,6 +98,8 @@ suspect_files:
 ```
 
 The `role` and `focus` frontmatter fields are **mandatory** — they let the synthesizer attribute each finding back to the wave controller's intent for this slot.
+
+The `type:` field is **required**: pick the single best-fit finding type from the closed taxonomy (`security-vulnerability`, `reliability-bug`, `performance-risk`, `maintainability`, `test-gap`, `external-dependency`). Type is orthogonal to severity — a finding of any severity can be any type. Use `external-dependency` for CVE or otherwise scanner-validatable third-party dependency findings.
 
 ### Required Markdown body sections (in order)
 

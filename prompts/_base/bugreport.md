@@ -74,6 +74,7 @@ lens_id: <lens id matching the lens directory under prompts/lenses/<domain>/<len
 domain: <domain matching a domain in config/domains.json>
 round: {{ROUND_INDEX}}
 severity: critical | high | medium | low
+type: security-vulnerability | reliability-bug | performance-risk | maintainability | test-gap | external-dependency
 confidence: high | medium | low
 root_cause_category: <short lowercase-kebab tag, e.g. race-condition, null-deref, config-mismatch, auth-bypass, missing-validation>
 suspect_files:
@@ -81,6 +82,8 @@ suspect_files:
   - path/to/other.ext:LINE
 ---
 ```
+
+The `type:` field is **required**: pick the single best-fit finding type from the closed taxonomy (`security-vulnerability`, `reliability-bug`, `performance-risk`, `maintainability`, `test-gap`, `external-dependency`). Type is orthogonal to severity — a finding of any severity can be any type. Use `external-dependency` for CVE or otherwise scanner-validatable third-party dependency findings.
 
 `suspect_files` is recommended. The lens label `{{LENS_LABEL}}` may also be recorded in the frontmatter for downstream attribution; it is NEVER passed to any forge label-create command.
 
@@ -99,6 +102,7 @@ lens_id: example-lens
 domain: example-domain
 round: {{ROUND_INDEX}}
 severity: high
+type: reliability-bug
 confidence: medium
 root_cause_category: race-condition
 suspect_files:
