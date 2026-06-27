@@ -294,3 +294,79 @@ _finalize_summary_locked() {
   rm -f "$tmp" 2>/dev/null || true
   return "$rc"
 }
+
+# _summary_fmt_duration <seconds>
+#   Human-format a duration. Reuses status_format_duration (lib/status.sh) when
+#   that library is loaded; otherwise degrades to raw seconds. Uses a runtime
+#   declare -F guard because lib/summary.sh is sourced before lib/status.sh, so
+#   the formatter is unavailable at source time but present at call time.
+_summary_fmt_duration() {
+  if declare -F status_format_duration >/dev/null 2>&1; then
+    status_format_duration "$1"
+  else
+    printf '%ss' "$1"
+  fi
+}
+
+# summary_time_breakdown <summary_file> [top_n]
+#   Prints a human-readable time breakdown to stdout: total wall time, total
+#   lens-seconds, the top-N slowest individual lens-runs (default 10), and
+#   per-domain summed duration_seconds (descending). Degrades gracefully: if jq
+#   is missing, the file is absent, or no lens has a positive duration_seconds
+#   (older/legacy summaries), it prints a single "Time breakdown: no timing
+#   data" line (or nothing for a missing file) and returns 0. Durations are
+#   formatted via _summary_fmt_duration. Read-only; no side effects.
+summary_time_breakdown() {
+  local file="${1:-}" top_n="${2:-10}"
+  [[ -n "$file" && -f "$file" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  [[ "$top_n" =~ ^[0-9]+$ ]] && (( top_n > 0 )) || top_n=10
+
+  local total_lens_seconds
+  total_lens_seconds="$(jq -r '[.lenses[]?.duration_seconds // 0] | add // 0' "$file" 2>/dev/null || printf '0')"
+  [[ "$total_lens_seconds" =~ ^[0-9]+$ ]] || total_lens_seconds=0
+  if (( total_lens_seconds == 0 )); then
+    printf 'Time breakdown: no timing data\n'
+    return 0
+  fi
+
+  local wall_seconds
+  wall_seconds="$(jq -r '
+    (.started_at // null) as $s | (.completed_at // null) as $c
+    | if ($s != null and $c != null and ($s|type)=="string" and ($c|type)=="string")
+      then (($c|fromdateiso8601?) // null) as $ce | (($s|fromdateiso8601?) // null) as $se
+        | if ($ce != null and $se != null) then (($ce - $se) | (if . < 0 then 0 else . end)) else empty end
+      else empty end
+  ' "$file" 2>/dev/null || true)"
+
+  printf 'Time breakdown\n'
+  if [[ "$wall_seconds" =~ ^[0-9]+$ ]]; then
+    printf '  wall time:    %s\n' "$(_summary_fmt_duration "$wall_seconds")"
+  fi
+  printf '  lens-seconds: %s\n' "$(_summary_fmt_duration "$total_lens_seconds")"
+
+  printf '  slowest lenses (top %d):\n' "$top_n"
+  while IFS=$'\t' read -r key dur; do
+    [[ -n "$key" ]] || continue
+    printf '    %-40s %s\n' "$key" "$(_summary_fmt_duration "$dur")"
+  done < <(jq -r --argjson n "$top_n" '
+    (.lenses // [])
+    | map(select((.duration_seconds // 0) > 0))
+    | sort_by([-(.duration_seconds // 0), .domain, .lens])
+    | .[0:$n][]
+    | [ (.domain + "/" + .lens), (.duration_seconds // 0) ] | @tsv
+  ' "$file" 2>/dev/null)
+
+  printf '  per-domain totals:\n'
+  while IFS=$'\t' read -r dom dur; do
+    [[ -n "$dom" ]] || continue
+    printf '    %-24s %s\n' "$dom" "$(_summary_fmt_duration "$dur")"
+  done < <(jq -r '
+    (.lenses // [])
+    | map(select((.duration_seconds // 0) > 0))
+    | group_by(.domain)
+    | map({domain: .[0].domain, total: (map(.duration_seconds // 0) | add)})
+    | sort_by([-.total, .domain])[]
+    | [ .domain, .total ] | @tsv
+  ' "$file" 2>/dev/null)
+}

@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
+
 # Issue #339 — the default-mode LOCAL MODE frontmatter contract must instruct
 # lenses to EMIT a `type:` value from the closed six-member taxonomy, mirrored
 # in prompts/_base/investigator.md and prompts/_base/bugreport.md, and the

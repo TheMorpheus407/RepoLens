@@ -746,6 +746,7 @@ Completed lenses are skipped; unfinished and rate-limited lenses are retried. Th
 - **Heartbeats** — Active lenses write `logs/<run-id>/.heartbeat/<domain>__<lens-id>.json`; files are removed after clean lens completion and left behind if a worker exits abnormally
 - **Status** — `logs/<run-id>/status.json`, refreshed during the run with queued, active, completed, issue-count, completion-percentage, run-health, and final-state data; render it with `./repolens.sh status [run-id]`
 - **Summary** — `logs/<run-id>/summary.json`, including per-lens status, iterations, issue counts, `findings_filtered`, `rate_limit_sleep_seconds`, per-lens wall-clock timing (`started_at` and `completed_at` as ISO-8601 UTC timestamps plus an integer `duration_seconds`, so you can see which lenses dominate a multi-hour run), final `health`, and run-level `stopped_reason` when an agent abort guard, signal interruption, or the run-health gate stops the run. When `findings_filtered` is non-zero, final stdout prints `Findings filtered by --min-severity: N` before the `=== RepoLens Run Summary ===` JSON dump
+- **Time breakdown** — At the end of every run, final stdout prints a `Time breakdown` section (just before the `=== RepoLens Run Summary ===` JSON dump) summarizing where the time went: total wall time, total lens-seconds, the 10 slowest individual lenses, and per-domain duration totals (descending). Durations are human-formatted (e.g. `2h 13m`). Runs whose `summary.json` predates per-lens timing print a single `Time breakdown: no timing data` line instead
 
 ## Development
 

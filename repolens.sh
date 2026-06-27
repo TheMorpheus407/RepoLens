@@ -3672,6 +3672,10 @@ if [[ "$FINAL_FINDINGS_FILTERED" =~ ^[0-9]+$ ]] && (( 10#$FINAL_FINDINGS_FILTERE
   echo "Findings filtered by --min-severity: $FINAL_FINDINGS_FILTERED"
 fi
 
+# Print time breakdown (no-op on older summaries without duration data).
+echo ""
+summary_time_breakdown "$SUMMARY_FILE" 10
+
 # Print summary to stdout
 echo ""
 echo "=== RepoLens Run Summary ==="
