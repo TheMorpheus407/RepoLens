@@ -69,6 +69,8 @@ source "$SCRIPT_DIR/lib/android.sh"
 source "$SCRIPT_DIR/lib/forge.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/human_review.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/artifacts.sh"
 
 VERSION="0.2.0"
 
@@ -3635,6 +3637,35 @@ if [[ "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" 
   else
     log_warn "Human review: failed to render HUMAN_REVIEW.md"
   fi
+fi
+
+# --- Human-triage artifacts (non-fatal) ---
+# Render the four post-run triage Markdown files (TODO / SUMMARY / NEEDS_REVIEW /
+# DUPLICATES) from the finding registry into final/. Clean no-op when the registry
+# is absent or empty (dry-run, single-round, or any run where the ledger did not
+# produce findings.jsonl): one info line, zero files written. Gating on `-s`
+# (exists AND non-empty) — not on generator return codes — keeps a present-but-empty
+# registry from leaking four placeholder files. Each generator failure is non-fatal
+# (warn + continue), matching the verifier/synthesizer/human-review precedent; none
+# of these touch REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
+TRIAGE_FINDINGS="$LOG_BASE/final/findings.jsonl"
+if [[ -s "$TRIAGE_FINDINGS" ]]; then
+  for _triage_spec in \
+    "generate_todo_md:TODO.md" \
+    "generate_summary_md:SUMMARY.md" \
+    "generate_needs_review_md:NEEDS_REVIEW.md" \
+    "generate_duplicates_md:DUPLICATES.md"; do
+    _triage_fn="${_triage_spec%%:*}"
+    _triage_out="$LOG_BASE/final/${_triage_spec##*:}"
+    if "$_triage_fn" "$TRIAGE_FINDINGS" "$_triage_out"; then
+      log_info "Triage artifact: $_triage_out"
+    else
+      log_warn "Triage artifact: failed to render $_triage_out ($_triage_fn, rc $?)"
+    fi
+  done
+  unset _triage_spec _triage_fn _triage_out
+else
+  log_info "Triage artifacts: no finding registry at $TRIAGE_FINDINGS; skipping"
 fi
 
 apply_rate_limit_abort_final_state || true
