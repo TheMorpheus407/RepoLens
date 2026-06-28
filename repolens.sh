@@ -3702,6 +3702,24 @@ else
   log_info "Triage artifacts: no finding registry at $TRIAGE_FINDINGS; skipping"
 fi
 
+# --- Local-mode finding registry (non-fatal) ---
+# --local bypasses the synthesizer/manifest path, so the non-local registry hook
+# above ( ! $LOCAL_MODE) never fires. Build the canonical index directly from the
+# NNN-<slug>.md tree under $OUTPUT_DIR. The orchestrator writes only into
+# logs/<run-id>/final/ (resolved from LOG_BASE, NOT $OUTPUT_DIR), so the user's
+# output dir stays pure md. Placed after the triage block so triage/human-review
+# stay non-local-only (strict issue scope): the local change produces ONLY
+# findings.jsonl + findings.csv. Non-fatal, mirroring the verifier/synthesizer/
+# triage precedent: a failure warns and NEVER flips REPOLENS_FINAL_STATE or
+# RUN_ROUNDS_RC.
+if $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
+  if build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
+    log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
+  else
+    log_warn "Finding registry: build failed (findings index not produced)"
+  fi
+fi
+
 apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"
 RUN_HEALTH="$(jq -r '.health // "ok"' "$SUMMARY_FILE" 2>/dev/null || printf 'ok')"
@@ -3755,6 +3773,16 @@ fi
 # Print time breakdown (no-op on older summaries without duration data).
 echo ""
 summary_time_breakdown "$SUMMARY_FILE" 10
+
+# Local-mode end-of-run output pointers: the md deliverable plus, when produced,
+# the machine-readable finding index (findings.jsonl + findings.csv under final/).
+if $LOCAL_MODE; then
+  echo ""
+  echo "Output:       local markdown ($OUTPUT_DIR)"
+  if [[ -f "$LOG_BASE/final/findings.jsonl" ]]; then
+    echo "Finding index: $LOG_BASE/final/findings.jsonl (+ findings.csv)"
+  fi
+fi
 
 # Print summary to stdout
 echo ""
