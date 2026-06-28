@@ -75,6 +75,8 @@ source "$SCRIPT_DIR/lib/human_review.sh"
 source "$SCRIPT_DIR/lib/artifacts.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/local-dedupe.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/attempts.sh"
 
 VERSION="0.2.0"
 
@@ -1858,6 +1860,10 @@ export LOG_BASE
 acquire_run_lock
 HEARTBEAT_DIR="$LOG_BASE/.heartbeat"
 mkdir -p "$HEARTBEAT_DIR"
+# Record the start of THIS invocation for the per-attempt audit trail (#371).
+# Runs for every invocation incl. --dry-run and --resume; before .completed is
+# touched so a fresh-run baseline is correctly 0. Non-fatal.
+attempts_begin "$LOG_BASE"
 SUMMARY_FILE="$LOG_BASE/summary.json"
 if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.agent-no-progress-abort" ]]; then
   rm -f "$LOG_BASE/.agent-no-progress-abort"
@@ -2942,6 +2948,11 @@ if $DRY_RUN; then
   done
   echo ""
   echo "Dry run complete — no agents were executed."
+  # Record this invocation before the dry-run exit (#371). --dry-run exits far
+  # before the main finalize block, so without this call a dry-run would leave
+  # no attempt entry. summary.json does not exist yet here, so why_stopped is
+  # empty and status defaults to "finished". Non-fatal.
+  attempts_finalize "$LOG_BASE" "${REPOLENS_FINAL_STATE:-finished}" "" || true
   exit 0
 fi
 
@@ -3857,6 +3868,15 @@ case "$RUN_HEALTH" in
     fi
     ;;
 esac
+
+# Record this invocation in the per-attempt audit trail (#371), now that
+# REPOLENS_FINAL_STATE / RUN_HEALTH are resolved and summary.json exists.
+# why_stopped is the stopped_reason from summary.json (empty if absent/null).
+# Non-fatal: a write failure logs a warning and never changes the exit code.
+attempts_finalize \
+  "$LOG_BASE" \
+  "${REPOLENS_FINAL_STATE:-finished}" \
+  "$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || printf '')" || true
 
 # Emit the canonical latest-result pointer at the top of the logs tree (#308).
 # Non-fatal: a pointer-write failure logs a warning and never changes exit code.
