@@ -570,7 +570,7 @@ Show a specific run by id:
 ./repolens.sh status 20260315T120000Z-a1b2c3d4
 ```
 
-The status command prints run metadata, started/updated times, progress counters, and active lenses with running time and heartbeat age. Active lenses whose heartbeat age is greater than 120 seconds are marked `[STALE?]`; use `--stale-after <seconds>` to change that threshold. A missing run exits `1` and lists available runs. A non-watch render with stale active lenses exits `2`, which is useful for CI or external monitoring.
+The status command prints run metadata, started/updated times, progress counters, a timing line, and active lenses with running time and heartbeat age. The timing line shows roughly how long the run has been going and when it is projected to finish, for example `timing:    ~1h 23m elapsed  |  ~4h 12m remaining  (ETA 2026-04-17 11:39:00 UTC)`. When the remaining time cannot be computed yet — nothing has completed, the run has reached a terminal state, or the snapshot predates ETA tracking — the line shows `remaining unknown` (and `elapsed unknown` for an older snapshot without timing data) instead of a bogus estimate. Active lenses whose heartbeat age is greater than 120 seconds are marked `[STALE?]`; use `--stale-after <seconds>` to change that threshold. A missing run exits `1` and lists available runs. A non-watch render with stale active lenses exits `2`, which is useful for CI or external monitoring.
 
 Use raw JSON for scripts:
 

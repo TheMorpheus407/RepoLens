@@ -936,6 +936,7 @@ status_render_human() {
   local meta=()
   local run_id project repo mode agent parallel max_parallel started_at updated_at total_lenses
   local completed_count active_count queued_count issues_created project_display parallel_display
+  local elapsed_seconds eta_seconds_remaining eta_completion_at
   local remote_target remote_label
   local stale_red color_reset
   local rows=()
@@ -957,10 +958,13 @@ status_render_human() {
     ((.counts.completed // 0) | tostring),
     ((.counts.active // 0) | tostring),
     ((.counts.queued // 0) | tostring),
-    ((.counts.issues_created // 0) | tostring)
+    ((.counts.issues_created // 0) | tostring),
+    ((.elapsed_seconds // "") | tostring),
+    ((.eta_seconds_remaining // "") | tostring),
+    (.eta_completion_at // "")
   ' "$status_file") || return 1
 
-  if (( ${#meta[@]} < 16 )); then
+  if (( ${#meta[@]} < 19 )); then
     printf 'Invalid status.json: missing expected fields in %s\n' "$(status_sanitize_display "$status_file")" >&2
     return 1
   fi
@@ -981,6 +985,9 @@ status_render_human() {
   active_count="$(status_sanitize_display "${meta[13]}")"
   queued_count="$(status_sanitize_display "${meta[14]}")"
   issues_created="$(status_sanitize_display "${meta[15]}")"
+  elapsed_seconds="$(status_sanitize_display "${meta[16]}")"
+  eta_seconds_remaining="$(status_sanitize_display "${meta[17]}")"
+  eta_completion_at="$(status_sanitize_display "${meta[18]}")"
 
   project_display="$repo"
   [[ -n "$project_display" ]] || project_display="$project"
@@ -1016,6 +1023,19 @@ status_render_human() {
   printf '  updated:   %s  (%s ago)\n' "$(status_format_iso_utc "$updated_at")" "$(status_relative_from_iso "$updated_at")"
   printf '  progress:  %s/%s completed  |  %s active  |  %s queued  |  %s issues created\n' \
     "$completed_count" "$total_lenses" "$active_count" "$queued_count" "$issues_created"
+
+  local elapsed_display remaining_display
+  if [[ "$elapsed_seconds" =~ ^[0-9]+$ ]]; then
+    elapsed_display="~$(status_format_duration "$elapsed_seconds") elapsed"
+  else
+    elapsed_display="elapsed unknown"
+  fi
+  if [[ "$eta_seconds_remaining" =~ ^[0-9]+$ ]]; then
+    remaining_display="~$(status_format_duration "$eta_seconds_remaining") remaining  (ETA $(status_format_iso_utc "$eta_completion_at"))"
+  else
+    remaining_display="remaining unknown"
+  fi
+  printf '  timing:    %s  |  %s\n' "$elapsed_display" "$remaining_display"
   printf '\n'
   printf 'Active lenses:\n'
 
