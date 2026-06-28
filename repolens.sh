@@ -58,6 +58,8 @@ source "$SCRIPT_DIR/lib/triage.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/synthesize.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/ledger.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/result_pointer.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/filing.sh"
@@ -3623,6 +3625,21 @@ if declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 && (( ${#_FORGE_WARN_SEEN[@]} > 0
     log_info "  ${_rollup_key} — ${_FORGE_WARN_SEEN[$_rollup_key]} times"
   done < <(printf '%s\n' "${!_FORGE_WARN_SEEN[@]}" | LC_ALL=C sort)
   unset _rollup_key
+fi
+
+# --- Finding registry (non-fatal) ---
+# Produce the canonical finding index (final/findings.jsonl + findings.csv) from
+# the synthesized manifest so the human-review digest and triage artifacts below
+# have a registry to render. Non-local path only — --local invokes the builder
+# separately (sibling issue). Non-fatal, mirroring the verifier/synthesizer/
+# triage precedent: the registry is a convenience index, not a gate, so a failure
+# warns and never flips the run's final state or return code.
+if ! $LOCAL_MODE && [[ -f "$LOG_BASE/final/manifest.json" ]]; then
+  if build_finding_registry "$RUN_ID"; then
+    log_info "Finding registry: findings.jsonl + findings.csv written"
+  else
+    log_warn "Finding registry: build failed (findings index not produced)"
+  fi
 fi
 
 finalize_summary "$SUMMARY_FILE"
