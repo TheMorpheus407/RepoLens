@@ -287,10 +287,19 @@ render_human_review_digest() {
         # A capped bucket -> a "## <title>" section. The visible slice is
         # items[:cap] (cap null => all items); count and full items are not
         # truncated by the bucketizer, so an empty slice yields the empty-state.
+        # NO SILENT TRUNCATION: under the header we always emit an explicit
+        # "N total, showing M, K more" accounting line (K = N - M, the held-back
+        # surplus) so a reviewer sees exactly how much of the bucket is curated
+        # away. For an uncapped own-section (cap null) M == N so K == 0 ("0 more",
+        # truthful). Numbers are always integers, so no literal "null" can leak.
         def section($bucket; $title):
           ($bucket.items[0:($bucket.cap // ($bucket.items | length))]) as $shown
-          | "## " + $title + " (" + ($bucket.count | tostring) + ")\n\n"
-            + (if ($shown | length) == 0
+          | ($bucket.count) as $n
+          | ($shown | length) as $m
+          | "## " + $title + " (" + ($n | tostring) + ")\n\n"
+            + "_" + ($n | tostring) + " total, showing " + ($m | tostring)
+              + ", " + (($n - $m) | tostring) + " more._\n\n"
+            + (if $m == 0
                then "_Nothing to review in this section._\n"
                else ([ $shown[] | entry(.) ] | join("\n"))
                end);
@@ -348,4 +357,76 @@ render_human_review_digest() {
 
   rm -f -- "$tmp"
   return 1
+}
+
+# human_review_heldback_summary <run_id>
+#   Prints (to stdout) the single-line finalize accounting message reconciling
+#   the curated digest against the full finding registry — e.g.
+#     Human review: 638 findings, 71 surfaced, 567 held back \
+#       (critical/high +12, medium-security +43, remainder collapsed across 14 theme(s))
+#
+#   The numbers are sourced from human_review_bucketize's FULL ordered lists (the
+#   bucketizer never truncates count/items to the cap), never re-derived from the
+#   rendered Markdown, so they are exact. Reconciliation identity (always holds):
+#     surfaced  = min(c1,cap1) + min(c2,cap2) + c3 + c4   (capped slices + the two
+#                                                          uncapped own-sections)
+#     held_back = (c1 - shown1) + (c2 - shown2) + c5        (cap surplus + the whole
+#                                                          collapsed remainder)
+#     surfaced + held_back == c1+c2+c3+c4+c5 == total       (shown_i + held_i == c_i)
+#   The collapsed remainder counts as held-back (it is de-emphasized in the
+#   digest), matching the issue's worked example. `themes` is the count of
+#   distinct remainder `domain` groups (null/empty domain normalized to one group,
+#   mirroring the renderer). When nothing is held back the line reports "0 held
+#   back" and "no remainder" truthfully (AC4).
+#
+#   PURE: returns the message string on stdout; does NOT call log_info itself, so
+#   it stays decoupled from lib/logging.sh and cannot trip the log_*-under-set -u
+#   crash trap. The orchestrator (repolens.sh) owns the actual emission via
+#   `log_info "$(human_review_heldback_summary ...)"`. Always returns 0; an empty /
+#   missing registry yields "0 findings, 0 surfaced, 0 held back".
+#
+#   PATH RESOLUTION: identical to render_human_review_digest (honors $LOG_BASE,
+#   else <repo_root>/logs/<run_id>), so finalize and tests address the same file.
+human_review_heldback_summary() {
+  local run_id="${1:-}"
+  local base findings msg
+
+  base="$(_human_review_log_base "$run_id")"
+  findings="$base/final/findings.jsonl"
+
+  msg="$(human_review_bucketize "$findings" | jq -r '
+      (.top_critical_high.count) as $c1
+      | (.top_medium_security.count) as $c2
+      | (.test_quality.count) as $c3
+      | (.not_actionable_without_scanner.count) as $c4
+      | (.remainder.count) as $c5
+      | (.top_critical_high.cap // $c1) as $cap1
+      | (.top_medium_security.cap // $c2) as $cap2
+      | (if $c1 < $cap1 then $c1 else $cap1 end) as $shown1
+      | (if $c2 < $cap2 then $c2 else $cap2 end) as $shown2
+      | ($c1 - $shown1) as $held1
+      | ($c2 - $shown2) as $held2
+      | ($shown1 + $shown2 + $c3 + $c4) as $surfaced
+      | ($held1 + $held2 + $c5) as $held_back
+      | ($c1 + $c2 + $c3 + $c4 + $c5) as $total
+      | ([ .remainder.items[]? | ((.domain // "") | tostring) ] | unique | length) as $themes
+      | "Human review: " + ($total | tostring) + " findings, "
+        + ($surfaced | tostring) + " surfaced, "
+        + ($held_back | tostring) + " held back"
+        + " (critical/high +" + ($held1 | tostring)
+        + ", medium-security +" + ($held2 | tostring)
+        + (if $c5 > 0
+           then ", remainder collapsed across " + ($themes | tostring) + " theme(s)"
+           else ", no remainder" end)
+        + ")"
+    ' 2>/dev/null)" || msg=""
+
+  # Defensive: if jq somehow yields nothing (it should not — bucketize is total),
+  # still print a truthful zero line so the orchestrator's log_info is never empty.
+  if [[ -z "$msg" ]]; then
+    msg="Human review: 0 findings, 0 surfaced, 0 held back (critical/high +0, medium-security +0, no remainder)"
+  fi
+
+  printf '%s\n' "$msg"
+  return 0
 }

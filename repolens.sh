@@ -3687,6 +3687,12 @@ if [[ "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" 
   else
     log_warn "Human review: failed to render HUMAN_REVIEW.md"
   fi
+  # No silent truncation: one structured line reconciling the curated digest
+  # against the full registry (total / surfaced / held-back per bucket). The
+  # helper is pure (returns the string); log_info owns the emission so the
+  # log_*-under-set -u trap stays out of the library. Gated by the same block,
+  # so it only fires when --human-review is active. Non-fatal.
+  log_info "$(human_review_heldback_summary "$RUN_ID")"
 fi
 
 # --- Human-triage artifacts (non-fatal) ---
