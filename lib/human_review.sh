@@ -225,9 +225,11 @@ _human_review_log_base() {
 #   and emits a single prioritized Markdown page in a fixed section order —
 #   header (run id + totals), Top Critical/High, Top Medium Security,
 #   Test & Quality (own section), Not actionable without a scanner (own section),
-#   and a placeholder/anchor for the themed remainder (a separate issue fills the
-#   remainder grouping in). It RENDERS only — it never builds or mutates the
-#   registry and invokes no model.
+#   and the themed Remainder — every leftover (bucket-5) finding grouped by
+#   `domain` into collapsed <details> blocks (count desc, then domain name), each
+#   listing severity + lens + title + primary_location, under the `#remainder`
+#   anchor. It RENDERS only — it never builds or mutates the registry and invokes
+#   no model.
 #
 #   PATH RESOLUTION: honors $LOG_BASE when set (the live finalize call exports it;
 #   tests set it to a temp dir), else <repo_root>/logs/<run_id>. So the test drives
@@ -293,6 +295,40 @@ render_human_review_digest() {
                else ([ $shown[] | entry(.) ] | join("\n"))
                end);
 
+        # The themed remainder (bucket 5): every leftover finding, grouped by
+        # `domain` (theme), each group a GitHub <details> block collapsed by
+        # default so the reviewer sees coverage without scrolling hundreds of
+        # lines. Groups are ordered count desc, then domain key asc for
+        # determinism; a null/empty domain normalizes to a single em-dash group
+        # (the grouping key is the normalized STRING, never JSON null, so it never
+        # leaks into the digest nor breaks the sort). Reuses entry() so each
+        # finding lists severity + lens + title + primary_location exactly like
+        # the top sections. remainder.cap is null, so nothing is sliced — every
+        # bucket-5 finding renders under exactly one group. Items arrive
+        # pre-sorted from the bucketizer (and group_by is stable), so within-group
+        # order needs no extra sort. The blank line after <summary> and before
+        # </details> is required for GitHub to render the Markdown body inside the
+        # collapsed block.
+        def remainder_section($rem):
+          "## Remainder (" + ($rem.count | tostring) + ")\n\n"
+          + "<a id=\"remainder\"></a>\n\n"
+          + (if ($rem.count == 0)
+             then "_No further findings._\n"
+             else
+               ( [ $rem.items[] | . + {"_gkey": ((.domain // "") | tostring)} ]
+                 | group_by(._gkey)
+                 | map({domain: .[0].domain, key: .[0]._gkey, items: ., count: length})
+                 | sort_by([(- .count), .key]) ) as $groups
+               | "_Other findings: " + ($rem.count | tostring)
+                   + " across " + ($groups | length | tostring) + " theme(s)._\n\n"
+               + ( [ $groups[]
+                     | "<details>\n<summary>" + disp(.domain) + " — "
+                         + (.count | tostring) + " finding(s)</summary>\n\n"
+                       + ([ .items[] | entry(.) ] | join("\n"))
+                       + "\n</details>\n" ]
+                   | join("\n") )
+             end);
+
         ( [ .top_critical_high.count, .top_medium_security.count, .test_quality.count,
             .not_actionable_without_scanner.count, .remainder.count ] | add ) as $total
         | "# Human Review — " + $run_id + "\n\n"
@@ -303,13 +339,7 @@ render_human_review_digest() {
           + section(.top_medium_security; "Top Medium Security") + "\n"
           + section(.test_quality; "Test & Quality") + "\n"
           + section(.not_actionable_without_scanner; "Not Actionable Without a Scanner") + "\n"
-          + "## Remainder (" + (.remainder.count | tostring) + ")\n\n"
-          + "<a id=\"remainder\"></a>\n\n"
-          + (if .remainder.count == 0
-             then "_No further findings._\n"
-             else "_" + (.remainder.count | tostring)
-                    + " additional finding(s) — themed grouping pending._\n"
-             end)
+          + remainder_section(.remainder)
       ' >"$tmp" 2>/dev/null; then
     if mv -f -- "$tmp" "$out" 2>/dev/null; then
       return 0
