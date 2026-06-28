@@ -22,6 +22,7 @@ Estimated cost: ~$0.14  (lens_count=1 x depth=1 x rounds=1, lower bound — real
   repo:       ~0 source tokens  (input capped at 200k/session)
   per session: ~$0.0838  (~3000 in + 8000 out tokens)
   sessions:   1 lenses x ~1.7 iterations (streak 1 x 1.7 iter-factor) x 1 round(s)
+Estimated wall-clock: ~1m 30s at --max-parallel 8  (rough; faster/cheaper agents and scoping reduce this).
 
 Lenses that would run:
   open-source-readiness/secret-leaks

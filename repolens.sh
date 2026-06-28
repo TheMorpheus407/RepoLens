@@ -308,6 +308,15 @@ Environment:
                            Raw worst-case wall time is timeout * iterations:
                            with defaults, 30 min * 20 = 10 hours before this
                            wall budget is applied.
+  REPOLENS_EST_WARN_HOURS  Wall-clock estimate threshold in hours (default: 24).
+                           When the startup estimate exceeds this, a loud warning
+                           lists tuning levers (--max-parallel, --agent, --depth,
+                           --domain/--focus, --max-issues). Set 0 to disable the
+                           warning; a non-numeric value falls back to 24.
+  REPOLENS_EST_PER_ITER_SECS
+                           Per-iteration wall-clock guess in seconds used by the
+                           startup estimate (default: 90). Higher values raise the
+                           estimate; non-numeric values fall back to the default.
   REPOLENS_RATE_LIMIT_MAX_SLEEP
                            Maximum parsed agent rate-limit wait in seconds
                            before falling back to abort behavior (default: 21600).
@@ -2671,6 +2680,47 @@ check_pricing_freshness() {
   fi
 }
 
+# Print the estimated wall-clock line and, when the estimate exceeds the
+# REPOLENS_EST_WARN_HOURS threshold (default 24h; 0 disables), a loud warning
+# listing concrete tuning levers. Reads the resolved run globals
+# (TOTAL_LENSES / DONE_STREAK_REQUIRED / ROUNDS / MAX_PARALLEL). Pure
+# presentation — wired into both confirm_run() and the dry-run preview. The
+# line is omitted gracefully when the estimator helper is unavailable or
+# returns a non-numeric result; a non-numeric threshold falls back to 24h.
+print_wall_estimate() {
+  declare -F estimate_run_wall_seconds >/dev/null 2>&1 || return 0
+
+  local secs
+  secs="$(estimate_run_wall_seconds "$TOTAL_LENSES" "$DONE_STREAK_REQUIRED" "$ROUNDS" "$MAX_PARALLEL" 2>/dev/null)"
+  # Graceful omission (AC4): a missing/empty/non-numeric estimate prints nothing.
+  [[ "$secs" =~ ^[0-9]+$ ]] || return 0
+
+  local human="${secs}s"
+  if declare -F status_format_duration >/dev/null 2>&1; then
+    human="$(status_format_duration "$secs")"
+  fi
+  echo "Estimated wall-clock: ~${human} at --max-parallel ${MAX_PARALLEL}  (rough; faster/cheaper agents and scoping reduce this)."
+
+  # Over-threshold warning with concrete tuning levers. The threshold is
+  # REPOLENS_EST_WARN_HOURS (default 24h); a non-numeric value falls back to the
+  # default and 0 disables the warning entirely. ${VAR:-default} keeps the read
+  # set -u-safe even when the env var is unset.
+  local warn_hours="${REPOLENS_EST_WARN_HOURS:-24}"
+  [[ "$warn_hours" =~ ^[0-9]+$ ]] || warn_hours=24
+  # Force base-10 so a zero-padded value ("08"/"09"/"024") is not read as octal,
+  # which would abort the (( )) test or silently shift the threshold. Matches the
+  # 10#$ guard the sibling estimator already uses in lib/summary.sh.
+  warn_hours=$((10#$warn_hours))
+  if (( warn_hours > 0 )) && (( secs > warn_hours * 3600 )); then
+    log_warn "Estimated wall-clock ~${human} exceeds ${warn_hours}h. To cut it down:"
+    log_warn "  - raise --max-parallel so more lenses run concurrently"
+    log_warn "  - pick a faster/cheaper --agent"
+    log_warn "  - lower --depth (fewer DONE-streak iterations per lens)"
+    log_warn "  - scope the run with --domain / --focus"
+    log_warn "  - use --max-issues N for a spot check"
+  fi
+}
+
 confirm_run() {
   if $AUTO_YES; then
     return 0
@@ -2707,6 +2757,7 @@ confirm_run() {
   echo "  Note: Estimator assumes one model per agent, 4 bytes/token, and a"
   echo "  capped per-session input budget. Tool-call churn and iteration"
   echo "  non-convergence push real cost higher. Budget accordingly."
+  print_wall_estimate
 
   # Threshold warning
   if [[ -n "$MAX_COST" ]]; then
@@ -2846,8 +2897,13 @@ if $DRY_RUN; then
       echo "Estimated cost: ~\$${_dry_min_cost}  (lens_count=${TOTAL_LENSES} x depth=${DONE_STREAK_REQUIRED} x rounds=${ROUNDS}, lower bound — real runs typically 2-5x higher)"
       printf "%s\n" "$_dry_breakdown_lines"
       unset _dry_pricing_file _dry_breakdown _dry_min_cost _dry_breakdown_lines
-      echo ""
     fi
+    # The wall-clock estimate needs no pricing data, so emit it whenever lenses
+    # are queued — even if config/agent-pricing.json is absent and the cost block
+    # above was skipped. With the pricing file present (the baseline-capture case)
+    # the line order is unchanged: cost block, then the estimate, then the blank.
+    print_wall_estimate
+    echo ""
   fi
   echo "Lenses that would run:"
   for lens_entry in "${LENS_LIST[@]}"; do
