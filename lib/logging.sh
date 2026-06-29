@@ -168,3 +168,34 @@ log_raw() {
     printf "%s\n" "$*" >> "$_REPOLENS_LOG_FILE"
   fi
 }
+
+# Idempotency guard: the hint is printed at most once per run. A finalize-path
+# print followed by a late signal (or vice versa) cannot double it. Initialized
+# to "" at module load so the guard read is `set -u`-safe even from a trap
+# handler that fires before any call site runs.
+_REPOLENS_RESUME_HINT_PRINTED=""
+
+# Print a one-line resume hint to stderr so an aborted/interrupted run tells the
+# user that `--resume <run-id>` exists. Resume is fully wired but undiscoverable;
+# this surfaces it at the moment it is needed.
+#
+# Usage: print_resume_hint [run_id] [project] [agent]
+# Args default to the RUN_ID / PROJECT_PATH / AGENT globals. They are read with
+# `${VAR:-}` defaults so the helper never aborts its caller — including a signal
+# trap handler running under `set -u` before those globals are assigned.
+#
+# No-op (returns 0) when no run id is resolvable, e.g. a signal during early arg
+# parsing before RUN_ID is set. Uses a plain `printf >&2` rather than log_warn:
+# the hint is user guidance that must appear regardless of REPOLENS_LOG_LEVEL,
+# and plain printf sidesteps the `set -u` foot-gun where a logging helper can
+# abort its caller.
+print_resume_hint() {
+  [[ -n "$_REPOLENS_RESUME_HINT_PRINTED" ]] && return 0
+  local run_id="${1:-${RUN_ID:-}}"
+  [[ -n "$run_id" ]] || return 0
+  local project="${2:-${PROJECT_PATH:-<path>}}"
+  local agent="${3:-${AGENT:-<agent>}}"
+  _REPOLENS_RESUME_HINT_PRINTED=1
+  printf 'To resume this run: ./repolens.sh --project %s --agent %s --resume %s\n' \
+    "$project" "$agent" "$run_id" >&2
+}

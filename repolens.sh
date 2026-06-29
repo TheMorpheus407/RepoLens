@@ -1469,18 +1469,21 @@ apply_rate_limit_abort_final_state() {
 _handle_hangup() {
   REPOLENS_FINAL_STATE="interrupted"
   REPOLENS_INTERRUPT_EXIT_CODE=129
+  print_resume_hint
   exit 129
 }
 
 _handle_interrupt() {
   REPOLENS_FINAL_STATE="interrupted"
   REPOLENS_INTERRUPT_EXIT_CODE=130
+  print_resume_hint
   exit 130
 }
 
 _handle_termination() {
   REPOLENS_FINAL_STATE="interrupted"
   REPOLENS_INTERRUPT_EXIT_CODE=143
+  print_resume_hint
   exit 143
 }
 
@@ -3385,6 +3388,13 @@ run_lens() {
                 if sleep_stopped_reason="$(rate_limit_sleep_stopped_reason "$sleep_rc" 2>/dev/null)"; then
                   sleep_signal="$(rate_limit_sleep_signal_name "$sleep_rc" 2>/dev/null || printf '%s\n' "UNKNOWN")"
                   write_rate_limit_sleep_interrupt_marker "$sleep_rc" "$sleep_signal" "$sleep_stopped_reason"
+                  # In sequential mode run_lens executes inline in the main
+                  # process, so this exit terminates the run before the finalize
+                  # block — print the resume hint here. In parallel mode this is
+                  # a worker subshell; the main process prints it at the finalize
+                  # `interrupted` branch (via the sleep-interrupt marker), so
+                  # gating on sequential mode avoids a duplicate line.
+                  $PARALLEL || print_resume_hint
                   exit "$sleep_rc"
                 fi
 
@@ -3919,10 +3929,14 @@ echo "=== RepoLens Run Summary ==="
 jq '.' "$SUMMARY_FILE"
 
 if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+  print_resume_hint
   exit "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 fi
 
 if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+  # Both the phase rate-limit (exit 1) and rate-limit-pending (exit 3) outcomes
+  # are resumable; print once before the split so neither path is missed.
+  print_resume_hint
   if is_phase_rate_limit_stopped_reason "$(rate_limit_abort_stopped_reason)"; then
     exit 1
   fi
@@ -3930,6 +3944,7 @@ if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
 fi
 
 if [[ -f "$LOG_BASE/.agent-no-progress-abort" || -f "$LOG_BASE/.systemic-failure-abort" ]]; then
+  print_resume_hint
   exit 1
 fi
 
