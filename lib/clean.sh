@@ -127,6 +127,21 @@ _clean_json_key_is_null_without_jq() {
   [[ "$line" =~ \"$key\"[[:space:]]*:[[:space:]]*null([^A-Za-z0-9_]|$) ]]
 }
 
+# _clean_attempts_last_status_without_jq <attempts.json> — best-effort no-jq
+# extractor that echoes the `status` of the LAST attempt entry (the most recent
+# invocation). attempts.json is a JSON ARRAY, so — unlike
+# _clean_json_string_value_without_jq, which returns the FIRST key match — we
+# must take the LAST `"status":"..."` occurrence. Reusing the first-match helper
+# here would read attempt #1, not the most recent attempt. Returns 1 (echoing
+# nothing) when the file is missing or carries no status field.
+_clean_attempts_last_status_without_jq() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  grep -oE '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$file" 2>/dev/null \
+    | tail -n1 \
+    | sed -E 's/.*"([^"]*)"$/\1/'
+}
+
 # _clean_is_run_dir <dir> — return 0 iff <dir> is a genuine RepoLens run dir:
 # a run-id-shaped name with summary.json or status.json present.
 _clean_is_run_dir() {
@@ -140,10 +155,14 @@ _clean_is_run_dir() {
 
 # _clean_is_incomplete <dir> — return 0 iff the run is a resume candidate that
 # --keep-incomplete should protect: status.json.state in
-# {running,interrupted,failed}, a non-null summary.json.stopped_reason, or an
-# abort sentinel file.
+# {running,interrupted,failed}, a non-null summary.json.stopped_reason, an abort
+# sentinel file, or an attempts.json ledger whose LAST attempt did not cleanly
+# complete (status not in {finished,finished-empty}). The attempts.json signal
+# is the authoritative run-continuation marker: a run whose status/summary look
+# clean can still be a live continuation candidate when its most recent
+# invocation hit a rate limit, was interrupted, or failed.
 _clean_is_incomplete() {
-  local dir="$1" state stopped
+  local dir="$1" state stopped last_status
 
   if [[ -e "$dir/.rate-limit-abort" || -e "$dir/.systemic-failure-abort" \
         || -e "$dir/.agent-no-progress-abort" ]]; then
@@ -161,6 +180,17 @@ _clean_is_incomplete() {
       stopped="$(jq -r '.stopped_reason // empty' "$dir/summary.json" 2>/dev/null)"
       [[ -n "$stopped" ]] && return 0
     fi
+    if [[ -f "$dir/attempts.json" ]]; then
+      # .[-1] is the most recent attempt; the array guard makes a corrupt or
+      # non-array file fall through to empty (no signal) instead of erroring.
+      last_status="$(jq -r '
+        if type == "array" and length > 0 then (.[-1].status // empty) else empty end
+      ' "$dir/attempts.json" 2>/dev/null)"
+      case "$last_status" in
+        ""|finished|finished-empty) ;;
+        *) return 0 ;;
+      esac
+    fi
   else
     if [[ -f "$dir/status.json" ]]; then
       state="$(_clean_json_string_value_without_jq "$dir/status.json" "state")"
@@ -176,6 +206,13 @@ _clean_is_incomplete() {
       if ! _clean_json_key_is_null_without_jq "$dir/summary.json" "stopped_reason"; then
         return 0
       fi
+    fi
+    if [[ -f "$dir/attempts.json" ]]; then
+      last_status="$(_clean_attempts_last_status_without_jq "$dir/attempts.json")"
+      case "$last_status" in
+        ""|finished|finished-empty) ;;
+        *) return 0 ;;
+      esac
     fi
   fi
 

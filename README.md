@@ -632,13 +632,13 @@ Run directories under `logs/` accumulate over time and are never removed automat
 ./repolens.sh clean --dry-run
 ```
 
-`clean` is deliberately conservative. It only ever considers a direct child of `logs/` whose name is a genuine run id and that carries a `summary.json` or `status.json` — AutoDev working state, partial directories, and anything else under `logs/` are never touched. By default, it also keeps any run that is still resumable (incomplete, interrupted, failed, or with a recorded stop reason). Runs that a process is using right now are always kept.
+`clean` is deliberately conservative. It only ever considers a direct child of `logs/` whose name is a genuine run id and that carries a `summary.json` or `status.json` — AutoDev working state, partial directories, and anything else under `logs/` are never touched. By default, it also keeps any run that is still resumable (incomplete, interrupted, failed, with a recorded stop reason, or whose most recent continuation attempt did not finish cleanly). Runs that a process is using right now are always kept.
 
 | Option                | Default | Description                                                                                                                    |
 | --------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `--older-than <dur>`  | `30d`   | Remove runs older than this age. Suffix `d`/`h`/`m` for days/hours/minutes, or pass a bare number of seconds.                   |
 | `--keep-last <n>`     | `50`    | Always protect the N most recent runs, regardless of age.                                                                       |
-| `--keep-incomplete`   | on      | Keep resume-candidate runs (running/interrupted/failed, a non-null stop reason, or an abort sentinel). On by default.           |
+| `--keep-incomplete`   | on      | Keep resume-candidate runs (running/interrupted/failed, a non-null stop reason, an abort sentinel, or a multi-attempt run whose most recent continuation attempt did not finish cleanly). On by default. |
 | `--remove-incomplete` | —       | Opposite of `--keep-incomplete`: also remove resume candidates that are otherwise eligible.                                     |
 | `--dry-run`           | —       | Print the run ids that would be removed and delete nothing.                                                                     |
 | `--force`             | —       | Skip the confirmation prompt. The prompt is also skipped automatically when stdin is not an interactive terminal (CI/AutoDev). |
