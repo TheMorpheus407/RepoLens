@@ -441,6 +441,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--parallel`           | Run lenses in parallel (one agent process per lens)                                                                                                                                                                                                                                                      |
 | `--max-parallel <n>`   | Max concurrent agents in parallel mode. When unset the default is nproc-aware: `clamp(detected CPU cores, 8, 32)` (8 on small/CI hosts, up to 32 on many-core machines). An explicit value is always authoritative and is never re-clamped — you can deliberately run below `8` or above `32`. A non-positive-integer value is rejected at startup. Higher concurrency trips provider rate limits faster; pin the detected count with `REPOLENS_NPROC`. |
 | `--resume [<run-id>]`  | Resume a previous interrupted run. With an explicit run id, resume that run. With no id, auto-select and resume the most recent interrupted run under `logs/` (the chosen run is logged) — completed/clean runs and retired (`supersede`d) runs are never auto-picked, and RepoLens errors out (non-zero exit, no fresh run dir created) when no resumable run exists.                                                                                                                                                                                                                                                                      |
+| `--validate <file>`    | Post-audit validation: re-verify an existing findings artifact with the flagship `--agent` and drop its false positives, instead of running a scan. Ingests a `findings.jsonl` registry, a `manifest.json` array, or a single JSON finding object (typically produced by a cheaper "Radar" agent), sends each finding to the flagship "Filter" `--agent` with the repo on disk for context, keeps only the confirmed findings, and writes them to `logs/<validate-run>/validated-findings.jsonl` with explicit verified/dropped counts. Does not run the lens fan-out or `DONE×3` streak; needs `--agent` and `--project`. A missing/unreadable/malformed input errors loudly with no dispatch, an empty artifact is a graceful no-op, and an agent failure exits non-zero (never a silent "all false positives"). See [Post-audit validation](#post-audit-validation). |
 | `--spec <file>`        | Spec/PRD/roadmap to guide analysis (any text file, max 100 KB). Required for `--mode greenfield`; greenfield treats it as product-owner intent for backlog planning.                                                                                                                                    |
 | `--max-issues <n>`     | Stop after creating _n_ total issues. In polish mode, this caps emitted polishing shortlist issues rather than individual suggestions                                                                                                                                                                    |
 | `--min-severity <level>` | Only file findings at or above `critical`, `high`, `medium`, or `low`. Filtered findings are counted in `summary.json` and reported in final stdout when the count is non-zero. No effect in non-severity modes such as `discover`, `feature`, `custom`, `greenfield`, and `polish`. Env fallback: `REPOLENS_MIN_SEVERITY`. |
@@ -784,6 +785,35 @@ This run took 2 attempts (latest: finished). Full continuation history: logs/<ru
 ```
 
 A run that completed in a single attempt prints no such note.
+
+## Post-audit validation
+
+Cheap models (a local LLM, MiniMax via `opencode`, and similar) can scan a large repo affordably, but they emit a lot of false positives. `--validate` splits the work: run the heavy `DONE×3` lens scan with a cheap **"Radar"** agent, then pay a flagship **"Filter"** agent only for a fast pass that re-reads the cited code and drops the false positives — instead of running the whole expensive scan on the flagship.
+
+```bash
+# 1. Cheap scan writes a findings artifact (a --local run writes final/findings.jsonl)
+./repolens.sh --project ~/my-app --agent opencode/<cheap-model> --local
+
+# 2. Re-verify those findings with a flagship agent and keep only the real ones
+./repolens.sh --project ~/my-app --agent claude \
+  --validate logs/<run-id>/final/findings.jsonl
+```
+
+`--validate <file>` short-circuits the run: it does **not** launch the lens fan-out, the `DONE×3` streak, or the synthesizer. It reads the findings artifact, sends each finding (with the repo on disk for context) to the flagship `--agent`, and keeps only the findings the flagship confirms. It needs both `--agent` (the flagship filter) and `--project` (the repo re-read for context).
+
+Accepted input is the RepoLens finding registry `findings.jsonl`, a `manifest.json` JSON array, or a single JSON finding object. An empty artifact is a graceful no-op (`Nothing to validate: 0 findings`); a missing, unreadable, or malformed file stops with a clear error and never dispatches the agent. If the flagship agent itself fails, the run exits non-zero rather than silently reporting that everything was a false positive.
+
+Verified findings survive; findings the flagship judges wrong are dropped as false positives; findings it flags as stale are kept (downranked downstream). The cleaned findings are written to `logs/<validate-run>/validated-findings.jsonl`, and the counts are printed explicitly:
+
+```text
+Findings validated: 42
+Verified (survivors): 30
+Dropped (false positives): 11
+Stale (kept, downranked): 1
+Cleaned findings written to: logs/validate-.../validated-findings.jsonl (31 kept)
+```
+
+This first slice emits the cleaned findings file only — it does not yet file the survivors as issues.
 
 ## Output
 

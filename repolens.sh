@@ -54,6 +54,8 @@ source "$SCRIPT_DIR/lib/polish.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/verify.sh"
 # shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/validate.sh"
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/triage.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/synthesize.sh"
@@ -180,6 +182,11 @@ Options:
   --resume [<run-id>]     Resume a previous interrupted run (reuses its dir,
                           skips completed lenses; add --focus/--domain to
                           narrow). With no id, picks the latest interrupted run.
+  --validate <file>       Post-audit validation: re-verify an existing findings
+                          artifact (findings.jsonl / manifest.json, produced by a
+                          cheap "Radar" agent) with the flagship --agent, drop the
+                          false positives, and write a cleaned findings file. Does
+                          not run the lens scan. Needs --agent and --project.
   --spec <file>           Spec/PRD/roadmap to guide analysis (required for --mode greenfield)
   --max-issues <n>        Stop after creating n total issues (dry-run quality check)
   --min-severity <level>  Only file findings at or above level: critical|high|medium|low
@@ -535,6 +542,8 @@ PARALLEL=false
 MAX_PARALLEL=8
 MAX_PARALLEL_SET=false
 RESUME_RUN_ID=""
+VALIDATE_INPUT=""
+VALIDATE_MODE=false
 SPEC_FILE=""
 MAX_ISSUES=""
 MIN_SEVERITY=""
@@ -641,6 +650,15 @@ while [[ $# -gt 0 ]]; do
         RESUME_RUN_ID="@latest"
         shift
       fi
+      ;;
+    --validate)
+      # Post-audit validation: re-verify an existing findings artifact with a
+      # flagship agent and drop the false positives, instead of running a scan.
+      [[ $# -ge 2 ]] || die "Option --validate requires a findings file/path argument."
+      # shellcheck disable=SC2034 # Read by run_validate_command in lib/validate.sh.
+      VALIDATE_INPUT="$2"
+      VALIDATE_MODE=true
+      shift 2
       ;;
     --spec)
       [[ $# -ge 2 ]] || die "Option --spec requires a file path argument."
@@ -820,6 +838,16 @@ done
 # --- Validate required args ---
 [[ -n "$AGENT" ]] || { usage; die "Missing required argument: --agent"; }
 [[ -n "$PROJECT_PATH" ]] || { usage; die "Missing required argument: --project"; }
+
+# --- Post-audit validation short-circuit (--validate) ---
+# Operates on a pre-existing findings artifact plus the repo on disk; it does
+# NOT run the lens fan-out, DONE×3 streak, rounds, or synthesizer. Short-circuit
+# here (like clean/status/supersede) before any run-pipeline setup so the heavy
+# machinery never engages.
+if [[ "$VALIDATE_MODE" == "true" ]]; then
+  run_validate_command
+  exit "$?"
+fi
 
 # --- Validate --output requires --local ---
 if [[ -n "$OUTPUT_DIR" ]] && ! $LOCAL_MODE; then
