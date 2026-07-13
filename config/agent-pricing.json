@@ -1,5 +1,5 @@
 {
-  "_comment": "USD per 1M tokens. Update when model pricing changes. 'agent_default_model' maps --agent values to a model id in 'models'. <agent>/<model> (claude/codex/opencode/antigravity) parses the <model> segment and looks it up in 'models'; an unknown model buckets by keyword into generic-flash/pro/premium-default (opencode/<model> keeps its opencode-default fallback).",
+  "_comment": "USD per 1M tokens. Update when model pricing changes. 'agent_default_model' maps --agent values to a model id in 'models'. <agent>/<model> (claude/codex/opencode/antigravity/copilot) parses the <model> segment and looks it up in 'models'; an unknown model buckets by keyword into generic-flash/pro/premium-default (opencode/<model> keeps its opencode-default fallback).",
   "updated_at": "2026-07-09",
   "models": {
     "claude-sonnet-4-5": {
@@ -42,6 +42,11 @@
       "input_per_mtok": 3.00,
       "output_per_mtok": 15.00
     },
+    "copilot-default": {
+      "label": "GitHub Copilot CLI (Sonnet-class assumed; actual model varies by plan)",
+      "input_per_mtok": 3.00,
+      "output_per_mtok": 15.00
+    },
     "gemini-2.5-pro": {
       "label": "Gemini 2.5 Pro",
       "input_per_mtok": 1.25,
@@ -69,7 +74,8 @@
     "spark": "spark",
     "sparc": "spark",
     "opencode": "opencode-default",
-    "antigravity": "gemini-2.5-pro"
+    "antigravity": "gemini-2.5-pro",
+    "copilot": "copilot-default"
   },
   "session_model": {
     "_comment": "Assumptions used by the estimator. All values are per-session (one agent iteration).",
