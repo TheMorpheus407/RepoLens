@@ -253,8 +253,8 @@ require_cmd() {
 validate_agent() {
   local agent="$1"
   case "$agent" in
-    claude|codex|spark|sparc|opencode|antigravity) ;;
-    claude/*|codex/*|opencode/*|antigravity/*)
+    claude|codex|spark|sparc|opencode|antigravity|copilot) ;;
+    claude/*|codex/*|opencode/*|antigravity/*|copilot/*)
       # <agent>/<model> targets a specific model on the CLI (issue #384). The
       # empty-model guard mirrors the original opencode/* one so a trailing slash
       # (a typo) never silently routes to a blank model.
@@ -265,7 +265,7 @@ validate_agent() {
       # /model suffix would fight the preset, so it is rejected with a hint.
       die "Invalid agent: $agent (spark/sparc are fixed presets; use codex/<model> to target a specific model)"
       ;;
-    *) die "Invalid agent: $agent (expected claude, codex, spark/sparc, opencode, antigravity, or <agent>/<model> for claude/codex/opencode/antigravity)" ;;
+    *) die "Invalid agent: $agent (expected claude, codex, spark/sparc, opencode, antigravity, copilot, or <agent>/<model> for claude/codex/opencode/antigravity/copilot)" ;;
   esac
 }
 
@@ -280,6 +280,7 @@ require_agent_cmd() {
     codex|codex/*|spark|sparc) require_cmd codex ;;
     opencode|opencode/*) require_cmd opencode ;;
     antigravity|antigravity/*) require_cmd agy ;;
+    copilot|copilot/*) require_cmd gh ;;
     *) die "Internal error: unsupported agent '$agent' for command check" ;;
   esac
 }
@@ -385,6 +386,7 @@ resolve_agent_timeout() {
     sparc) agent_vars=(REPOLENS_AGENT_TIMEOUT_SPARC REPOLENS_AGENT_TIMEOUT_SPARK) ;;
     opencode|opencode/*) agent_vars=(REPOLENS_AGENT_TIMEOUT_OPENCODE) ;;
     antigravity|antigravity/*) agent_vars=(REPOLENS_AGENT_TIMEOUT_ANTIGRAVITY) ;;
+    copilot|copilot/*) agent_vars=(REPOLENS_AGENT_TIMEOUT_COPILOT) ;;
     "") ;;
     *) ;;
   esac
@@ -518,6 +520,23 @@ run_agent() {
         # antigravity/<model> selects a model via `agy --model <model>` (issue
         # #384), keeping the autonomy + headless -p flags proven by #383.
         timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" agy --dangerously-skip-permissions --model "${agent#antigravity/}" -p "$prompt"
+        ;;
+      copilot|copilot/*)
+        # Invoked through `gh copilot` (the GitHub CLI extension that wraps the
+        # official GitHub Copilot CLI), so a bare `gh` install is all users need
+        # — `gh` auto-downloads the `copilot` binary on first run if missing.
+        # `-p` runs headless/non-interactive; `--allow-all-tools` is the
+        # required auto-approve flag for non-interactive mode (an unattended
+        # lens must never block on a tool-permission prompt, and stdin is
+        # already closed above); `--no-ask-user` disables the ask_user tool for
+        # the same reason; `-s`/`--silent` and `--no-color` keep stdout to just
+        # the agent's plain-text response so the DONE-streak detector reads it
+        # unchanged. copilot/<model> adds `--model <model>` to pin a model.
+        local copilot_model_args=()
+        if [[ "$agent" == copilot/* ]]; then
+          copilot_model_args=(--model "${agent#copilot/}")
+        fi
+        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" gh copilot -p "$prompt" --allow-all-tools --no-ask-user --no-color -s "${copilot_model_args[@]+"${copilot_model_args[@]}"}"
         ;;
       *)
         die "Internal error: unsupported agent '$agent'"
