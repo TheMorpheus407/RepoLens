@@ -18,9 +18,9 @@
 # `repolens/complexity/<n>` labels. The registry half (parse/store/project/
 # validate) is covered by test_ledger_complexity.sh; this file covers the label
 # bootstrap, which lives inside repolens.sh and had a real, previously-DENIED
-# defect: the gate must pre-create the five complexity labels ONLY for the audit
-# and bugreport modes whose prompts (audit.md, synthesize.md) actually instruct
-# an agent to APPLY a `repolens/complexity/<n>` label. Every other mode
+# defect: the gate must pre-create the five complexity labels ONLY for audit,
+# bugreport, and branch-review, whose prompts actually instruct an agent to
+# APPLY a `repolens/complexity/<n>` label. Every other mode
 # references complexity zero times, so creating the labels there would litter the
 # target repo with five unused labels per run.
 #
@@ -153,12 +153,12 @@ drive_mode() {
 }
 
 # ===========================================================================
-echo "=== audit / bugreport modes: the five complexity labels ARE pre-created ==="
+echo "=== audit / bugreport / branch-review: the five complexity labels ARE pre-created ==="
 # ===========================================================================
-# These are the two modes whose prompts apply a repolens/complexity/<n> label,
+# These are the three modes whose prompts apply a repolens/complexity/<n> label,
 # so the bootstrap must create all five up front (agents only apply, never
 # create). The gradient is fixed green->red: 1=trivial ... 5=complex.
-for mode in audit bugreport; do
+for mode in audit bugreport branch-review; do
   out="$(drive_mode "$mode")"
   assert_contains "$mode: complexity/1 label present"  "repolens/complexity/1=" "$out"
   assert_contains "$mode: complexity/5 label present"  "repolens/complexity/5=" "$out"
@@ -178,7 +178,10 @@ for mode in audit bugreport; do
 
   # Regression guard: the complexity gate must not disturb the base job — the
   # per-lens domain label is still emitted (label_prefix:domain/lens + color).
-  assert_contains "$mode: domain lens label still emitted" "$mode:code/example=aa11bb" "$out"
+  domain_prefix="$mode"
+  [[ "$mode" == "branch-review" ]] && domain_prefix="regression"
+  assert_contains "$mode: domain lens label still emitted" \
+    "$domain_prefix:code/example=aa11bb" "$out"
 done
 
 # ===========================================================================

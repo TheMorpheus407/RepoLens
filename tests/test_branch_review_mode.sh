@@ -658,6 +658,20 @@ assert_contains "proof_anchors is a required evidence field" "proof_anchors" "$r
 assert_contains "findings must be anchored at the merge base too" "merge base" "$result"
 assert_contains "pre-existing defects are out of scope" "Pre-existing" "$result"
 assert_contains "the DONE termination protocol is stated" "DONE" "$result"
+assert_contains "each regression chooses exactly one complexity tier" \
+  "Choose exactly one implementation-effort complexity tier" "$result"
+assert_contains "the matching complexity routing label is required" \
+  'repolens/complexity/<n>' "$result"
+assert_contains "the exact complexity body metadata syntax is required" \
+  '- **Complexity:** <n> (<Descriptor>)' "$result"
+assert_contains "complexity tier 1 uses the Trivial descriptor" '`1` — Trivial' "$result"
+assert_contains "complexity tier 2 uses the Easy descriptor" '`2` — Easy' "$result"
+assert_contains "complexity tier 3 uses the Medium descriptor" '`3` — Medium' "$result"
+assert_contains "complexity tier 4 uses the High descriptor" '`4` — High' "$result"
+assert_contains "complexity tier 5 uses the Critical/Complex descriptor" \
+  '`5` — Critical/Complex' "$result"
+assert_contains "complexity effort is orthogonal to severity" \
+  "Complexity is orthogonal to severity" "$result"
 # --min-severity survives into branch-review prompts (test 14 proves the CLI
 # does not drop it; this proves the lens is actually told about it).
 assert_contains "--min-severity renders a threshold section" "## Minimum Severity" "$result"
