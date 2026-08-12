@@ -4273,13 +4273,12 @@ ensure_labels() {
     printf '%s=%s\n' "enhancement" "a2eeef" >> "$label_set_file"
   fi
 
-  # Pre-create the task-complexity routing labels (#385) only for the audit and
-  # bugreport modes that estimate implementation effort (1-5) — audit.md and
-  # synthesize.md are the sole prompts that instruct the agent to apply the
-  # `repolens/complexity/<n>` label. Idempotent: the agents only apply the
-  # labels, which already exist. green -> red gradient (trivial -> complex).
+  # Pre-create the task-complexity routing labels (#385) only for modes whose
+  # prompts estimate implementation effort (1-5) and apply the matching
+  # `repolens/complexity/<n>` label. Idempotent: agents only apply labels that
+  # already exist. green -> red gradient (trivial -> complex).
   case "$MODE" in
-    audit|bugreport)
+    audit|bugreport|branch-review)
       local -a complexity_colors=(c2e0c6 bfd4f2 fbca04 ff9800 d73a4a)
       local cx
       for cx in 1 2 3 4 5; do

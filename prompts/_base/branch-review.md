@@ -35,7 +35,15 @@ The branch delta section below is the authoritative scope. Every issue you file 
 - Create ONE issue at a time.
 - Prefix every title with `[REGRESSION]` followed by severity: `[REGRESSION][CRITICAL]`, `[REGRESSION][HIGH]`, `[REGRESSION][MEDIUM]`, or `[REGRESSION][LOW]`
 - Apply the label `{{LENS_LABEL}}` to every issue you create. Create the label first with color `{{DOMAIN_COLOR}}` if it doesn't exist: `{{FORGE_LABEL_CREATE}}`
+- Choose exactly one implementation-effort complexity tier for every issue, apply the matching `repolens/complexity/<n>` label, and include the complexity metadata described below. Complexity is orthogonal to severity.
 - You may also apply any other existing repository labels you judge useful.
+
+Complexity tiers describe implementation effort, not impact or urgency:
+- `1` — Trivial
+- `2` — Easy
+- `3` — Medium
+- `4` — High
+- `5` — Critical/Complex
 
 {{MIN_SEVERITY_SECTION}}
 
@@ -54,6 +62,7 @@ Every issue MUST have this structure:
 - **Introduced By** — The commit(s) or hunk in the branch delta that introduced it. Quote the relevant diff lines.
 - **Before / After** — What the code did at the merge base versus what it does now. This is the load-bearing section: it is what makes the finding a regression rather than an audit finding.
 - **Impact** — What breaks for users, callers, or operators because of this change.
+- **Complexity** — Implementation effort, recorded exactly as `- **Complexity:** <n> (<Descriptor>)` using one of the five tiers above. This estimate is orthogonal to severity.
 - **Recommended Fix** — Concrete remediation completable in ~1 hour. Restoring the previous behavior is often, but not always, the right fix — say which you mean.
 - **References** — Related files, callers, tests, or documentation.
 - **Validation** — A required machine-readable evidence block. Emit a `## Validation` section with these exact lowercase-snake_case field names (the downstream parser keys off them verbatim):
