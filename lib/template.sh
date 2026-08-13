@@ -523,6 +523,81 @@ Before writing a new polish suggestion, check if a file with a similar title alr
 - Do **NOT** use \`gh issue list\` — check existing files in the output directory instead
 - Do **NOT** include computed ordering fields — RepoLens adds them after lens execution
 - Create the output subdirectory with \`mkdir -p\` before writing files"
+    elif [[ "$mode" == "branch-review" ]]; then
+      local_mode_section="## LOCAL MODE OVERRIDE
+
+**IMPORTANT: This overrides the Issue Creation rules above.**
+
+You are running in LOCAL MODE. Do **NOT** use \`gh issue create\` or \`gh label create\` commands. Instead, write each regression finding as a standalone markdown file.
+
+### Output Directory
+Write all findings to: \`${local_output_dir}\`
+
+### File Naming Convention
+Name files as: \`NNN-<slug>.md\` where NNN is a zero-padded sequence number (001, 002, ...) and \`<slug>\` is a lowercase, hyphenated slug derived from the finding title.
+
+### File Format
+Each markdown file must contain YAML frontmatter followed by the regression finding body:
+\`\`\`markdown
+---
+title: \"[REGRESSION][SEVERITY] Finding title\"
+severity: critical|high|medium|low
+type: security-vulnerability|reliability-bug|performance-risk|maintainability|test-gap|external-dependency
+complexity: 1|2|3|4|5
+domain: <domain>
+lens: <lens-id>
+labels:
+  - \"<lens-label>\"
+---
+
+## Summary
+What broke and where, with file paths and line numbers at the head.
+
+## Introduced By
+The commit(s) or hunk in the branch delta that introduced the regression, with the relevant diff lines quoted.
+
+## Before / After
+What the code did at the merge base versus what it does now at the head.
+
+## Impact
+What breaks for users, callers, or operators because of this change.
+
+## Complexity
+- **Complexity:** <n> (<Descriptor>)
+
+## Recommended Fix
+Concrete remediation completable in ~1 hour.
+
+## References
+Related files, callers, tests, or documentation.
+
+## Validation
+- attacker_source — where untrusted input originates (or n/a for non-security regressions)
+- missing_guard — the check or control the branch removed, weakened, or failed to add
+- sink_effect — what the unguarded path actually does now (the impact mechanism)
+- preconditions — what must hold for the regression to trigger
+- proof_anchors — EXACT path:line references at the head AND the corresponding merge-base evidence (e.g. git show <merge-base>:path output) that proves the behavior changed
+- suggested_validation — a concrete shell command OR test that confirms the regression (a single runnable command when locally checkable)
+\`\`\`
+
+The \`type:\` field is REQUIRED: pick the single best-fit finding type from the closed taxonomy (\`security-vulnerability\`, \`reliability-bug\`, \`performance-risk\`, \`maintainability\`, \`test-gap\`, \`external-dependency\`). Type is orthogonal to severity — a finding of any severity can be any type, so choose the type by what KIND of problem it is, not how bad it is. Use \`external-dependency\` for CVE or otherwise scanner-validatable third-party dependency findings.
+
+The \`complexity:\` field is a single integer 1-5 estimating the IMPLEMENTATION EFFORT to fix this finding — how hard the fix is, NOT how bad the problem is. It is ORTHOGONAL to severity and must match the \`## Complexity\` body line. Downstream automation routes each fix to a model tier by this number, so calibrate honestly against this rubric:
+- **1 (Trivial):** typos, comments, string/i18n translations, formatting.
+- **2 (Easy):** localized edits, unused variables, single-file bugfixes with no side effects.
+- **3 (Medium):** standard component/function implementation, a simple unit test.
+- **4 (High):** multi-file synchronization, API changes, complex hooks, major refactoring.
+- **5 (Critical/Complex):** core architecture shifts, multi-service protocol updates, state machines.
+
+### Deduplication
+Before writing a new finding, check if a file with a similar title already exists in the output directory. If so, skip the duplicate.
+
+### Key Rules
+- Do **NOT** use \`gh issue create\` — write markdown files instead
+- Do **NOT** use \`gh label create\` — no GitHub labels needed
+- Do **NOT** use \`gh issue list\` — check existing files in the output directory instead
+- Keep the \`[REGRESSION][SEVERITY]\` title prefix, the \`Introduced By\` and \`Before / After\` sections, and the regression discriminator from the Issue Creation rules above — local mode only changes WHERE findings are written, not WHAT a regression finding contains
+- Create the output subdirectory with \`mkdir -p\` before writing files"
     else
       local_mode_section="## LOCAL MODE OVERRIDE
 

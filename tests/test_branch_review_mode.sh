@@ -38,6 +38,9 @@
 #      longer checked out, while a resume at the matching head still succeeds.
 #  10. Resume restores the persisted head ref for provenance, accepts the same
 #      explicit --branch-head, and rejects a conflicting explicit head ref.
+#  11. Local mode (#402): the LOCAL MODE OVERRIDE for branch-review carries the
+#      branch-review contract ([REGRESSION][SEVERITY] titles, Introduced By /
+#      Before / After sections) instead of the generic audit finding contract.
 #
 # No real models are invoked — every CLI case uses --dry-run and a fake agent.
 
@@ -837,6 +840,80 @@ if git clone -q --depth 1 --no-single-branch "file://$PROJECT_DIR" "$SHALLOW_DIR
 else
   echo "  SKIP: could not construct a shallow clone in this environment"
 fi
+
+# ---------------------------------------------------------------------------
+# Part G — local mode reconciliation (#402): the LOCAL MODE OVERRIDE for
+# branch-review must express the branch-review contract, not the generic audit
+# finding contract the agent would otherwise receive alongside it.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "Test 33: local branch-review renders the branch-review finding contract"
+result="$(compose_prompt "$BASE_WRAPPER" "$TMPDIR/lens.md" \
+  "LENS_NAME=TestBot|BRANCH_DIFF_SUMMARY=@$TMPDIR/manifest-basic.md" \
+  "" "branch-review" "" "" "false" "true" "$TMPDIR/local-issues" 2>/dev/null)"
+assert_contains "local override section is present" "## LOCAL MODE OVERRIDE" "$result"
+local_override="${result#*## LOCAL MODE OVERRIDE}"
+local_override="${local_override%%## Termination*}"
+assert_contains "local titles keep the [REGRESSION][SEVERITY] prefix" \
+  'title: "[REGRESSION][SEVERITY] Finding title"' "$local_override"
+assert_not_contains "the generic audit title contract is not offered" \
+  'title: "[SEVERITY] Finding title"' "$local_override"
+assert_contains "local frontmatter carries severity" \
+  'severity: critical|high|medium|low' "$local_override"
+assert_contains "local frontmatter carries the closed type taxonomy" \
+  'type: security-vulnerability|reliability-bug|performance-risk|maintainability|test-gap|external-dependency' "$local_override"
+assert_contains "local frontmatter carries complexity" \
+  'complexity: 1|2|3|4|5' "$local_override"
+assert_contains "local frontmatter carries domain" 'domain: <domain>' "$local_override"
+assert_contains "local frontmatter carries lens" 'lens: <lens-id>' "$local_override"
+assert_contains "local frontmatter carries labels" 'labels:' "$local_override"
+for section in Summary "Introduced By" "Before / After" Impact "Recommended Fix" References; do
+  assert_contains "$section section is required in local files" "## $section" "$local_override"
+done
+assert_not_contains "the generic Evidence section is not offered" "## Evidence" "$local_override"
+assert_contains "the machine-readable Validation block is required locally" "## Validation" "$local_override"
+for validation_key in attacker_source missing_guard sink_effect preconditions proof_anchors suggested_validation; do
+  assert_contains "$validation_key is a required local evidence field" "$validation_key" "$local_override"
+done
+assert_contains "the exact complexity body metadata survives locally" \
+  '- **Complexity:** <n> (<Descriptor>)' "$local_override"
+assert_contains "local findings land in the given output directory" "$TMPDIR/local-issues" "$local_override"
+assert_contains "local files keep the NNN-<slug>.md naming convention" 'NNN-<slug>.md' "$local_override"
+assert_contains "local mode forbids gh issue create" 'gh issue create' "$local_override"
+assert_contains "local mode forbids gh label create" 'gh label create' "$local_override"
+assert_contains "local mode forbids gh issue list" 'gh issue list' "$local_override"
+assert_contains "local mode keeps file-based deduplication" "similar title already exists" "$local_override"
+assert_contains "local mode retains the regression discriminator" "regression discriminator" "$local_override"
+assert_contains "local mode retains one-hour issue sizing" "~1 hour" "$local_override"
+assert_contains "local mode still tells the agent to create the output directory" "mkdir -p" "$local_override"
+assert_contains "branch-review keeps the opening DONE protocol" \
+  "output **DONE** as the very first word" "$result"
+assert_contains "branch-review keeps the closing DONE protocol" \
+  "**DONE** as the very last word" "$result"
+
+echo ""
+echo "Test 34: ordinary local audit rendering is unchanged"
+result="$(compose_prompt "$SCRIPT_DIR/prompts/_base/audit.md" "$TMPDIR/lens.md" \
+  "LENS_NAME=TestBot" "" "audit" "" "" "false" "true" "$TMPDIR/local-audit" 2>/dev/null)"
+assert_contains "audit local override section is present" "## LOCAL MODE OVERRIDE" "$result"
+audit_override="${result#*## LOCAL MODE OVERRIDE}"
+audit_override="${audit_override%%## Termination*}"
+assert_contains "audit local titles keep the generic [SEVERITY] contract" \
+  'title: "[SEVERITY] Finding title"' "$audit_override"
+assert_contains "audit local keeps the generic Evidence section" "## Evidence" "$audit_override"
+assert_not_contains "audit local does not adopt the regression title prefix" \
+  "[REGRESSION]" "$audit_override"
+assert_not_contains "audit local does not adopt the Introduced By section" "## Introduced By" "$audit_override"
+
+echo ""
+echo "Test 35: documentation records the branch-review local contract"
+readme="$(<"$SCRIPT_DIR/README.md")"
+changelog="$(<"$SCRIPT_DIR/CHANGELOG.md")"
+assert_contains "README names branch-review --local" 'branch-review --local' "$readme"
+assert_contains "README records the local regression title contract" \
+  '[REGRESSION][SEVERITY]' "$readme"
+assert_contains "Unreleased changelog records issue #402" '[#402]' "$changelog"
 
 echo ""
 echo "================================"
