@@ -515,11 +515,14 @@ run_agent() {
         timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" codex exec --yolo -m gpt-5.3-codex-spark -c reasoning_effort="xhigh" "$prompt"
         ;;
       opencode)
-        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run "$prompt"
+        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run --auto "$prompt"
         ;;
       opencode/*)
         local opencode_model="${agent#opencode/}"
-        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run -m "$opencode_model" "$prompt"
+        # --auto = opencode-Äquivalent zu claude --dangerously-skip-permissions /
+        # codex --yolo: non-interactive Runs auto-approven sonst external_directory
+        # (Lens-Outputs liegen außerhalb des Target-Repos) → auto-reject → 0 Findings.
+        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run --auto -m "$opencode_model" "$prompt"
         ;;
       antigravity)
         timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" agy --dangerously-skip-permissions -p "$prompt"
