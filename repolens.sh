@@ -2356,6 +2356,109 @@ else
   MAX_PARALLEL="$(repolens_auto_max_parallel "$(detect_nproc)")"
 fi
 
+unset REPOLENS_PROCESS_SCOPE_RESOLVED
+
+# Agent routing can force sequential execution; validate it before capability
+# probing so unsupported hosts can use these explicitly sequential policies.
+DOMAINS_FILE="$SCRIPT_DIR/config/domains.json"
+[[ -f "$DOMAINS_FILE" ]] || die "Missing config: $DOMAINS_FILE"
+# validate_agent_overrides — parse AGENT_OVERRIDE_CSV, validate every pair up
+# front (fail fast, before any lens runs), and populate AGENT_OVERRIDES. Each
+# pair is key=agent split on the FIRST '=' only so opencode/<model> values
+# survive. The agent value goes through the same validate_agent allow-list and
+# require_agent_cmd binary check as the global --agent. The key must be a known
+# domain id or a fully-qualified domain/lens tuple from domains.json; a bare
+# lens id (ambiguous — lens ids are not globally unique) or an unknown key is
+# rejected loudly so a typo never silently no-ops the routing the operator asked
+# for.
+validate_agent_overrides() {
+  [[ -n "$AGENT_OVERRIDE_CSV" ]] || return 0
+
+  local -A _known_domains=() _known_tuples=() _known_lens_ids=()
+  local _row
+  while IFS= read -r _row; do
+    [[ -n "$_row" ]] && _known_domains["$_row"]=1
+  done < <(jq -r '.domains[].id' "$DOMAINS_FILE")
+  while IFS= read -r _row; do
+    [[ -n "$_row" ]] && _known_tuples["$_row"]=1
+  done < <(jq -r '.domains[] | .id as $d | .lenses[]
+                  | (if type == "string" then . else .id end)
+                  | "\($d)/\(.)"' "$DOMAINS_FILE")
+  while IFS= read -r _row; do
+    [[ -n "$_row" ]] && _known_lens_ids["$_row"]=1
+  done < <(jq -r '.domains[].lenses[] | (if type == "string" then . else .id end)' "$DOMAINS_FILE")
+
+  local -a _pairs=()
+  IFS=',' read -ra _pairs <<< "$AGENT_OVERRIDE_CSV"
+  local _pair _key _val
+  for _pair in "${_pairs[@]}"; do
+    # Trim surrounding whitespace.
+    _pair="${_pair#"${_pair%%[![:space:]]*}"}"
+    _pair="${_pair%"${_pair##*[![:space:]]}"}"
+    [[ -z "$_pair" ]] && continue
+    [[ "$_pair" == *=* ]] || die "--agent-override: '$_pair' is not in key=agent form"
+    # Split on the FIRST '=' only so opencode/<model> values are preserved.
+    _key="${_pair%%=*}"
+    _val="${_pair#*=}"
+    _key="${_key#"${_key%%[![:space:]]*}"}"; _key="${_key%"${_key##*[![:space:]]}"}"
+    _val="${_val#"${_val%%[![:space:]]*}"}"; _val="${_val%"${_val##*[![:space:]]}"}"
+    [[ -n "$_key" ]] || die "--agent-override: empty override key in '$_pair'"
+    [[ -n "$_val" ]] || die "--agent-override: empty agent for override key '$_key'"
+
+    # Validate the agent value against the same allow-list + binary check the
+    # global --agent uses. validate_agent names the offending value on failure.
+    validate_agent "$_val"
+    require_agent_cmd "$_val"
+    if [[ "$_val" == "cursor-ide" && "$LOCAL_MODE" != "true" ]]; then
+      die "--agent-override $_key=cursor-ide requires --local"
+    fi
+
+    # Validate the key. A '/' means a fully-qualified lens key.
+    if [[ "$_key" == */* ]]; then
+      [[ -n "${_known_tuples[$_key]:-}" ]] \
+        || die "--agent-override: unknown domain/lens key '$_key' (no such lens in $DOMAINS_FILE)"
+    elif [[ -n "${_known_domains[$_key]:-}" ]]; then
+      :
+    elif [[ -n "${_known_lens_ids[$_key]:-}" ]]; then
+      die "--agent-override: bare lens key '$_key' is ambiguous (lens ids are not unique across domains); use the fully-qualified domain/lens form"
+    else
+      die "--agent-override: unknown override key '$_key' (expected a domain id or domain/lens from $DOMAINS_FILE)"
+    fi
+
+    AGENT_OVERRIDES["$_key"]="$_val"
+  done
+}
+
+validate_agent_overrides
+
+CURSOR_IDE_ACTIVE=false
+if [[ "$AGENT" == "cursor-ide" ]]; then
+  CURSOR_IDE_ACTIVE=true
+else
+  for _cursor_ide_override_agent in "${AGENT_OVERRIDES[@]}"; do
+    if [[ "$_cursor_ide_override_agent" == "cursor-ide" ]]; then
+      CURSOR_IDE_ACTIVE=true
+      break
+    fi
+  done
+  unset _cursor_ide_override_agent
+fi
+
+if $CURSOR_IDE_ACTIVE && $PARALLEL; then
+  warn "cursor-ide overrides use one ordered Composer handoff queue; forcing sequential execution"
+  PARALLEL=false
+fi
+
+# --- Force sequential when --max-issues or --hosted is active ---
+if [[ -n "$MAX_ISSUES" ]] && $PARALLEL; then
+  log_warn "Forcing sequential mode: --max-issues requires sequential execution to enforce global limit."
+  PARALLEL=false
+fi
+if $HOSTED && $PARALLEL; then
+  log_warn "Forcing sequential mode: --hosted requires sequential execution to avoid concurrent DAST conflicts."
+  PARALLEL=false
+fi
+
 # Resolve lifecycle containment before creating run state or dispatching lenses.
 if $PARALLEL; then
   parallel_preflight || die "Parallel process-scope preflight failed."
@@ -2890,93 +2993,8 @@ overrides_active() {
   [[ "${#AGENT_OVERRIDES[@]}" -gt 0 ]]
 }
 
-# validate_agent_overrides — parse AGENT_OVERRIDE_CSV, validate every pair up
-# front (fail fast, before any lens runs), and populate AGENT_OVERRIDES. Each
-# pair is key=agent split on the FIRST '=' only so opencode/<model> values
-# survive. The agent value goes through the same validate_agent allow-list and
-# require_agent_cmd binary check as the global --agent. The key must be a known
-# domain id or a fully-qualified domain/lens tuple from domains.json; a bare
-# lens id (ambiguous — lens ids are not globally unique) or an unknown key is
-# rejected loudly so a typo never silently no-ops the routing the operator asked
-# for.
-validate_agent_overrides() {
-  [[ -n "$AGENT_OVERRIDE_CSV" ]] || return 0
-
-  local -A _known_domains=() _known_tuples=() _known_lens_ids=()
-  local _row
-  while IFS= read -r _row; do
-    [[ -n "$_row" ]] && _known_domains["$_row"]=1
-  done < <(jq -r '.domains[].id' "$DOMAINS_FILE")
-  while IFS= read -r _row; do
-    [[ -n "$_row" ]] && _known_tuples["$_row"]=1
-  done < <(jq -r '.domains[] | .id as $d | .lenses[]
-                  | (if type == "string" then . else .id end)
-                  | "\($d)/\(.)"' "$DOMAINS_FILE")
-  while IFS= read -r _row; do
-    [[ -n "$_row" ]] && _known_lens_ids["$_row"]=1
-  done < <(jq -r '.domains[].lenses[] | (if type == "string" then . else .id end)' "$DOMAINS_FILE")
-
-  local -a _pairs=()
-  IFS=',' read -ra _pairs <<< "$AGENT_OVERRIDE_CSV"
-  local _pair _key _val
-  for _pair in "${_pairs[@]}"; do
-    # Trim surrounding whitespace.
-    _pair="${_pair#"${_pair%%[![:space:]]*}"}"
-    _pair="${_pair%"${_pair##*[![:space:]]}"}"
-    [[ -z "$_pair" ]] && continue
-    [[ "$_pair" == *=* ]] || die "--agent-override: '$_pair' is not in key=agent form"
-    # Split on the FIRST '=' only so opencode/<model> values are preserved.
-    _key="${_pair%%=*}"
-    _val="${_pair#*=}"
-    _key="${_key#"${_key%%[![:space:]]*}"}"; _key="${_key%"${_key##*[![:space:]]}"}"
-    _val="${_val#"${_val%%[![:space:]]*}"}"; _val="${_val%"${_val##*[![:space:]]}"}"
-    [[ -n "$_key" ]] || die "--agent-override: empty override key in '$_pair'"
-    [[ -n "$_val" ]] || die "--agent-override: empty agent for override key '$_key'"
-
-    # Validate the agent value against the same allow-list + binary check the
-    # global --agent uses. validate_agent names the offending value on failure.
-    validate_agent "$_val"
-    require_agent_cmd "$_val"
-    if [[ "$_val" == "cursor-ide" && "$LOCAL_MODE" != "true" ]]; then
-      die "--agent-override $_key=cursor-ide requires --local"
-    fi
-
-    # Validate the key. A '/' means a fully-qualified lens key.
-    if [[ "$_key" == */* ]]; then
-      [[ -n "${_known_tuples[$_key]:-}" ]] \
-        || die "--agent-override: unknown domain/lens key '$_key' (no such lens in $DOMAINS_FILE)"
-    elif [[ -n "${_known_domains[$_key]:-}" ]]; then
-      :
-    elif [[ -n "${_known_lens_ids[$_key]:-}" ]]; then
-      die "--agent-override: bare lens key '$_key' is ambiguous (lens ids are not unique across domains); use the fully-qualified domain/lens form"
-    else
-      die "--agent-override: unknown override key '$_key' (expected a domain id or domain/lens from $DOMAINS_FILE)"
-    fi
-
-    AGENT_OVERRIDES["$_key"]="$_val"
-  done
-}
-
-validate_agent_overrides
-
-CURSOR_IDE_ACTIVE=false
-if [[ "$AGENT" == "cursor-ide" ]]; then
-  CURSOR_IDE_ACTIVE=true
-else
-  for _cursor_ide_override_agent in "${AGENT_OVERRIDES[@]}"; do
-    if [[ "$_cursor_ide_override_agent" == "cursor-ide" ]]; then
-      CURSOR_IDE_ACTIVE=true
-      break
-    fi
-  done
-  unset _cursor_ide_override_agent
-fi
 
 if $CURSOR_IDE_ACTIVE; then
-  if $PARALLEL; then
-    warn "cursor-ide overrides use one ordered Composer handoff queue; forcing sequential execution"
-    PARALLEL=false
-  fi
   if [[ -z "${REPOLENS_CURSOR_IDE_CONTROL_FD:-}" ]]; then
     exec {REPOLENS_CURSOR_IDE_CONTROL_FD}>&2
     export REPOLENS_CURSOR_IDE_CONTROL_FD
@@ -4404,15 +4422,6 @@ fi
 # --- Global issue counter ---
 GLOBAL_ISSUES_CREATED=0
 
-# --- Force sequential when --max-issues or --hosted is active ---
-if [[ -n "$MAX_ISSUES" ]] && $PARALLEL; then
-  log_warn "Forcing sequential mode: --max-issues requires sequential execution to enforce global limit."
-  PARALLEL=false
-fi
-if $HOSTED && $PARALLEL; then
-  log_warn "Forcing sequential mode: --hosted requires sequential execution to avoid concurrent DAST conflicts."
-  PARALLEL=false
-fi
 
 if [[ -n "$RESUME_RUN_ID" ]]; then
   # shellcheck disable=SC2034 # Consumed by write_status_snapshot in sourced lib/status.sh.

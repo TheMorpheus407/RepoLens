@@ -25,6 +25,7 @@
 #   3. Missing-manifest gating — no manifest.json -> non-zero exit and no
 #      writes inside `final/filed/`.
 
+# shellcheck disable=SC2329 # Shims/callbacks are invoked by the sourced dispatcher.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -392,6 +393,102 @@ assert_eq "pre-existing .failed counted as Verification-failed" \
 
 callback_count=$(wc -l < "$CALLBACK_LOG" | tr -d ' ')
 assert_eq "no callback invocation for pre-existing .failed" "0" "$callback_count"
+
+echo "=== Lifecycle integration: sequential defaults and explicit fallback ==="
+for policy in default fallback; do
+  RUN_LOG="$TMPDIR/sequential-$policy"
+  mkdir -p "$RUN_LOG/final/filed"
+  export LOG_BASE="$RUN_LOG"
+  write_manifest_n "$RUN_LOG/final/manifest.json" 1
+  CALLBACK_LOG="$TMPDIR/sequential-$policy.log"
+  : > "$CALLBACK_LOG"
+  (
+    uname() { echo Darwin; }
+    _REPOLENS_SCOPE_READY=0
+    unset PARALLEL
+    if [[ "$policy" == fallback ]]; then
+      export PARALLEL=true
+      export REPOLENS_PARALLEL_FALLBACK=sequential
+      parallel_preflight || exit 1
+    fi
+    dispatch_filing_batch "sequential-$policy"
+  ) > "$TMPDIR/sequential-$policy.out" 2>&1
+  status=$?
+  assert_success "$policy filing succeeds with no platform backend" "$status"
+  assert_eq "$policy callback executes exactly once" 1 "$(wc -l < "$CALLBACK_LOG" | tr -d ' ')"
+done
+
+echo "=== Lifecycle integration: parallel infrastructure failures ==="
+for failure in init spawn wait terminal-after-url recorded-rejection; do
+  RUN_LOG="$TMPDIR/infrastructure-$failure"
+  mkdir -p "$RUN_LOG/final/filed"
+  export LOG_BASE="$RUN_LOG"
+  write_manifest_n "$RUN_LOG/final/manifest.json" 1
+  CALLBACK_LOG="$TMPDIR/infrastructure-$failure.log"
+  : > "$CALLBACK_LOG"
+  (
+    export PARALLEL=true
+    _REPOLENS_SCOPE_FAILED=0
+    _cleanup_children() { :; }
+    init_parallel() { [[ "$failure" != init ]]; }
+    spawn_lens() {
+      [[ "$failure" != spawn ]] || return 1
+      local callback="$2" run_id="$3" cluster="$4"
+      if [[ "$failure" == recorded-rejection ]]; then
+        printf 'governed rejection\n' > "$LOG_BASE/final/filed/$cluster.failed"
+      else
+        "$callback" "$run_id" "$cluster" || true
+      fi
+      return 0
+    }
+    wait_all() {
+      [[ "$failure" != terminal-after-url ]] || _REPOLENS_SCOPE_FAILED=1
+      return 1
+    }
+    dispatch_filing_batch "infrastructure-$failure"
+  ) > "$TMPDIR/infrastructure-$failure.out" 2>&1
+  status=$?
+  if [[ "$failure" == recorded-rejection ]]; then
+    assert_success "governed rejection stays a recorded per-cluster result" "$status"
+    assert_contains "governed rejection counted in aggregate" "Verification-failed: 1" "$(cat "$TMPDIR/infrastructure-$failure.out")"
+  else
+    assert_failure "$failure propagates through captured dispatcher status" "$status"
+    if [[ "$failure" == init || "$failure" == spawn ]]; then
+      assert_eq "$failure starts no callback" 0 "$(wc -l < "$CALLBACK_LOG" | tr -d ' ')"
+      assert_file_missing "$failure releases never-dispatched reservation" "$RUN_LOG/final/filed/cluster-1.lock"
+    elif [[ "$failure" == terminal-after-url ]]; then
+      assert_file_exists "terminal cleanup failure remains fatal after a URL was recorded" "$RUN_LOG/final/filed/cluster-1.url"
+    fi
+  fi
+done
+
+echo "=== Lifecycle integration: real parallel mixed governed outcomes ==="
+if python3 "$_REPOLENS_SCOPE_HELPER" probe 2>/dev/null; then
+  RUN_LOG="$TMPDIR/real-parallel"
+  mkdir -p "$RUN_LOG/final/filed"
+  export LOG_BASE="$RUN_LOG"
+  write_manifest_n "$RUN_LOG/final/manifest.json" 2
+  CALLBACK_LOG="$TMPDIR/real-parallel.log"
+  : > "$CALLBACK_LOG"
+  (
+    export PARALLEL=true
+    real_parallel_callback() {
+      local run_id="$1" cluster="$2"
+      if [[ "$cluster" == cluster-1 ]]; then
+        printf 'VERIFICATION_FAILED: governed fixture rejection\n' > "$LOG_BASE/final/filed/$cluster.failed"
+        return 1
+      fi
+      test_stub_filing_callback "$run_id" "$cluster"
+    }
+    _FILING_AGENT_CALLBACK=real_parallel_callback
+    dispatch_filing_batch real-parallel
+  ) > "$TMPDIR/real-parallel.out" 2>&1
+  status=$?
+  assert_success "real parallel callback rejection remains a governed result" "$status"
+  assert_contains "real parallel batch records both terminal outcomes" "Filed: 1, Verification-failed: 1" "$(cat "$TMPDIR/real-parallel.out")"
+else
+  echo "  SKIP: real parallel filing requires delegated cgroup v2"
+fi
 
 unset LOG_BASE
 unset _FILING_AGENT_CALLBACK

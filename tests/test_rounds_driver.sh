@@ -231,6 +231,11 @@ reset_case() {
   ROUND_COMPLETED_BEFORE=""
   MARK_ROUND_COMPLETED_RC=0
   META_RC=0
+  INIT_PARALLEL_RC=0
+  SPAWN_RC=0
+  _REPOLENS_SCOPE_FAILED=0
+  WAIT_ALL_SCOPE_FAILURE=false
+  CLEANUP_CALLS=0
   WAIT_ALL_RC=0
   WAIT_ALL_TOUCH_RATE_LIMIT=false
   REMOTE_TARGET=""
@@ -280,6 +285,7 @@ run_meta_orchestrator() {
 init_parallel() {
   local sem_dir="$1" max_parallel="$2"
   INIT_PARALLEL_CALLS+=("$sem_dir:$max_parallel")
+  return "$INIT_PARALLEL_RC"
 }
 
 spawn_lens() {
@@ -289,7 +295,10 @@ spawn_lens() {
   if [[ "$lens_entry" == "$RATE_LIMIT_ON_SPAWN" ]]; then
     : > "$LOG_BASE/.rate-limit-abort"
   fi
+  return "$SPAWN_RC"
 }
+
+_cleanup_children() { CLEANUP_CALLS=$((CLEANUP_CALLS + 1)); }
 
 wait_all() {
   ACTIONS+=("wait")
@@ -297,6 +306,7 @@ wait_all() {
   if $WAIT_ALL_TOUCH_RATE_LIMIT; then
     : > "$LOG_BASE/.rate-limit-abort"
   fi
+  if $WAIT_ALL_SCOPE_FAILURE; then _REPOLENS_SCOPE_FAILED=1; fi
   return "$WAIT_ALL_RC"
 }
 
@@ -653,6 +663,26 @@ assert_contains "wait_all non-zero logs a warning" "Some lenses exited with erro
 assert_eq "wait_all non-zero still marks the round complete" "1" "$(join_by " " "${MARKED_ROUNDS[@]}")"
 
 echo ""
+echo "Test 10b: lifecycle infrastructure failures do not complete rounds"
+for failure in init spawn terminal; do
+  reset_case "scope-$failure"
+  PARALLEL=true
+  original_completion="$completed_lenses_file"
+  case "$failure" in
+    init) INIT_PARALLEL_RC=1 ;;
+    spawn) SPAWN_RC=1 ;;
+    terminal) WAIT_ALL_RC=1; WAIT_ALL_SCOPE_FAILURE=true ;;
+  esac
+  run_rounds 2 LENSES
+  rc=$?
+  assert_eq "$failure lifecycle failure is terminal" 1 "$rc"
+  assert_eq "$failure lifecycle failure does not mark a round complete" "" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+  assert_eq "$failure lifecycle failure restores original completion file" "$original_completion" "$completed_lenses_file"
+  if [[ "$failure" != init ]]; then
+    assert_eq "$failure starts bounded cleanup of remaining scopes" 1 "$CLEANUP_CALLS"
+  fi
+done
+
 echo "Test 11: meta-orchestrator failure stops later rounds"
 reset_case "meta-failure"
 META_RC=37

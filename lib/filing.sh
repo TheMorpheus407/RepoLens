@@ -630,8 +630,8 @@ _filing_cross_link_enact() {
 #     0  on completion (whether or not individual callbacks succeeded;
 #        callback failures are reflected in the absence of .url/.failed
 #        markers and counted in the aggregate output).
-#     1  on infrastructure failure: missing manifest, invalid manifest
-#        JSON, or a non-array manifest.
+#     1  on infrastructure failure: invalid manifest, failed process-scope
+#        initialization/launch/cleanup, or a missing callback outcome.
 #
 #   Aggregate output on stdout:
 #     Filed: X, Verification-failed: Y, Skipped-existing: Z
@@ -643,7 +643,9 @@ _filing_cross_link_enact() {
 #   Environment overrides:
 #     STALE_LOCK_TIMEOUT  Seconds before a .lock is treated as crashed.
 #                         Default 3600.
-#     MAX_PARALLEL        Max concurrent filing agents. Default 8.
+#     PARALLEL            Concurrent filing only when true. Default false;
+#                         also honors an explicit pre-run sequential fallback.
+#     MAX_PARALLEL        Max concurrent filing callbacks when parallel. Default 8.
 #     LOG_BASE            Override the run log base directory.
 #     _FILING_AGENT_CALLBACK
 #                         Function name invoked per cluster. Defaults to
@@ -750,26 +752,67 @@ dispatch_filing_batch() {
     to_dispatch+=("$cid")
   done
 
+  local dispatch_rc=0 wait_rc=0 recorded_failure=0 dispatched_count=0 pending
+  local callback="${_FILING_AGENT_CALLBACK:-_filing_real_agent}"
   if (( ${#to_dispatch[@]} > 0 )); then
-    if ! declare -F init_parallel >/dev/null 2>&1; then
-      echo "dispatch_filing_batch: init_parallel unavailable (source lib/parallel.sh)" >&2
-      return 1
+    if ${PARALLEL:-false}; then
+      if ! declare -F init_parallel >/dev/null 2>&1 \
+        || ! declare -F spawn_lens >/dev/null 2>&1 \
+        || ! declare -F wait_all >/dev/null 2>&1; then
+        echo "dispatch_filing_batch: parallel lifecycle unavailable (source lib/parallel.sh)" >&2
+        dispatch_rc=1
+      elif ! init_parallel "$log_base/.semaphore" "${MAX_PARALLEL:-8}"; then
+        echo "dispatch_filing_batch: parallel initialization failed" >&2
+        dispatch_rc=1
+      else
+        for cid in "${to_dispatch[@]}"; do
+          if ! spawn_lens "$cid" "$callback" "$run_id" "$cid"; then
+            echo "dispatch_filing_batch: parallel launch failed for $cid" >&2
+            dispatch_rc=1
+            if declare -F _cleanup_children >/dev/null 2>&1; then
+              _cleanup_children || true
+            fi
+            break
+          fi
+          dispatched_count=$((dispatched_count + 1))
+        done
+        wait_all || wait_rc=$?
+        if [[ "${_REPOLENS_SCOPE_FAILED:-0}" == 1 ]]; then
+          # The caller captures dispatcher output in a subshell, so globals do
+          # not propagate; this exit status must preserve terminal scope failure.
+          echo "dispatch_filing_batch: terminal process-scope cleanup failure" >&2
+          dispatch_rc=1
+          if declare -F _cleanup_children >/dev/null 2>&1; then
+            _cleanup_children || true
+          fi
+        elif (( wait_rc != 0 )); then
+          # A governed per-cluster rejection is a recorded result. Every other
+          # wait failure is infrastructure failure, including one after .url.
+          for cid in "${to_dispatch[@]:0:$dispatched_count}"; do
+            if [[ -e "$filed_dir/$cid.failed" ]]; then recorded_failure=1;
+            elif [[ ! -e "$filed_dir/$cid.url" ]]; then dispatch_rc=1; fi
+          done
+          (( recorded_failure == 1 )) || dispatch_rc=1
+        fi
+      fi
+    else
+      # Sequential defaults and pre-run fallback never probe or launch scopes.
+      for cid in "${to_dispatch[@]}"; do
+        dispatched_count=$((dispatched_count + 1))
+        if ! "$callback" "$run_id" "$cid"; then
+          if [[ ! -e "$filed_dir/$cid.failed" ]]; then
+            echo "dispatch_filing_batch: callback failed without a recorded outcome for $cid" >&2
+            dispatch_rc=1
+            break
+          fi
+        fi
+      done
     fi
-    if ! declare -F spawn_lens >/dev/null 2>&1; then
-      echo "dispatch_filing_batch: spawn_lens unavailable (source lib/parallel.sh)" >&2
-      return 1
-    fi
-    if ! declare -F wait_all >/dev/null 2>&1; then
-      echo "dispatch_filing_batch: wait_all unavailable (source lib/parallel.sh)" >&2
-      return 1
-    fi
-
-    local callback="${_FILING_AGENT_CALLBACK:-_filing_real_agent}"
-    init_parallel "$log_base/.semaphore" "${MAX_PARALLEL:-8}"
-    for cid in "${to_dispatch[@]}"; do
-      spawn_lens "$cid" "$callback" "$run_id" "$cid"
+    # Only undispatched reservations are released; live/failed scopes retain
+    # their own diagnostics and locks until their lifecycle is reconciled.
+    for pending in "${to_dispatch[@]:$dispatched_count}"; do
+      rm -f "$filed_dir/$pending.lock"
     done
-    wait_all || true
   fi
 
   local filed=0 vfailed=0
@@ -784,13 +827,12 @@ dispatch_filing_batch() {
     fi
   done
 
-  # Enact cross-link actions after every cluster's filing has settled. The
-  # call is best-effort and never affects the overall return value.
-  if [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
+  # Cross-links run only after lifecycle infrastructure settled successfully.
+  if (( dispatch_rc == 0 )) && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
     _filing_cross_link_enact "$run_id" || true
   fi
 
   printf 'Filed: %d, Verification-failed: %d, Skipped-existing: %d\n' \
     "$filed" "$vfailed" "$skipped_existing"
-  return 0
+  return "$dispatch_rc"
 }

@@ -2522,7 +2522,10 @@ run_rounds() {
 
     if ${PARALLEL:-false}; then
       log_info "Running in parallel mode (max ${MAX_PARALLEL:-8} concurrent)"
-      init_parallel "$LOG_BASE/.semaphore" "${MAX_PARALLEL:-8}"
+      if ! init_parallel "$LOG_BASE/.semaphore" "${MAX_PARALLEL:-8}"; then
+        _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+        return 1
+      fi
 
       parallel_count=0
       for lens_entry in "${active_lens_list[@]}"; do
@@ -2551,12 +2554,26 @@ run_rounds() {
             set_stop_reason "$SUMMARY_FILE" "$abort_reason"
             break
           fi
+          if declare -F _cleanup_children >/dev/null 2>&1; then
+            _cleanup_children || true
+          else
+            wait_all || true
+          fi
+          _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
           return 1
         fi
       done
 
       if ! wait_all; then
         log_warn "Some lenses exited with errors."
+      fi
+      if [[ "${_REPOLENS_SCOPE_FAILED:-0}" == 1 ]]; then
+        if declare -F _cleanup_children >/dev/null 2>&1; then
+          _cleanup_children || true
+        fi
+        set_stop_reason "$SUMMARY_FILE" "process-scope-cleanup-failed"
+        _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+        return 1
       fi
 
       # Children may have tripped the abort after the spawn loop finished.
