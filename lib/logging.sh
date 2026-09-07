@@ -58,7 +58,11 @@ _log_level_resolve() {
 # Returns the timestamp via the named variable, eliminating the
 # command-substitution subshell that the legacy $(_log_ts) pattern used.
 _log_ts_var() {
-  TZ=UTC0 printf -v "$1" '%(%Y-%m-%dT%H:%M:%SZ)T' -1
+  if (( BASH_VERSINFO[0] > 4 || BASH_VERSINFO[1] >= 2 )); then
+    TZ=UTC0 printf -v "$1" '%(%Y-%m-%dT%H:%M:%SZ)T' -1
+  else
+    printf -v "$1" '%s' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
 }
 
 # Back-compat wrapper that still echoes a timestamp on stdout. Retained

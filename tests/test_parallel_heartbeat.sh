@@ -27,6 +27,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 source "$SCRIPT_DIR/lib/logging.sh"
 source "$SCRIPT_DIR/lib/parallel.sh"
+source "$SCRIPT_DIR/tests/process_scope_test_support.sh"
+require_process_scopes
 
 PASS=0
 FAIL=0
@@ -214,5 +216,17 @@ assert_contains "README.md documents REPOLENS_HEARTBEAT_INTERVAL" \
                 "REPOLENS_HEARTBEAT_INTERVAL" "$(grep 'REPOLENS_HEARTBEAT_INTERVAL' "$SCRIPT_DIR/README.md" || true)"
 
 echo ""
+# Invalid and zero-padded outer deadlines are normalized before heartbeat math.
+for deadline_value in invalid 08; do
+  fresh_sem
+  export REPOLENS_CHILD_MAX_WAIT="$deadline_value" REPOLENS_HEARTBEAT_INTERVAL=1
+  spawn_lens "normalized/a" cb_sleep 2
+  spawn_lens "normalized/b" cb_sleep 2
+  output_file="$TMPROOT/normalized-$deadline_value.out"
+  run_wait_all_capture "$output_file"; wait_rc=$?
+  assert_eq "Heartbeat accepts normalized deadline $deadline_value" "0" "$wait_rc"
+  unset REPOLENS_CHILD_MAX_WAIT REPOLENS_HEARTBEAT_INTERVAL
+done
+
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 exit "$FAIL"

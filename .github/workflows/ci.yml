@@ -47,9 +47,13 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq python3
       - name: Run test suite
-        run: make check
+        run: |
+          sudo --preserve-env=GH_TOKEN systemd-run --quiet --wait --pipe --collect \
+            -p Delegate=yes --uid="$(id -u)" --gid="$(id -g)" \
+            --working-directory="$PWD" --setenv="PATH=$PATH" --setenv=GH_TOKEN \
+            bash -c 'python3 lib/process_scope.py probe && make check'
         env:
           GH_TOKEN: ${{ github.token }}
 

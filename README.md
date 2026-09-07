@@ -742,6 +742,53 @@ REPOLENS_AGENT_TIMEOUT_OPENCODE=3600 ./repolens.sh --project ~/my-app --agent op
 | `DEDUPE_TITLE_SIM_PRIMARY`           | `8500`   | Primary near-duplicate title-similarity bar on the Jaccard ×10000 integer scale (`0`–`10000`, where `8500` = 0.85). During synthesis RepoLens treats two findings as near-duplicate titles when their similarity exceeds this bar; lower it to deduplicate more aggressively, raise it to flag fewer pairs. A value above `10000` effectively disables the bar (no pair's similarity can reach it). Non-numeric or negative values fall back to the default with a warning instead of crashing. Unlike most variables here it has no `REPOLENS_` prefix. |
 | `DEDUPE_TITLE_SIM_SECONDARY`         | `6000`   | Looser secondary title-similarity bar (Jaccard ×10000, where `6000` = 0.60) applied only when two findings already share the same non-empty location, so location-backed pairs merge at a lower title match. Same scale, validation, and "above `10000` disables it" semantics as `DEDUPE_TITLE_SIM_PRIMARY`. |
 
+### Parallel worker lifecycle containment
+
+`--parallel` requires a verified process-scope backend. `REPOLENS_PROCESS_SCOPE=auto`
+(the default) currently selects Linux cgroup v2 only; `linux-cgroup-v2` requests it
+explicitly. RepoLens probes actual child enrollment, freeze/thaw, recursive kill,
+and empty-scope observation before run state or any lens callback is created.
+Python 3.9+ with `os.pidfd_open` and `signal.pidfd_send_signal` is required for
+parallel mode. Bash orchestration remains compatible with Bash 4.
+
+Run inside a delegated cgroup (for example a systemd service with `Delegate=yes`,
+or `systemd-run --user --scope -p Delegate=yes ...`). The current cgroup must permit
+child creation and access to `cgroup.procs`, `cgroup.events`, `cgroup.freeze`, and
+`cgroup.kill`. Containers often expose a read-only hierarchy or omit delegation;
+WSL installations need a cgroup-v2-capable kernel and correctly delegated systemd
+scope. A writable filesystem alone is insufficient: the real probe decides.
+
+macOS currently has no enabled backend providing the same nested-process-group
+and session guarantees. Unsupported hosts fail before a parallel callback runs.
+Operators may explicitly choose `REPOLENS_PARALLEL_FALLBACK=sequential` with the
+`auto` backend. This choice is resolved before dispatch, prominently logged, and
+reported in dry-run output and the status snapshot's `process_scope` field.
+Explicit `linux-cgroup-v2` requests fail if unavailable. Capability loss after
+launch always stops new workers and returns failure; it never switches modes.
+
+Each callback inherits a verified descriptor for its owned `cgroup.procs` file.
+Behind a private nonce ready/ENROLL/GO handshake it writes `0` to enroll itself;
+this cannot migrate a reused numeric PID. No callback runs until exact membership
+is acknowledged and verified. The supervisor retains cgroup directory descriptors and validates
+path, device/inode and private manifest identity before cleanup. It freezes the
+whole scope, sends TERM using generation-safe pidfds, thaws, waits the grace,
+and uses recursive `cgroup.kill` if needed. `wait_all` verifies the scope is empty
+and reaps the callback, including when its wrapper exited before descendants.
+Nested GNU `timeout` groups and `setsid` sessions remain contained; per-agent
+GNU timeout behavior and exit codes 124/137 are unchanged. The outer
+`REPOLENS_CHILD_MAX_WAIT` uses the existing 10-second TERM grace.
+
+If identity or cleanup verification fails, RepoLens reports a terminal-cleanup
+failure and retains its private `repolens-scope.*` directory and cgroup for
+diagnostics. It never guesses at numeric PID/PGID cleanup. This provides lifecycle
+containment, not a hostile-code sandbox: deliberate same-UID migration out of a
+delegated scope is outside this guarantee.
+
+The required process-scope CI job executes real delegated-cgroup containment and
+`run_agent` timeout-status parity on system Bash and Bash 4.0. The existing full
+CLI timeout integration suite runs on system Bash; unrelated CLI components
+currently use Bash 4.2+ constructs. This backend introduces no newer Bash syntax.
+
 ### Per-Lens Heartbeat Files
 
 Each running lens writes a machine-readable heartbeat at:
