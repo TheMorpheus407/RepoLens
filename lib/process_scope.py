@@ -389,7 +389,13 @@ def serve(runtime, nonce, caller):
                     response = dict(ok=False, error=str(exc))
                     # Preserve the object and diagnostics; never guess at cleanup.
                     atomic_json(runtime / 'terminal-error.json', response)
-                connection.sendall(json.dumps(response).encode() + b'\n')
+                try:
+                    connection.sendall(json.dumps(response).encode() + b'\n')
+                except (ConnectionError, socket.timeout):
+                    # Losing a reply must not discard retained scope authority.
+                    # Resume the accept/parent-death loop; a completed destroy
+                    # still exits below even when its client cannot read the reply.
+                    pass
             if terminal:
                 break
     finally:

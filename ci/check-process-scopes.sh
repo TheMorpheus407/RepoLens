@@ -15,7 +15,7 @@
 set -uo pipefail
 export REPOLENS_TEST_PROCESS_SCOPES_REQUIRED=1
 bash --version | head -1
-for suite in test_process_scopes test_parallel_wait_timeout test_parallel_sem_trap test_parallel_stale_token_gc test_parallel_heartbeat test_parallel_cleanup_bounded; do
+for suite in test_process_scopes test_process_scope_rpc test_parallel_wait_timeout test_parallel_sem_trap test_parallel_stale_token_gc test_parallel_heartbeat test_parallel_cleanup_bounded; do
   bash "tests/$suite.sh" || exit 1
 done
 # The full CLI currently uses existing Bash 4.2+ constructs outside this backend.
