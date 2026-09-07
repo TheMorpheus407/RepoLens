@@ -170,6 +170,7 @@ _template_task_scope() {
   }
   if [[ "$hours" != 1 ]]; then
     text="${text//1 hour/${hours} hours}"
+    text="${text//1 Hour/${hours} Hours}"
     text="${text//~1h/~${hours}h}"
     text="${text//one-hour/${hours}-hour}"
   fi

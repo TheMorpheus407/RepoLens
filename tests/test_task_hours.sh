@@ -55,6 +55,7 @@ for mode in audit branch-review bugfix feature discover deploy opensource conten
     check contains "$output" 'The imported spec says 1 hour and {{TASK_HOURS}} verbatim.'
   fi
   check test "$(printf '%s' "$output" | grep -c 'approximately 1 hour')" -eq 0
+  check test "$(printf '%s' "$output" | grep -c '~1 Hour Rule')" -eq 0
 done
 for value in 0 -1 1.5 abc 01 '1;touch unsafe'; do
   output="$(bash "$SCRIPT_DIR/repolens.sh" --task-hours "$value" 2>&1)"
