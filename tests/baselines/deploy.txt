@@ -4,6 +4,7 @@
 [INFO] [<TIMESTAMP>] Agent timeout: 1800s
 [INFO] [<TIMESTAMP>] Agent timeout kill grace: 30s
 [INFO] [<TIMESTAMP>] Lens wall-clock budget: 3600s
+[INFO] [<TIMESTAMP>] Task scope: up to 1 human implementation hour(s) per issue
 [INFO] [<TIMESTAMP>] Deploy mode: single-pass server audit (DONE streak: 1)
 [INFO] [<TIMESTAMP>] Local mode: writing local markdown files to <TMP_RUN_DIR>/issues-deploy
 [INFO] [<TIMESTAMP>] Resolved 1 lens(es) to run

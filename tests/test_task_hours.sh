@@ -44,12 +44,13 @@ contains() { [[ "$1" == *"$2"* ]]; }
 for mode in audit branch-review bugfix feature discover deploy opensource content custom polish greenfield spec-change synthesize; do
   template="$SCRIPT_DIR/prompts/_base/$mode.md"
   export TASK_HOURS=1
-  output="$(compose_prompt "$template" "$TEST_DIR/lens.md" '' "$TEST_DIR/spec.md" "$mode" '' '' false true "$TEST_DIR/output")"
+  output="$(compose_prompt "$template" "$TEST_DIR/lens.md" '' "$TEST_DIR/spec.md" "$mode" '' '' false true "$TEST_DIR/one-hour 1 hour ~1h")"
   check contains "$output" 'approximately 1 hour'
   export TASK_HOURS=6
-  output="$(compose_prompt "$template" "$TEST_DIR/lens.md" '' "$TEST_DIR/spec.md" "$mode" '' '' false true "$TEST_DIR/output")"
+  output="$(compose_prompt "$template" "$TEST_DIR/lens.md" '' "$TEST_DIR/spec.md" "$mode" '' '' false true "$TEST_DIR/one-hour 1 hour ~1h")"
   check contains "$output" 'approximately 6 hours'
   if [[ "$mode" != synthesize ]]; then
+    check contains "$output" "$TEST_DIR/one-hour 1 hour ~1h"
     check contains "$output" 'Observe runtime data for at least 1 hour.'
     check contains "$output" 'The imported spec says 1 hour and {{TASK_HOURS}} verbatim.'
   fi

@@ -438,7 +438,10 @@ This limit overrides the instruction to find all issues. Prioritize your finding
 
   # Step 5b: Build and insert local mode section
   local local_mode_section=""
+  local task_output_dir="$local_output_dir"
+  local task_output_sentinel="__REPOLENS_TASK_OUTPUT_${sentinel_seed}__"
   if [[ "$local_mode" == "true" && -n "$local_output_dir" ]]; then
+    local_output_dir="$task_output_sentinel"
     if [[ "$mode" == "greenfield" ]]; then
       local_mode_section="## LOCAL MODE OVERRIDE
 
@@ -686,6 +689,8 @@ Before writing a new finding, check if a file with a similar title already exist
   fi
 
   local_mode_section="$(_template_task_scope "$local_mode_section")" || return 1
+  local_mode_section="${local_mode_section//$task_output_sentinel/$task_output_dir}"
+  local_output_dir="$task_output_dir"
   prompt="${prompt//\{\{LOCAL_MODE_SECTION\}\}/$local_mode_section}"
 
   # Step 5c: Build current greenfield backlog section and hold its prompt
