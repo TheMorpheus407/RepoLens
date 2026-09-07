@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Resume branch reviews of remote URLs at the saved commit before applying read-only isolation, including when refs are omitted or the remote branch has advanced. Preserve explicit ref checks, the original delta, and the saved task-hour cap.
+
 - Keep process-scope supervisors alive when an RPC client disconnects or cannot receive its reply, preserving worker cleanup and parent-death monitoring; completed scope destruction still shuts down cleanly without a delivered reply.
 
 - Clear inherited parent EXIT cleanup before parallel worker enrollment, so default heartbeat trap restoration cannot delete a shared remote clone while sibling lenses are still running. Callback cleanup and parent-owned scope collection remain active.

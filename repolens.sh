@@ -2039,10 +2039,30 @@ trap _handle_interrupt INT
 trap _handle_termination TERM
 
 if [[ "$PROJECT_PATH" =~ ^(https://|git@|ssh://|git://) ]]; then
+  _clone_head="$BRANCH_HEAD"
+  if [[ "$MODE" == branch-review && -n "$RESUME_RUN_ID" ]]; then
+    # URL resumes create a new checkout. Select the frozen commit before the
+    # clone becomes read-only; a saved branch name may have advanced meanwhile.
+    # Keep CLI refs untouched for the later explicit-ref/provenance checks.
+    _clone_branch_manifest="$RESUME_LOG_BASE_CANONICAL/branch-manifest.md"
+    [[ -f "$_clone_branch_manifest" && ! -L "$_clone_branch_manifest" ]] \
+      || die "Resume of branch-review run $RUN_ID requires a regular non-symlink persisted branch-manifest.md artifact"
+    if [[ -s "$_clone_branch_manifest" ]]; then
+      _clone_head="$(LC_ALL=C awk '
+        /^- head commit: / { count++; head = substr($0, 16) }
+        END {
+          if (count != 1 || head !~ /^[0-9a-f]+$/ || (length(head) != 40 && length(head) != 64)) exit 1
+          print head
+        }
+      ' "$_clone_branch_manifest")" \
+        || die "Persisted branch-manifest.md for run $RUN_ID must contain exactly one full head commit SHA"
+    fi
+    unset _clone_branch_manifest
+  fi
   CLONE_DIR="$(mktemp -d)"
   _repo_basename="$(basename "$PROJECT_PATH" .git)"
   echo "Cloning remote repository: $PROJECT_PATH"
-  clone_project_for_mode "$PROJECT_PATH" "$CLONE_DIR/$_repo_basename" "$MODE" "$BRANCH_BASE" "$BRANCH_HEAD" \
+  clone_project_for_mode "$PROJECT_PATH" "$CLONE_DIR/$_repo_basename" "$MODE" "$BRANCH_BASE" "$_clone_head" \
     || die "Failed to clone: $PROJECT_PATH"
   PROJECT_PATH="$CLONE_DIR/$_repo_basename"
 
@@ -2050,7 +2070,7 @@ if [[ "$PROJECT_PATH" =~ ^(https://|git@|ssh://|git://) ]]; then
   chmod -R a-w "$PROJECT_PATH"
   find "$PROJECT_PATH" -type f -exec chmod a-x {} +
   echo "Read-only isolation applied to clone."
-  unset _repo_basename
+  unset _repo_basename _clone_head
 fi
 
 # --- Deploy target dispatch state (issue #88) ---
