@@ -216,6 +216,8 @@ All shell scripts in RepoLens follow these conventions:
 
 ## Forge Provider Backends
 
+Supported providers are `gh` (GitHub), `glab` (GitLab), `tea` (Gitea), and `fj` (Forgejo). GitLab tests must cover subgroup namespaces and explicit custom-host binding as well as GitLab.com. Keep full subgroup paths only for GitLab; other providers retain the final owner/repo pair and any existing HTTP base-path handling. Stub `glab` for tests; never use an authenticated live forge.
+
 `lib/forge.sh` is the provider abstraction layer for remote issue, label, auth, and issue-count operations. Add or change forge backends there first; `repolens.sh` should only need provider-token validation and high-level orchestration updates when a new provider is introduced.
 
 The wrapper API that runtime code calls is:

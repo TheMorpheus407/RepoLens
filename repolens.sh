@@ -250,7 +250,7 @@ Options:
                           Env var fallback: REPOLENS_HUMAN_REVIEW=1.
   --local                 Write findings as local markdown files instead of creating remote issues
   --output <path>         Output directory for local markdown files (requires --local, default: logs/<run-id>/issues/)
-  --forge <provider>      gh (GitHub) | tea (Gitea) | fj (Forgejo/Codeberg) — overrides auto-detection from origin
+  --forge <provider>      gh (GitHub) | glab (GitLab) | tea (Gitea) | fj (Forgejo/Codeberg) — overrides auto-detection from origin
   --hosted                Spin up project's Docker Compose in isolated network for DAST scanning and testing
   --remote <ssh-target>   Deploy mode server target reachable by SSH (host, user@host, or user@host:port)
   --remote-key <path>     SSH private key path for --remote; must be an existing regular file
@@ -979,7 +979,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --forge)
-      [[ $# -ge 2 ]] || die "Option --forge requires an argument (gh|tea|fj)."
+      [[ $# -ge 2 ]] || die "Option --forge requires an argument (gh|glab|tea|fj)."
       FORGE_PROVIDER="$2"
       FORGE_PROVIDER_SET=true
       shift 2
@@ -1171,7 +1171,7 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
 
   if $_resume_bundle_identity; then
     if $LOCAL_MODE_SET && $FORGE_PROVIDER_SET; then
-      die "Bundle resume execution boundary is ambiguous: choose --local (optionally --output) or --forge <gh|tea|fj>, not both"
+      die "Bundle resume execution boundary is ambiguous: choose --local (optionally --output) or --forge <gh|glab|tea|fj>, not both"
     elif $LOCAL_MODE_SET; then
       LOCAL_MODE=true
     elif $FORGE_PROVIDER_SET; then
@@ -1179,7 +1179,7 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
         && die "Bundle resume --output requires the explicit --local boundary"
       LOCAL_MODE=false
     else
-      die "Bundle resume requires an explicit execution boundary: pass --local (optionally --output <path>) or --forge <gh|tea|fj>"
+      die "Bundle resume requires an explicit execution boundary: pass --local (optionally --output <path>) or --forge <gh|glab|tea|fj>"
     fi
 
     if [[ -n "$SPEC_RESUME_MODE" ]]; then
@@ -2396,8 +2396,8 @@ _origin_url="$(git -C "$PROJECT_PATH" remote get-url origin 2>/dev/null || true)
 FORGE_HOST="$(detect_forge_host "$_origin_url")"
 FORGE_REPO_SLUG="$(forge_remote_repo_slug "$_origin_url")"
 if [[ -n "$FORGE_REPO_SLUG" ]]; then
-  REPO_OWNER="${FORGE_REPO_SLUG%%/*}"
-  REPO_NAME="${FORGE_REPO_SLUG#*/}"
+  REPO_OWNER="${FORGE_REPO_SLUG%/*}"
+  REPO_NAME="${FORGE_REPO_SLUG##*/}"
 else
   REPO_OWNER="local"
   REPO_NAME="$(basename "$PROJECT_PATH")"
@@ -2419,8 +2419,8 @@ require_agent_cmd "$AGENT"
 # --- Resolve and validate forge provider ---
 if [[ -n "$FORGE_PROVIDER" ]]; then
   case "$FORGE_PROVIDER" in
-    gh|tea|fj) ;;
-    *) die "Invalid --forge: $FORGE_PROVIDER (expected gh, tea, or fj)" ;;
+    gh|glab|tea|fj) ;;
+    *) die "Invalid --forge: $FORGE_PROVIDER (expected gh, glab, tea, or fj)" ;;
   esac
 else
   FORGE_PROVIDER="$(detect_forge_provider "$_origin_url")"
@@ -2429,10 +2429,13 @@ unset _origin_url
 
 if ! $LOCAL_MODE; then
   if [[ "$FORGE_PROVIDER" == "unknown" ]]; then
-    die "Could not detect forge provider from origin remote. Pass --forge <gh|tea|fj> explicitly (required for self-hosted Gitea/Forgejo instances)."
+    die "Could not detect forge provider from origin remote. Pass --forge <gh|glab|tea|fj> explicitly (required for self-hosted GitLab/Gitea/Forgejo instances)."
   fi
   if [[ "$FORGE_PROVIDER" == "fj" && -z "${FORGE_HOST:-}" ]]; then
     die "Forgejo fj backend requires an HTTPS or SSH origin remote so RepoLens can pass fj --host; insecure HTTP origins are not supported."
+  fi
+  if [[ "$FORGE_PROVIDER" == "glab" && -z "${FORGE_HOST:-}" ]]; then
+    die "GitLab glab backend requires an HTTPS or SSH origin remote; insecure HTTP origins are not supported."
   fi
   require_forge_cli "$FORGE_PROVIDER"
 fi

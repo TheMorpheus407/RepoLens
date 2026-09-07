@@ -264,8 +264,8 @@ compose_prompt() {
   # origin-derived slug is available, keep owner/name placeholders consistent
   # with the forge target that agents will actually file against.
   if [[ "${prompt_vars[FORGE_REPO_SLUG]:-}" == */* ]]; then
-    prompt_vars["REPO_OWNER"]="${prompt_vars[FORGE_REPO_SLUG]%%/*}"
-    prompt_vars["REPO_NAME"]="${prompt_vars[FORGE_REPO_SLUG]#*/}"
+    prompt_vars["REPO_OWNER"]="${prompt_vars[FORGE_REPO_SLUG]%/*}"
+    prompt_vars["REPO_NAME"]="${prompt_vars[FORGE_REPO_SLUG]##*/}"
   fi
 
   for key in "${!prompt_vars[@]}"; do
