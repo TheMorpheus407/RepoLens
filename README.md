@@ -20,21 +20,24 @@
 | `git`                       | Yes                    | Repo validation, cloning                                                               | OS package manager (`apt install git`, `brew install git`, `nix-env -i git`)                                                                                                          |
 | `jq`                        | Yes                    | JSON config parsing                                                                    | OS package manager (`apt install jq`, `brew install jq`, `nix-env -i jq`)                                                                                                             |
 | `timeout` (coreutils)       | Yes                    | Per-invocation agent timeout watchdog with SIGKILL escalation grace (see `REPOLENS_AGENT_TIMEOUT*` and `REPOLENS_AGENT_KILL_GRACE` below) | Ships in GNU coreutils. Pre-installed on Linux/NixOS. On macOS: `brew install coreutils`.                                                                                             |
-| `gh`, `tea`, or `fj`        | Yes (unless `--local`) | Remote forge operations for labels and issue queries                                   | See [Supported forges](#supported-forges) for detection, install links, and auth commands                                                                                             |
+| `gh`, `glab`, `tea`, or `fj`        | Yes (unless `--local`) | Remote forge operations for labels and issue queries                                   | See [Supported forges](#supported-forges) for detection, install links, and auth commands                                                                                             |
 | Agent CLI                   | Yes (at least one)     | Run analysis agents                                                                    | See [Supported Agent CLIs](#supported-agent-clis) below for install + auth per CLI                                                                                                    |
 | `docker` + `docker compose` | Only for `--hosted`    | DAST scanning environment                                                              | OS package manager                                                                                                                                                                    |
 
 ### Supported forges
 
-Supported forges are GitHub (`gh`), Gitea (`tea`), and Codeberg/Forgejo (`fj`). RepoLens reads `git remote get-url origin` from the target project and uses the origin host to choose the forge backend. Pass `--forge <gh|tea|fj>` to override auto-detection. Use `--local` to write local output files without any remote forge CLI.
+Supported forges are GitHub (`gh`), GitLab (`glab`), Gitea (`tea`), and Codeberg/Forgejo (`fj`). RepoLens reads `git remote get-url origin` from the target project and uses the origin host to choose the forge backend. Pass `--forge <gh|glab|tea|fj>` to override auto-detection. Use `--local` to write local output files without any remote forge CLI.
 
 | Forge              | Provider | CLI           | Auto-detection               | Install / auth                                                                                                                   |
 | ------------------ | -------- | ------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | GitHub             | `gh`     | GitHub CLI    | `github.com` origins         | Install from [cli.github.com](https://cli.github.com), then run `gh auth login`                                                  |
+| GitLab             | `glab`   | GitLab CLI    | `gitlab.com` or a `gitlab` DNS label | Install from [GitLab CLI](https://docs.gitlab.com/cli/), then run `glab auth login --hostname <host>` |
 | Gitea              | `tea`    | Gitea Tea CLI | Hostnames containing `gitea` | Install from [gitea.com/gitea/tea](https://gitea.com/gitea/tea), then run `tea login add`                                        |
 | Codeberg / Forgejo | `fj`     | Forgejo CLI   | `codeberg.org` origins       | Install from [forgejo-contrib/forgejo-cli](https://codeberg.org/forgejo-contrib/forgejo-cli), then run `fj -H <host> auth login` |
 
-Self-hosted instances whose hostnames do not match the auto-detect heuristics require `--forge <gh|tea|fj>`. Self-hosted Forgejo targets also need an HTTPS or SSH `origin` remote so RepoLens can pass a secure `fj -H <host>` binding; insecure HTTP origins are not used for authenticated `fj` commands.
+Self-hosted instances whose hostnames do not match the auto-detect heuristics require `--forge <gh|glab|tea|fj>`. Self-hosted Forgejo targets also need an HTTPS or SSH `origin` remote so RepoLens can pass a secure `fj -H <host>` binding; insecure HTTP origins are not used for authenticated `fj` commands.
+
+GitLab keeps the full group/subgroup/project namespace from the origin. For a custom host such as `https://code.example.com:8443/team/platform/service.git`, authenticate with `glab auth login --hostname code.example.com:8443`, then pass `--forge glab`. HTTPS ports are preserved; SSH ports are transport-only and the API uses the hostname. Insecure HTTP origins are rejected. GitLab namespace paths are treated as groups, while the existing Gitea/Forgejo URL base-path handling is unchanged. Reads use the [paginated GitLab API](https://docs.gitlab.com/cli/api/) with an explicit host and encoded namespace; labels, issue bodies, and comments use the same target binding.
 
 ### Supported Agent Backends
 
@@ -168,6 +171,7 @@ chmod +x repolens.sh
 
 # 3. Authenticate your forge CLI (if not already done; not needed for --local)
 gh auth login                  # GitHub
+glab auth login               # GitLab.com; add --hostname for a custom host
 tea login add                  # Gitea
 fj -H codeberg.org auth login  # Codeberg; use your Forgejo host for self-hosted instances
 
@@ -230,9 +234,9 @@ The printed estimate is a rough planning number; faster/cheaper agents and tight
 ### Rate Limits & Automated Traffic
 
 > [!NOTE]
-> RepoLens generates a lot of automated traffic. A default 248-lens audit run can create dozens to hundreds of remote issues, plus repo reads via `gh`, `tea`, or `fj`, plus parallel AI provider calls.
+> RepoLens generates a lot of automated traffic. A default 248-lens audit run can create dozens to hundreds of remote issues, plus repo reads via `gh`, `glab`, `tea`, or `fj`, plus parallel AI provider calls.
 
-- **GitHub API / Gitea API / Forgejo API.** Authenticated `gh` calls count against GitHub API quotas; authenticated `tea` and `fj` calls count against your Gitea or Forgejo account/API quotas. Large runs can trip rate limits. Use `--max-issues <n>` to cap output, or `--local` to skip remote forge calls entirely.
+- **GitHub API / GitLab API / Gitea API / Forgejo API.** Authenticated `gh` calls count against GitHub API quotas; authenticated `glab`, `tea`, and `fj` calls count against your GitLab, Gitea, or Forgejo account/API quotas. Large runs can trip rate limits. Use `--max-issues <n>` to cap output, or `--local` to skip remote forge calls entirely.
 - **Concurrent same-repo runs.** Starting multiple runs against the same repository is supported. Remote label setup is coordinated per repository; repeated runs with the same desired label set can reuse a fresh bootstrap result, while other runs create only missing labels when the forge supports label listing. Per-lens issue checks still run independently, so lower `--max-parallel` when running several modes at once against the same forge account.
 - **AI provider rate limits.** Every iteration consumes Anthropic / OpenAI tokens. Free and low-tier accounts will hit their RPM (requests-per-minute) and TPM (tokens-per-minute) ceilings immediately under `--parallel`. Verify your account is on a tier sized for concurrent agent traffic before scaling.
 - **Automatic agent retry.** If an agent exits non-zero with a recognized rate-limit message and a parseable resume time within `REPOLENS_RATE_LIMIT_MAX_SLEEP`, RepoLens sleeps until that time plus 60 seconds and retries the same lens once. If RepoLens cannot use that retry path during lens execution, the run finalizes as `rate-limit-pending`, exits `3`, and leaves unfinished lenses resumable (see [Resume](#resume)). When RepoLens knows the provider retry time for a terminal pending run, `status.json.next_action.earliest_at` exposes it as a UTC timestamp. If the retry sleep is interrupted by SIGHUP, SIGINT, or SIGTERM, the run finalizes as `interrupted` with stopped reason `interrupted-sighup`, `interrupted-sigint`, or `interrupted-sigterm` and exits `129`, `130`, or `143`.
@@ -455,7 +459,7 @@ For `spec-change`, the specification directory must be inside `--project` and ev
   --spec-base HEAD
 ```
 
-Bundle-based `spec-change` expects `--spec-base` to resolve to a single Git tree. It writes `combined-spec.base.md` and `spec-diff.txt` alongside the current snapshot and manifest. Resuming the run reuses these frozen artifacts; the bundle flags must match the persisted manifest. Run artifacts restore specification selection only: a bundle resume must repeat `--mode` and an explicit execution boundary (`--local`, optionally with `--output`, or `--forge <gh|tea|fj>`), and must repeat `--yes` when non-interactive authorization is desired. The interruption hint includes the current values. The existing tracked single-file form remains supported unchanged.
+Bundle-based `spec-change` expects `--spec-base` to resolve to a single Git tree. It writes `combined-spec.base.md` and `spec-diff.txt` alongside the current snapshot and manifest. Resuming the run reuses these frozen artifacts; the bundle flags must match the persisted manifest. Run artifacts restore specification selection only: a bundle resume must repeat `--mode` and an explicit execution boundary (`--local`, optionally with `--output`, or `--forge <gh|glab|tea|fj>`), and must repeat `--yes` when non-interactive authorization is desired. The interruption hint includes the current values. The existing tracked single-file form remains supported unchanged.
 
 ## Polish mode
 
@@ -510,7 +514,7 @@ Remote deploy uses OpenSSH ControlMaster so the run performs one TCP connection 
 
 For the first run against a remote host, start with `--max-issues 1` and avoid `--parallel`; if you do enable parallel execution, keep it to `--parallel --max-parallel 1` until the transcript confirms commands are wrapped correctly and the target handles the SSH load. `--max-issues 1` keeps the first pass short, and `--max-parallel 1` prevents several lenses from competing for the same remote target while you validate the setup.
 
-Forge actions still happen on the operator workstation. `gh`, `tea`, or `fj` issue creation, label setup, and issue lookups run locally against the configured forge account; only deploy-target investigation commands are wrapped over SSH.
+Forge actions still happen on the operator workstation. `gh`, `glab`, `tea`, or `fj` issue creation, label setup, and issue lookups run locally against the configured forge account; only deploy-target investigation commands are wrapped over SSH.
 
 ## Advanced controls
 
@@ -604,7 +608,7 @@ Usage: repolens.sh --project <path|url> --agent <agent> [OPTIONS]
 | `--strategy <name>`    | Bugreport round-1 dispatch strategy: `fanout` (default — every lens runs in round 1, identical to today's `--mode bugreport`) \| `waves` (a narrow set of triage-seeded GENERIC investigators dispatch in round 1; subsequent rounds use the existing role-aware dispatch). `waves` requires `--mode bugreport` and rejects with a clear error on any other mode. The resolved value is shown by `--dry-run` under `--mode bugreport`. Env fallback: `REPOLENS_STRATEGY`. Wave width is controlled by `REPOLENS_WAVE_WIDTH` (default `7`, clamped to `1..50`). |
 | `--local`              | Write local output files instead of creating remote issues. Most modes write markdown; polish mode writes JSON suggestion objects and grouped polishing shortlist drafts. No forge CLI required                                                                                                         |
 | `--output <path>`      | Output directory for local output files (requires `--local`, default: `logs/<run-id>/rounds/round-1/lens-outputs/`)                                                                                                                                                                                     |
-| `--forge <provider>`   | Override forge auto-detection: `gh` for GitHub, `tea` for Gitea, `fj` for Forgejo/Codeberg. Codeberg is auto-detected; use this for self-hosted Gitea/Forgejo remotes whose hostname is not auto-detected. Self-hosted Forgejo needs an HTTPS or SSH `origin` remote so RepoLens can pass `fj -H <host>` |
+| `--forge <provider>`   | Override forge auto-detection: `gh` for GitHub, `glab` for GitLab, `tea` for Gitea, `fj` for Forgejo/Codeberg. Codeberg is auto-detected; use this for self-hosted GitLab/Gitea/Forgejo remotes whose hostname is not auto-detected. Self-hosted Forgejo needs an HTTPS or SSH `origin` remote so RepoLens can pass `fj -H <host>` |
 | `--hosted`             | Spin up Docker Compose for DAST scanning (used with `toolgate` domain)                                                                                                                                                                                                                                   |
 | `--remote <ssh-target>` | Remote deploy server target. Accepts `host`, `host:port`, `user@host`, or `user@host:port`; only valid with `--mode deploy` server targets; incompatible with `--hosted` and Android deploy targets. The target is validated, exported to deploy agents, shown in `--dry-run`, and repeated in deploy authorization and normal run confirmation prompts. |
 | `--remote-key <path>`  | SSH private key path for `--remote`. The path must exist and be a regular file. If omitted, remote SSH uses normal SSH key resolution. |
