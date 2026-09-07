@@ -25,7 +25,9 @@
 #   3. Missing-manifest gating — no manifest.json -> non-zero exit and no
 #      writes inside `final/filed/`.
 
-# shellcheck disable=SC2329 # Shims/callbacks are invoked by the sourced dispatcher.
+# Shims are invoked by the sourced dispatcher; each lifecycle fixture isolates
+# its own PARALLEL setting in a subshell.
+# shellcheck disable=SC2329,SC2030,SC2031
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
