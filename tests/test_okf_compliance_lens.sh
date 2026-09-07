@@ -283,8 +283,8 @@ assert_matches "accepts unknown type values and extra fields" \
 assert_matches "distinguishes v0.1 migration from strict conformance" \
   'v0\.1.*(timestamp|Citations).*(migration|not strict conformance)' \
   "$lens_content"
-assert_matches "scopes findings to approximately one hour" \
-  'approximately one hour.*(schema|template|directory|concept set|index|workflow)' \
+assert_matches "scopes findings to configured human effort limit" \
+  'configured human implementation-hour limit.*(schema|template|directory|concept set|index|workflow)' \
   "$lens_content"
 
 echo ""

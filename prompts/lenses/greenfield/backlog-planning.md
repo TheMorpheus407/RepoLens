@@ -27,7 +27,7 @@ You specialize in turning product specifications into implementation-sized backl
 - Clear follow-up boundaries so later planner invocations can continue from existing issues
 
 **Implementation-sized backlog quality**
-- One-hour tasks with concrete scope and acceptance criteria
+- Tasks within the configured human implementation-hour limit, with concrete scope and acceptance criteria
 - Priority titles using `[P0]`, `[P1]`, `[P2]`, or `[P3]`
 - Specific issue bodies that cite the spec and avoid umbrella planning
 

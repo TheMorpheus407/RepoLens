@@ -223,7 +223,7 @@ for term in \
   "CAS retry classification" \
   "Emit-site" \
   "Sibling distinction" \
-  "Recommended fix scoped to about 1 hour" \
+  "Recommended fix within the configured human implementation-hour limit" \
   "Sensitive Data Contract" \
   "<TOKEN>" \
   "<COOKIE>" \

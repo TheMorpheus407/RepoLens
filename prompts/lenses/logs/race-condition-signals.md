@@ -71,7 +71,7 @@ Every race-condition finding MUST include:
 - **CAS retry classification**: state whether retries exhausted, produced user-visible failures, produced duplicate effects, or were a successful one-off designed retry that was excluded.
 - **Emit-site**: file, function, logger, module, component, or service that produced the race-detecting log line, or an explicit note that the race is silent and both copies were processed.
 - **Sibling distinction**: one sentence explaining why this is not `deadlock-symptoms` and not `state-machine-violations`.
-- **Recommended fix scoped to about 1 hour**: point to the likely synchronization boundary, version check, idempotency key, distributed lock, leader-election lease, cache invalidation ordering, or stale-read guard that should prevent the observed interleaving.
+- **Recommended fix within the configured human implementation-hour limit**: point to the likely synchronization boundary, version check, idempotency key, distributed lock, leader-election lease, cache invalidation ordering, or stale-read guard that should prevent the observed interleaving.
 
 ### What This Lens Does NOT File
 

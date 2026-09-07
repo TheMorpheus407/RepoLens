@@ -57,6 +57,31 @@ for mode in audit branch-review bugfix feature discover deploy opensource conten
   check test "$(printf '%s' "$output" | grep -c 'approximately 1 hour')" -eq 0
   check test "$(printf '%s' "$output" | grep -c '~1 Hour Rule')" -eq 0
 done
+# Real shipped lenses must defer to the base cap, including specialized modes.
+# Keep operational lookback windows and evidence thresholds independent of it.
+for pair in \
+  'spec-change:spec-change/spec-change-planning' \
+  'greenfield:greenfield/backlog-planning' \
+  'content:content-quality/okf-compliance' \
+  'audit:logs/race-condition-signals' \
+  'deploy:android/apk-overview'; do
+  mode="${pair%%:*}"
+  lens="${pair#*:}"
+  for hours in 1 6; do
+    export TASK_HOURS="$hours"
+    output="$(compose_prompt "$SCRIPT_DIR/prompts/_base/$mode.md" \
+      "$SCRIPT_DIR/prompts/lenses/$lens.md" '' '' "$mode")"
+    check contains "$output" "approximately $hours hour"
+    check contains "$output" 'configured human implementation-hour limit'
+  done
+done
+export TASK_HOURS=6
+output="$(compose_prompt "$SCRIPT_DIR/prompts/_base/deploy.md" \
+  "$SCRIPT_DIR/prompts/lenses/deployment/log-analysis.md" '' '' deploy)"
+check contains "$output" 'journalctl -u <unit> --since "1 hour ago"'
+output="$(compose_prompt "$SCRIPT_DIR/prompts/_base/audit.md" \
+  "$SCRIPT_DIR/prompts/lenses/logs/resource-leaks.md" '' '' audit)"
+check contains "$output" 'at least 5 `(timestamp, value)` samples spanning at least 1 hour'
 for value in 0 -1 1.5 abc 01 '1;touch unsafe'; do
   output="$(bash "$SCRIPT_DIR/repolens.sh" --task-hours "$value" 2>&1)"
   check test "$?" -ne 0

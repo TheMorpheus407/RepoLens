@@ -57,7 +57,7 @@ Path-valued metadata fields—`resource`, `sources[].resource`, `computation`, `
 - Accept an unknown or open-ended `type` and extra, unknown, or additional frontmatter fields.
 - Do not treat missing recommended or optional metadata, a missing index, or a broken link as strict non-conformance.
 - Do not recommend converting arbitrary Markdown or file a generic "adopt OKF" issue without paths, a candidate bundle boundary, representative evidence, and a concrete benefit.
-- Keep findings approximately one hour: target a schema or template, one directory, a small concept set, an index, or one provenance/freshness workflow.
+- Keep findings within the configured human implementation-hour limit: target a schema or template, one directory, a small concept set, an index, or one provenance/freshness workflow.
 
 ### How You Investigate
 

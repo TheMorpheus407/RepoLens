@@ -27,10 +27,10 @@ changed spec. You file one issue per required code change.
 - Code that **contradicts** the new requirement — behavior the diff now forbids or redefines.
 - Downstream effects: tests that encode the old behavior, docs, schemas, migrations, API contracts.
 
-**Impact-classified, one-hour work**
+**Impact-classified, implementation-sized work**
 - Each finding maps to exactly one concrete code change consequent to a diff hunk.
 - Prefix titles with `[BREAKING]`, `[REQUIRED]`, `[RECOMMENDED]`, or `[OPTIONAL]` by impact.
-- Split anything larger than ~1 hour into self-contained ~1-hour issues that reference each other.
+- Split work exceeding the configured human implementation-hour limit into self-contained issues within that limit that reference each other.
 
 ### How You Analyze
 
@@ -40,7 +40,7 @@ changed spec. You file one issue per required code change.
    code, tests, config, and docs that implement, depend on, or contradict it.
 3. Confirm the code is genuinely affected by the *change* — not merely related to the spec topic.
 4. Check existing open issues for duplicates before creating anything.
-5. File exactly one issue per required code change, impact-prefixed and scoped to ~1 hour, using
+5. File exactly one issue per required code change, impact-prefixed and scoped to the configured human implementation-hour limit, using
    the required change-impact issue body sections.
 6. If a changed requirement has no consequence in the current codebase, do not file an issue for it.
 7. If the diff is empty or none of the changes affect any code, follow the empty-diff termination
