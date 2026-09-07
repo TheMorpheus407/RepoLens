@@ -20,6 +20,9 @@ if ! declare -F severity_normalize >/dev/null 2>&1; then
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/core.sh"
 fi
 
+# shellcheck source=lib/branch-scope.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/branch-scope.sh"
+
 # Strip ANSI escape sequences from stdin.
 # Uses a bash variable for the ESC byte instead of \x1b hex escapes in sed,
 # because BSD sed (macOS) does not support \x1b — only GNU sed does.
@@ -154,6 +157,7 @@ _streak_record_local_filtered() {
 count_dry_run_issues() {
   local dir="$1" file raw_severity severity title count content_mode min_severity domain lens log_title title_sev mismatch_msg
   [[ -d "$dir" ]] || { echo 0; return 0; }
+  branch_scope_filter_directory "$dir" || { echo 0; return 1; }
   if [[ -z "${REPOLENS_MIN_SEVERITY:-}" ]]; then
     find "$dir" -maxdepth 1 -name '*.md' -type f 2>/dev/null | wc -l
     return 0

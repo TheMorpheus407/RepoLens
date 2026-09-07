@@ -153,6 +153,8 @@ reset_issue_205_env() {
     "$LOG_BASE/rounds/round-1/lens-outputs/code" \
     "$PROJECT_PATH"
   write_manifest "$LOG_BASE/final/manifest.json"
+  mkdir -p "$PROJECT_PATH/lib"
+  for (( line=1; line<=12; line++ )); do printf 'upload source\n'; done > "$PROJECT_PATH/lib/upload.sh"
   printf 'raw lens evidence\n' > "$LOG_BASE/rounds/round-1/lens-outputs/code/input-validation.md"
 }
 
@@ -219,31 +221,39 @@ assert_contains "repolens.sh exports FORGE_REPO for callbacks" \
 assert_not_contains "repolens.sh exported target does not use checkout basename" \
   "FORGE_REPO=acme/local-dir-entrypoint" "$entrypoint_result"
 
+forge_issue_list_json() { printf '%s\n' "$1" > "$TMPDIR/list-repo.txt"; printf '[]\n'; }
+forge_label_create() { printf '%s\n' "$3" > "$TMPDIR/label-repo.txt"; }
+forge_issue_create_once() {
+  printf '%s\n' "$1" > "$TMPDIR/create-repo.txt"
+  jq -n --arg title "$2" --rawfile body "$3" '{number:123,title:$title,body:$body,state:"open",labels:["bug","input-validation"],url:"https://github.com/acme/origin-repo/issues/123"}' > "$TMPDIR/created.json"
+  printf 'https://github.com/acme/origin-repo/issues/123\n'
+}
+forge_issue_read_json() {
+  if [[ "$2" == 42 ]]; then printf '{"state":"open"}\n'; else cat "$TMPDIR/created.json"; fi
+}
 reset_issue_205_env
-RUN_AGENT_SENTINEL_CLUSTER="$CID"
 _filing_real_agent "$RUN_ID" "$CID" >/dev/null 2>"$TMPDIR/filing.err"
 status=$?
-filing_prompt="$(cat "$TMPDIR/last-agent-prompt.md")"
-assert_success "_filing_real_agent completes when filing agent writes url sentinel" "$status"
-assert_contains "filing prompt create command targets origin slug" \
-  "gh issue create -R acme/origin-repo" "$filing_prompt"
-assert_contains "filing prompt list command targets origin slug" \
-  "gh issue list -R acme/origin-repo --state open" "$filing_prompt"
-assert_contains "filing prompt label command targets origin slug" \
-  "gh label create <label> --color ededed --force -R acme/origin-repo" "$filing_prompt"
-assert_not_contains "filing prompt does not create issues against checkout basename" \
-  "gh issue create -R acme/local-dir" "$filing_prompt"
-assert_not_contains "filing prompt does not list issues against checkout basename" \
-  "gh issue list -R acme/local-dir" "$filing_prompt"
+assert_success "deterministic filing completes after provider readback" "$status"
+assert_eq "filing create targets origin slug" "acme/origin-repo" "$(cat "$TMPDIR/create-repo.txt")"
+assert_eq "filing list targets origin slug" "acme/origin-repo" "$(cat "$TMPDIR/list-repo.txt")"
+assert_eq "filing labels target origin slug" "acme/origin-repo" "$(cat "$TMPDIR/label-repo.txt")"
+assert_not_contains "filing create does not target checkout basename" "acme/local-dir" "$(cat "$TMPDIR/create-repo.txt")"
+assert_not_contains "filing list does not target checkout basename" "acme/local-dir" "$(cat "$TMPDIR/list-repo.txt")"
 
 echo ""
 echo "=== issue #205: cross-link enactment uses FORGE_REPO ==="
 
-forge_issue_comment() {
+forge_issue_comment_once() {
   printf '%s\n' "$1" > "$TMPDIR/comment-repo.txt"
   printf '%s\n' "$2" > "$TMPDIR/comment-issue.txt"
   cat "$3" > "$TMPDIR/comment-body.md"
+  printf 'https://github.com/acme/origin-repo/issues/42#issuecomment-1\n'
   return 0
+}
+
+forge_issue_comment_read_json() {
+  jq -n --rawfile body "$TMPDIR/comment-body.md" --arg url "$3" '{body:$body,url:$url}'
 }
 
 reset_issue_205_env

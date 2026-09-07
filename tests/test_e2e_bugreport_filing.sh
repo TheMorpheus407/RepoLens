@@ -242,21 +242,49 @@ git -C "$PROJECT_DIR" add README.md
 git -C "$PROJECT_DIR" -c user.name='RepoLens Test' -c user.email='repolens@example.invalid' commit -q -m 'fixture'
 printf 'The bugreport path produced findings but did not file synthesized issues.\n' > "$BUG_FILE"
 
-cat > "$FAKE_BIN/codex" <<EOF
+export REPOLENS_GOVERNOR_MOCK_AGENT="$SCRIPT_DIR/tests/mock-agent.sh"
+cat > "$FAKE_BIN/codex" <<'EOF'
 #!/usr/bin/env bash
-exec "$SCRIPT_DIR/tests/mock-agent.sh" "\$@"
+set -uo pipefail
+output="$("$REPOLENS_GOVERNOR_MOCK_AGENT" "$@")" || exit $?
+if jq -e 'type == "array"' <<< "$output" >/dev/null 2>&1; then
+  jq 'map(if .cluster_id == "mock-round-handoff" then .body += "\n\n## References\nREADME.md:1" else . end)' <<< "$output"
+else
+  printf '%s\n' "$output"
+fi
 EOF
 cat > "$FAKE_BIN/gh" <<'EOF'
 #!/usr/bin/env bash
+set -uo pipefail
 printf '%s\n' "$*" >> "${REPOLENS_FAKE_GH_LOG:-/dev/null}"
-case "$1 $2" in
-  "auth status") exit 0 ;;
-  "label list") printf '[]\n'; exit 0 ;;
-  "label create") exit 0 ;;
-  "issue list") printf '[]\n'; exit 0 ;;
-  "issue create") printf 'https://github.com/example/repo/issues/2040\n'; exit 0 ;;
+command="$1 $2"; shift 2
+case "$command" in
+  'auth status'|'label create') exit 0 ;;
+  'label list') printf '[]\n' ;;
+  'issue list')
+    if [[ "${REPOLENS_MOCK_FILING_DEDUP:-0}" == 1 ]]; then
+      printf '[{"number":204,"title":"[low] Keep deterministic mock finding wired","body":"existing","state":"OPEN","url":"https://github.com/example/repo/issues/204","labels":[]}]\n'
+    else printf '[]\n'; fi ;;
+  'issue create')
+    [[ "${REPOLENS_MOCK_FILING_FAIL:-0}" == 1 ]] && exit 1
+    title='' body_file='' labels='[]'
+    while (( $# )); do
+      case "$1" in
+        --title) title="$2"; shift 2 ;;
+        --body-file) body_file="$2"; shift 2 ;;
+        --label) labels="$(jq -c --arg label "$2" '.+[$label]' <<< "$labels")"; shift 2 ;;
+        -R) shift 2 ;;
+        *) exit 99 ;;
+      esac
+    done
+    jq -n --arg title "$title" --rawfile body "$body_file" --argjson labels "$labels" \
+      '{number:2040,title:$title,body:$body,labels:$labels,state:"OPEN",url:"https://github.com/example/repo/issues/2040"}' > "$REPOLENS_FAKE_GH_LOG.readback"
+    printf 'https://github.com/example/repo/issues/2040\n' ;;
+  'issue view')
+    [[ "${REPOLENS_MOCK_FILING_MISSING:-0}" == 1 ]] && exit 1
+    cat "$REPOLENS_FAKE_GH_LOG.readback" ;;
+  *) exit 99 ;;
 esac
-exit 0
 EOF
 chmod +x "$FAKE_BIN/codex" "$FAKE_BIN/gh" "$SCRIPT_DIR/tests/mock-agent.sh"
 
@@ -273,8 +301,8 @@ manifest="$RUN_LOG_DIR/final/manifest.json"
 assert_file_exists "final manifest.json exists" "$manifest"
 assert_jq "manifest has synthesized finding" "$manifest" 'type == "array" and length >= 1'
 assert_file_exists "filing marker url exists" "$RUN_LOG_DIR/final/filed/mock-round-handoff.url"
-assert_contains "filing marker contains issue URL" "https://example.invalid/issues/mock-round-handoff" "$RUN_LOG_DIR/final/filed/mock-round-handoff.url"
-assert_eq "mock agent handled one filing prompt" "1" "$(grep -c '^filing$' "$MOCK_LOG" 2>/dev/null || printf '0')"
+assert_contains "filing marker contains issue URL" "https://github.com/example/repo/issues/2040" "$RUN_LOG_DIR/final/filed/mock-round-handoff.url"
+assert_eq "governor never dispatches a filing model" "0" "$(grep -c '^filing$' "$MOCK_LOG" 2>/dev/null || true)"
 assert_contains "orchestrator logged filing completion" "Filing: batch complete" "$run_output"
 assert_contains "fake gh auth was checked" "auth status" "$GH_LOG"
 
@@ -302,7 +330,7 @@ assert_eq "verification .failed sentinel exits non-zero" "1" "$run_rc"
 assert_eq "verification failure run id is discoverable" "set" "$([[ -n "$RUN_ID" ]] && printf 'set' || printf 'missing')"
 if [[ -n "$RUN_ID" && -d "$RUN_LOG_DIR" ]]; then
   assert_file_exists "verification failure marker exists" "$RUN_LOG_DIR/final/filed/mock-round-handoff.failed"
-  assert_contains "verification marker records failure" "VERIFICATION_FAILED: mock filing failure" "$RUN_LOG_DIR/final/filed/mock-round-handoff.failed"
+  assert_contains "verification marker records failure" "VERIFICATION_FAILED: forge create failed" "$RUN_LOG_DIR/final/filed/mock-round-handoff.failed"
   assert_contains "verification failure logs incomplete batch" "Filing: incomplete batch (failed=1, dedup=0, missing=0)" "$run_output"
   assert_file_exists "verification failure status exists" "$RUN_LOG_DIR/status.json"
   assert_jq "verification failure status records filing failure" "$RUN_LOG_DIR/status.json" \
@@ -310,12 +338,12 @@ if [[ -n "$RUN_ID" && -d "$RUN_LOG_DIR" ]]; then
 fi
 
 run_bugreport_case "missing" "missing"
-assert_eq "missing filing sentinel exits non-zero" "1" "$run_rc"
-assert_eq "missing sentinel run id is discoverable" "set" "$([[ -n "$RUN_ID" ]] && printf 'set' || printf 'missing')"
+assert_eq "missing provider readback exits non-zero" "1" "$run_rc"
+assert_eq "missing readback run id is discoverable" "set" "$([[ -n "$RUN_ID" ]] && printf 'set' || printf 'missing')"
 if [[ -n "$RUN_ID" && -d "$RUN_LOG_DIR" ]]; then
-  assert_contains "missing sentinel logs incomplete batch" "Filing: incomplete batch (failed=0, dedup=0, missing=1)" "$run_output"
-  assert_file_exists "missing sentinel status exists" "$RUN_LOG_DIR/status.json"
-  assert_jq "missing sentinel status records filing failure" "$RUN_LOG_DIR/status.json" \
+  assert_contains "missing readback logs incomplete batch" "Filing: incomplete batch (failed=1, dedup=0, missing=0)" "$run_output"
+  assert_file_exists "missing readback status exists" "$RUN_LOG_DIR/status.json"
+  assert_jq "missing readback status records filing failure" "$RUN_LOG_DIR/status.json" \
     '.state == "failed" and .stopped_reason == "filing-failed"'
 fi
 

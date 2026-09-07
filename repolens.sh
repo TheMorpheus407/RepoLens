@@ -2825,6 +2825,22 @@ resolve_base_wrapper() {
   fi
 }
 
+# Persist a machine-readable allowlist for ingestion and final publication.
+# git -z preserves whitespace and avoids Git's display-path quoting rules.
+BRANCH_SCOPE_FILE="$LOG_BASE/branch-scope.json"
+if [[ "$MODE" == "branch-review" ]]; then
+  if [[ -z "$BRANCH_MERGE_BASE" || -z "$BRANCH_HEAD_SHA" ]]; then
+    [[ ! -s "$BRANCH_MANIFEST_FILE" && ! -s "$BRANCH_DIFF_FILE" ]] \
+      || die "Branch review scope has missing commit provenance"
+    printf '[]\n' > "$BRANCH_SCOPE_FILE" || die "Unable to persist branch scope"
+  else
+    git -C "$PROJECT_PATH" diff --no-ext-diff --no-renames --name-only -z "$BRANCH_MERGE_BASE" "$BRANCH_HEAD_SHA" \
+      | jq -Rs 'split("\u0000") | map(select(length > 0))' > "$BRANCH_SCOPE_FILE" \
+      || die "Unable to compute branch scope"
+  fi
+fi
+export BRANCH_SCOPE_FILE
+
 # --- Resolve local mode output directory ---
 if $LOCAL_MODE; then
   if [[ -z "$OUTPUT_DIR" ]]; then
@@ -4419,6 +4435,15 @@ run_lens() {
   fi
   [[ -n "$lens_entry" ]] || lens_entry="$lens_tuple"
 
+  # Branch lenses produce files; only the deterministic governor may publish
+  # their filtered findings after the round has finished.
+  local LOCAL_MODE="$LOCAL_MODE"
+  local CURRENT_ROUND_OUTPUT_DIR="${CURRENT_ROUND_OUTPUT_DIR:-}"
+  if [[ "$MODE" == "branch-review" ]] && ! $LOCAL_MODE; then
+    LOCAL_MODE=true
+    CURRENT_ROUND_OUTPUT_DIR="$(round_lens_outputs_dir "$RUN_ID" "${CURRENT_ROUND_INDEX:-1}")"
+  fi
+
   local domain="${lens_entry%%/*}"
   local lens_id="${lens_entry#*/}"
   local lens_file="$LENSES_DIR/$domain/$lens_id.md"
@@ -5045,7 +5070,7 @@ fi
 # Multi-round runs finish by consolidating round findings into a schema-checked
 # manifest under logs/<run-id>/final/manifest.json. Single-round runs keep the
 # legacy direct-filing/local-output behavior.
-if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]]; then
+if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]] || { [[ "$MODE" == "branch-review" ]] && ! $LOCAL_MODE; }; }; then
   log_info "Synthesizer: consolidating multi-round findings"
   if run_synthesizer "$RUN_ID"; then
     log_info "Synthesizer: manifest.json promoted"
@@ -5229,7 +5254,7 @@ fi
 # triage precedent: a failure warns and NEVER flips REPOLENS_FINAL_STATE or
 # RUN_ROUNDS_RC.
 if $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
-  if build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
+  if branch_scope_filter_directory "$OUTPUT_DIR" && build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
     log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
   else
     log_warn "Finding registry: build failed (findings index not produced)"

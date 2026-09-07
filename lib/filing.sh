@@ -13,25 +13,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# RepoLens — filing batch dispatcher (S4).
+# RepoLens — deterministic filing governor and batch dispatcher.
 #
 # Consumes the validated synthesizer manifest at
-# logs/<run-id>/final/manifest.json and fans out one filing agent per cluster
-# in parallel, with per-cluster lock files for idempotent retry. Re-running on
-# a partially-completed batch only fills the gaps.
+# logs/<run-id>/final/manifest.json and fans out one governed publisher per cluster
+# in parallel, with atomic per-cluster reservations and permanent POST-attempt
+# markers. Resume reattests successful results and dispatches unattempted gaps.
 #
 # This module is sourceable; it defines functions only and has no top-level
 # side effects beyond loading shared helpers. It expects lib/parallel.sh,
-# lib/template.sh, lib/core.sh, lib/forge.sh, and lib/logging.sh to be sourced
+# lib/core.sh, lib/forge.sh, and lib/logging.sh to be sourced
 # by the caller.
 #
 # Concurrency contract:
 #   The .lock file guards crash-resume re-entry of a SINGLE dispatcher
 #   process across runs. It is not a flock — its mtime is the freshness
 #   signal, and a stale lock (mtime older than STALE_LOCK_TIMEOUT, default
-#   3600s) is treated as a crashed agent and retaken. Two concurrent
+#   3600s) is eligible for dispatcher recovery. The governor reservation and
+#   .attempted marker independently prevent repeating a POST. Two concurrent
 #   dispatch_filing_batch invocations on the same run_id may race; the
 #   intended invariant is "one dispatcher per run".
+
+# shellcheck source=lib/branch-scope.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/branch-scope.sh"
 
 # _filing_repo_root
 #   Resolves the repository root from this file's location. Used to locate
@@ -78,11 +82,9 @@ _filing_lock_age() {
 # filing_verify_cluster_citations <project_path> <manifest_entry_json>
 #   Deterministic re-verification of every `path:LINE` (or `path:LSTART-LEND`)
 #   citation embedded in a synthesizer manifest entry's `body` field. This is
-#   the executable counterpart of Step 2 in prompts/_base/file-issue.md and is
-#   intended as the last shell-level guardrail before a cluster can reach
-#   `gh issue create`. Filing callbacks (production or test) may call this
-#   helper to decide whether to write a `.url` or a `VERIFICATION_FAILED:`
-#   `.failed` sentinel.
+#   the mandatory shell-level guard before a cluster can reach
+#   a forge mutation. The production governor invokes it unconditionally
+#   before provider calls and before trusting persisted success markers.
 #
 #   Citation grammar (extracted from the manifest entry's `body` string):
 #     - `path:LINE`               (single-line citation)
@@ -133,8 +135,7 @@ filing_verify_cluster_citations() {
   # numeric. Use a temporary while loop with grep -oE so each match is
   # processed independently.
   local citations
-  citations="$(grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+:[0-9]+(-[0-9]+)?' <<<"$body" \
-    | sort -u)"
+  citations="$(repolens_extract_citations "$body")"
 
   if [[ -z "$citations" ]]; then
     printf 'no citations found in body\n'
@@ -158,11 +159,34 @@ filing_verify_cluster_citations() {
       printf '%s invalid line spec\n' "$citation"
       return 1
     fi
+    if (( ${#lstart} > 9 || ${#lend} > 9 )); then
+      printf '%s line number too large\n' "$citation"
+      return 1
+    fi
+    lstart=$((10#$lstart))
+    lend=$((10#$lend))
     if (( lstart < 1 )) || (( lend < lstart )); then
       printf '%s invalid line range\n' "$citation"
       return 1
     fi
 
+    if [[ "$path" == /* || "$path" == .. || "$path" == ../* || "$path" == */../* || "$path" == */.. ]]; then
+      printf '%s path escapes project\n' "$citation"
+      return 1
+    fi
+    # Reject symlink components so a repo-controlled citation cannot read
+    # credentials or unrelated source outside the checked project.
+    local component candidate="$project_path" remainder="$path"
+    while [[ -n "$remainder" ]]; do
+      component="${remainder%%/*}"
+      candidate="$candidate/$component"
+      if [[ -L "$candidate" ]]; then
+        printf '%s symlink citation is not allowed\n' "$citation"
+        return 1
+      fi
+      [[ "$remainder" == */* ]] || break
+      remainder="${remainder#*/}"
+    done
     file_path="$project_path/$path"
     if [[ ! -f "$file_path" ]]; then
       printf '%s file not found\n' "$citation"
@@ -181,10 +205,11 @@ filing_verify_cluster_citations() {
     # Optional snippet check: look for a backtick-quoted snippet attached to
     # this citation on the same logical body line. Use grep on the body so
     # multi-line bodies are searched line-by-line.
-    snippet="$(grep -F "$citation" <<<"$body" \
+    snippet="$(grep -F -- "$citation" <<<"$body" \
       | grep -oE "\`[^\`]+\`" \
-      | head -1 \
-      | sed -e 's/^`//' -e 's/`$//')"
+      | sed -e 's/^`//' -e 's/`$//' \
+      | grep -vE '^.+:[0-9]+(-[0-9]+)?$' \
+      | head -1)"
     if [[ -n "$snippet" ]]; then
       context_start=$(( lstart - 20 ))
       (( context_start < 1 )) && context_start=1
@@ -202,119 +227,132 @@ filing_verify_cluster_citations() {
 }
 
 # _filing_real_agent <run_id> <cluster_id>
-#   Default per-cluster filing callback: composes the file-issue.md prompt
-#   for the cluster and invokes the active agent. The agent owns the
-#   .url/.failed transition; this callback only cleans up the .lock once
-#   one of the terminal markers exists.
-#
-#   Required globals: AGENT, PROJECT_PATH.
-#   Optional globals: REPO_OWNER, REPO_NAME, FORGE_REPO.
+# Kept as the dispatcher callback name for compatibility. Filing is now a
+# deterministic governor: no model, prompt, shell evaluation, or model-owned
+# sentinels participate in this credential-bearing phase.
 _filing_real_agent() {
-  local run_id="$1" cluster_id="$2"
-  local repo_root log_base manifest filed_dir
-  repo_root="$(_filing_repo_root)"
+  local run_id="$1" cluster_id="$2" log_base entry reason repo title body_file
+  local open_issues duplicate created_url number readback label
   log_base="$(_filing_log_base "$run_id")"
-  manifest="$log_base/final/manifest.json"
-  filed_dir="$log_base/final/filed"
-
-  local file_issue_template="$repo_root/prompts/_base/file-issue.md"
-  if [[ ! -f "$file_issue_template" ]]; then
-    echo "_filing_real_agent: file-issue template missing: $file_issue_template" >&2
-    return 1
-  fi
-
-  local agent="${AGENT:-}"
-  local project_path="${PROJECT_PATH:-}"
-  if [[ -z "$agent" ]]; then
-    echo "_filing_real_agent: AGENT is not set" >&2
-    return 1
-  fi
-  if [[ -z "$project_path" || ! -d "$project_path" ]]; then
-    echo "_filing_real_agent: PROJECT_PATH must be a directory: $project_path" >&2
-    return 1
-  fi
-
-  if ! declare -F compose_prompt >/dev/null 2>&1; then
-    echo "_filing_real_agent: compose_prompt unavailable (source lib/template.sh)" >&2
-    return 1
-  fi
-  if ! declare -F run_agent >/dev/null 2>&1; then
-    echo "_filing_real_agent: run_agent unavailable (source lib/core.sh)" >&2
-    return 1
-  fi
-
-  local entry source_findings
-  entry="$(jq -c --arg cid "$cluster_id" \
-    '.[] | select(.cluster_id == $cid)' "$manifest" 2>/dev/null)"
-  if [[ -z "$entry" ]]; then
-    echo "_filing_real_agent: cluster $cluster_id not found in manifest" >&2
-    return 1
-  fi
-  source_findings="$(jq -r --arg cid "$cluster_id" \
-    '.[] | select(.cluster_id == $cid) | .source_finding_paths[]' \
-    "$manifest" 2>/dev/null)"
-
-  local repo_owner="${REPO_OWNER:-}"
-  local repo_name="${REPO_NAME:-}"
-  local forge_repo="${FORGE_REPO:-}"
-  if [[ -z "$forge_repo" && -n "$repo_owner" && -n "$repo_name" ]]; then
-    forge_repo="$repo_owner/$repo_name"
-  fi
-
-  local forge_issue_create=""
-  local forge_label_create=""
-  local forge_issue_list_open=""
-  if declare -F forge_prompt_issue_create >/dev/null 2>&1; then
-    forge_issue_create="$(forge_prompt_issue_create "<lens-label>" "$forge_repo" "$project_path")"
-  fi
-  if declare -F forge_prompt_label_create >/dev/null 2>&1; then
-    forge_label_create="$(forge_prompt_label_create "<label>" "ededed" "$forge_repo" "$project_path")"
-  fi
-  if declare -F forge_prompt_issue_list >/dev/null 2>&1; then
-    forge_issue_list_open="$(forge_prompt_issue_list "open" "$forge_repo" "$project_path")"
-  fi
-
-  # Escape any literal '|' in values that flow through the pipe-delimited
-  # vars_string transport accepted by compose_prompt.
-  local entry_esc="${entry//\\/\\\\}"
-  entry_esc="${entry_esc//|/\\|}"
-  local source_findings_esc="${source_findings//\\/\\\\}"
-  source_findings_esc="${source_findings_esc//|/\\|}"
-  local forge_issue_create_esc="${forge_issue_create//\\/\\\\}"
-  forge_issue_create_esc="${forge_issue_create_esc//|/\\|}"
-  local forge_label_create_esc="${forge_label_create//\\/\\\\}"
-  forge_label_create_esc="${forge_label_create_esc//|/\\|}"
-  local forge_issue_list_open_esc="${forge_issue_list_open//\\/\\\\}"
-  forge_issue_list_open_esc="${forge_issue_list_open_esc//|/\\|}"
-  local filed_dir_esc="${filed_dir//\\/\\\\}"
-  filed_dir_esc="${filed_dir_esc//|/\\|}"
-
-  local vars
-  vars="RUN_ID=$run_id"
-  vars+="|CLUSTER_ID=$cluster_id"
-  vars+="|REPO_OWNER=$repo_owner"
-  vars+="|REPO_NAME=$repo_name"
-  vars+="|PROJECT_PATH=$project_path"
-  vars+="|CLUSTER_MANIFEST_ENTRY=$entry_esc"
-  vars+="|SOURCE_FINDINGS=$source_findings_esc"
-  vars+="|FILED_DIR=$filed_dir_esc"
-  vars+="|FORGE_ISSUE_CREATE=$forge_issue_create_esc"
-  vars+="|FORGE_LABEL_CREATE=$forge_label_create_esc"
-  vars+="|FORGE_ISSUE_LIST_OPEN=$forge_issue_list_open_esc"
-
-  local prompt_text
-  prompt_text="$(compose_prompt "$file_issue_template" "$file_issue_template" "$vars")" || {
-    echo "_filing_real_agent: prompt composition failed for $cluster_id" >&2
-    return 1
-  }
-
-  run_agent "$agent" "$prompt_text" "$project_path" >/dev/null || true
-
-  if [[ -e "$filed_dir/$cluster_id.url" || -e "$filed_dir/$cluster_id.failed" ]]; then
-    rm -f "$filed_dir/$cluster_id.lock"
+  local filed_dir="$log_base/final/filed"
+  [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || return 1
+  mkdir -p "$filed_dir" || return 1
+  # An atomic per-cluster directory protects direct callers and dispatchers
+  # racing on an expired legacy .lock marker. A crash leaves this reservation
+  # for operator reconciliation, never an automatic repeat of a possible POST.
+  mkdir "$filed_dir/$cluster_id.governor" 2>/dev/null || return 1
+  if [[ ! -e "$filed_dir/$cluster_id.url" ]] && [[ -e "$filed_dir/$cluster_id.failed" || -e "$filed_dir/$cluster_id.attempted" ]]; then
+    rmdir "$filed_dir/$cluster_id.governor"
     return 0
   fi
-  return 1
+
+  entry="$(jq -ce --arg cid "$cluster_id" '
+    [.[] | select(.cluster_id == $cid)] | select(length == 1) | .[0]
+    | select((.title | type == "string" and length > 0 and (test("[[:cntrl:]]") | not))
+      and (.body | type == "string" and length > 0 and (contains("\u0000") | not))
+      and (.proposed_labels | type == "array")
+      and all(.proposed_labels[]; type == "string" and length > 0 and (test("[[:cntrl:]]") | not))
+      and (.dedup_against_existing | type == "array")
+      and all(.dedup_against_existing[]; (.issue_number | type == "number" and . > 0 and . == floor)))
+  ' "$log_base/final/manifest.json" 2>/dev/null)" || {
+    _filing_fail "$filed_dir" "$cluster_id" 'invalid or ambiguous manifest entry'
+    return 1
+  }
+  if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$entry")"; then
+    _filing_fail "$filed_dir" "$cluster_id" "$reason"
+    return 1
+  fi
+  if ! reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$entry")")"; then
+    _filing_fail "$filed_dir" "$cluster_id" "$reason"
+    return 1
+  fi
+  repo="${FORGE_REPO:-${REPO_OWNER:-}/${REPO_NAME:-}}"
+  if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$ ]] \
+      || ! forge_filing_capable create; then
+    _filing_fail "$filed_dir" "$cluster_id" 'forge target or structured filing adapter unavailable'
+    return 1
+  fi
+  if [[ -e "$filed_dir/$cluster_id.url" ]]; then
+    created_url="$(cat "$filed_dir/$cluster_id.url")"
+    if [[ -L "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.request.json" ]] \
+        || ! jq -e --argjson entry "$entry" '. == $entry' "$filed_dir/$cluster_id.request.json" >/dev/null 2>&1 \
+        || ! number="$(forge_issue_number_from_url "$repo" "$created_url")" \
+        || ! readback="$(forge_issue_read_json "$repo" "$number")" \
+        || ! _filing_readback_matches "$entry" "$created_url" "$number" "$readback"; then
+      _filing_fail "$filed_dir" "$cluster_id" 'unattested or stale success marker; reconcile remote state before retry'
+      return 1
+    fi
+    printf '%s\n' "$readback" > "$filed_dir/$cluster_id.readback.json"
+    rmdir "$filed_dir/$cluster_id.governor"
+    return 0
+  fi
+  title="$(jq -r '.title' <<< "$entry")"
+  if ! open_issues="$(forge_issue_list_json "$repo" open)"; then
+    _filing_fail "$filed_dir" "$cluster_id" 'fresh dedup query failed'
+    return 1
+  fi
+  duplicate="$(jq -r --arg title "$title" --argjson entry "$entry" '
+    [.[] | select(.state == "open") | select(.title == $title or (.number as $n | any($entry.dedup_against_existing[]; .issue_number == $n)))]
+    | .[0].number // empty' <<< "$open_issues")"
+  if [[ -n "$duplicate" ]]; then
+    printf 'DEDUP_HIT: #%s\n' "$duplicate" > "$filed_dir/$cluster_id.failed"
+    rm -f "$filed_dir/$cluster_id.lock"
+    rmdir "$filed_dir/$cluster_id.governor"
+    return 0
+  fi
+  body_file="$filed_dir/$cluster_id.governor/body.md"
+  # The exact checked body is the exact payload. There is no rewriting agent
+  # between verification and POST. Save the request and response for recovery.
+  printf '%s\n' "$entry" > "$filed_dir/$cluster_id.request.json" || return 1
+  jq -jr '.body' <<< "$entry" > "$body_file" || return 1
+  local -a labels=()
+  while IFS= read -r label; do labels+=("$label"); done < <(jq -r '.proposed_labels[]' <<< "$entry")
+  for label in "${labels[@]}"; do
+    if [[ "${FORGE_PROVIDER:-}" == gh ]]; then
+      GH_HOST="$(_forge_gh_filing_host)" forge_label_create "$label" ededed "$repo" >> "$filed_dir/$cluster_id.log" 2>&1 || true
+    else
+      forge_label_create "$label" ededed "$repo" >> "$filed_dir/$cluster_id.log" 2>&1 || true
+    fi
+  done
+  # Mark the attempt BEFORE the call; ambiguous transport failures are terminal.
+  : > "$filed_dir/$cluster_id.attempted" || return 1
+  if ! created_url="$(forge_issue_create_once "$repo" "$title" "$body_file" "${labels[@]}" 2>> "$filed_dir/$cluster_id.log")"; then
+    _filing_fail "$filed_dir" "$cluster_id" 'forge create failed; reconcile remote state before retry'
+    return 1
+  fi
+  printf '%s\n' "$created_url" > "$filed_dir/$cluster_id.created-response"
+  if ! number="$(forge_issue_number_from_url "$repo" "$created_url")" \
+      || ! readback="$(forge_issue_read_json "$repo" "$number")"; then
+    _filing_fail "$filed_dir" "$cluster_id" 'forge readback failed; reconcile created-response before retry'
+    return 1
+  fi
+  printf '%s\n' "$readback" > "$filed_dir/$cluster_id.readback.json"
+  if ! _filing_readback_matches "$entry" "$created_url" "$number" "$readback"; then
+    _filing_fail "$filed_dir" "$cluster_id" 'forge readback does not match approved request'
+    return 1
+  fi
+  printf '%s\n' "$created_url" > "$filed_dir/$cluster_id.url" || return 1
+  rm -f "$filed_dir/$cluster_id.lock" "$body_file"
+  rmdir "$filed_dir/$cluster_id.governor"
+}
+
+_filing_readback_matches() {
+  jq -e --argjson entry "$1" --arg url "$2" --argjson number "$3" '
+    .url == $url and .number == $number and .title == $entry.title
+    and .body == $entry.body and .state == "open"
+    and (($entry.proposed_labels - .labels) | length == 0)
+  ' <<< "$4" >/dev/null
+}
+
+_filing_fail() {
+  local filed_dir="$1" cluster_id="$2" reason="$3"
+  if [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
+    mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url"
+    : > "$filed_dir/$cluster_id.attempted"
+  fi
+  printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$filed_dir/$cluster_id.failed"
+  rm -f "$filed_dir/$cluster_id.lock" "$filed_dir/$cluster_id.governor/body.md"
+  rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
 }
 
 # _filing_cross_link_enact <run_id>
@@ -372,7 +410,7 @@ _filing_cross_link_enact() {
       | .value.cluster_id as $cid
       | (.value.cross_link_actions // [])
       | to_entries[]
-      | [$cid, .key, .value.type, (.value.issue_number | tostring), .value.body]
+      | [$cid, .key, .value.type, (.value.issue_number | tostring), (.value.body | tojson | @base64)]
       | @tsv
     ' "$manifest" 2>/dev/null)" || manifest_tuples=""
   fi
@@ -392,7 +430,7 @@ _filing_cross_link_enact() {
       | (($action.source_finding_paths // []) | length) as $path_count
       | ([($action.source_finding_paths // [])[] | . as $path | select(($wrong_only | index($path)) != null)] | length) as $wrong_count
       | select(($path_count == 0) or ($wrong_count != $path_count))
-      | [.value.cluster_id, .key, .value.type, (.value.issue_number | tostring), .value.body]
+      | [.value.cluster_id, .key, .value.type, (.value.issue_number | tostring), (.value.body | tojson | @base64)]
       | @tsv
     ' "$preserved_actions" 2>/dev/null)" || preserved_tuples=""
   fi
@@ -415,17 +453,27 @@ _filing_cross_link_enact() {
   local -A seen=()
 
   local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc
+  local evidence reason target response readback title new_number reconcile_done body_json
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
-    [[ -n "$action_type" && -n "$issue_number" ]] || continue
+    [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || continue
+    [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || continue
+    case "${CROSS_LINK_MODE:-off}:$action_type" in
+      comment:comment|suggest-reopen:comment|suggest-reopen:reopen-suggestion) ;;
+      *) continue ;;
+    esac
 
-    # JSON-escaped \n is literal in TSV; restore newlines and the few JSON
-    # escape sequences likely to appear in agent-emitted bodies. This is a
-    # best-effort restoration — the manifest validator already enforces that
-    # body is a non-empty string, so we trust the structure.
-    body="${body//\\n/$'\n'}"
-    body="${body//\\t/$'\t'}"
-    body="${body//\\\"/\"}"
-    body="${body//\\\\/\\}"
+    # Transport the body as base64-encoded JSON so TSV cannot reinterpret
+    # backslashes, tabs, CR, or trailing newlines. Decode to a JSON string;
+    # only the citation scan uses Bash text, while the payload stays exact.
+    if ! body_json="$(jq -en --arg encoded "$body" '$encoded | @base64d | fromjson | select(type == "string" and length > 0 and (contains("\u0000") | not))')"; then
+      printf 'VERIFICATION_FAILED: invalid cross-link body\n' > "$cross_dir/$action_type-$issue_number.failed"
+      if [[ -e "$cross_dir/$action_type-$issue_number.done" ]]; then
+        mv "$cross_dir/$action_type-$issue_number.done" "$cross_dir/$action_type-$issue_number.unverified-done"
+        : > "$cross_dir/$action_type-$issue_number.attempted"
+      fi
+      continue
+    fi
+    body="$(jq -r . <<< "$body_json")"
 
     key="${action_type}-${issue_number}"
     if [[ -n "${seen[$key]:-}" ]]; then
@@ -435,7 +483,12 @@ _filing_cross_link_enact() {
 
     sentinel_done="$cross_dir/$key.done"
     sentinel_failed="$cross_dir/$key.failed"
-    if [[ -e "$sentinel_done" || -e "$sentinel_failed" ]]; then
+    reconcile_done=0
+    if [[ -e "$sentinel_done" ]]; then
+      mv "$sentinel_done" "$cross_dir/$key.unverified-done" || continue
+      : > "$cross_dir/$key.attempted"
+      reconcile_done=1
+    elif [[ -e "$sentinel_failed" || -e "$cross_dir/$key.attempted" ]]; then
       continue
     fi
 
@@ -447,8 +500,42 @@ _filing_cross_link_enact() {
       continue
     fi
 
+    # Comments and reopen suggestions are governed actions too. Require live
+    # parent evidence (or self-contained preserved-action citations), a valid
+    # target state, and a backend with structured result readback.
+    evidence="$(jq -c --arg cid "$cluster_id" '[.[] | select(.cluster_id == $cid)] | .[0] // empty' "$manifest" 2>/dev/null)"
+    if [[ -z "$evidence" && -f "$preserved_actions" ]]; then
+      evidence="$(jq -c --arg cid "$cluster_id" '[.[] | select(.cluster_id == $cid and (.evidence_body | type == "string"))] | .[0] | select(. != null) | {body:.evidence_body}' "$preserved_actions" 2>/dev/null)"
+    fi
+    [[ -n "$evidence" ]] || evidence="$(jq -cn --arg body "$body" '{body:$body}')"
+    reason=""
+    if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$evidence")" \
+        || ! reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$evidence")")"; then
+      printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$sentinel_failed"
+      continue
+    fi
+    if [[ ! "$forge_repo" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$ ]] \
+        || ! forge_filing_capable "$([[ "$action_type" == comment ]] && printf comment || printf create)" \
+        || ! target="$(forge_issue_read_json "$forge_repo" "$issue_number")" \
+        || ! jq -e --arg type "$action_type" 'if $type == "comment" then .state == "open" else .state == "closed" end' <<< "$target" >/dev/null; then
+      printf 'VERIFICATION_FAILED: cross-link target or adapter unavailable\n' > "$sentinel_failed"
+      continue
+    fi
+    # Newly introduced citations in the action itself must also verify.
+    if [[ -n "$(repolens_extract_citations "$body")" ]]; then
+      if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" \
+          || ! reason="$(branch_scope_verify_body "$body")"; then
+        printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$sentinel_failed"
+        continue
+      fi
+    fi
+    # Atomic permanent reservation: failures/crashes require reconciliation.
+    if (( ! reconcile_done )); then
+      ( set -o noclobber; : > "$cross_dir/$key.attempted" ) 2>/dev/null || continue
+    fi
+
     body_file="$cross_dir/$key.body.md"
-    printf '%s\n' "$body" > "$body_file" || {
+    jq -jr . <<< "$body_json" > "$body_file" || {
       echo "_filing_cross_link_enact: cannot write body file for $key" >&2
       continue
     }
@@ -459,9 +546,17 @@ _filing_cross_link_enact() {
         if [[ -z "$forge_repo" ]]; then
           echo "_filing_cross_link_enact: FORGE_REPO unset; skipping comment on #$issue_number" >&2
           rc=1
-        elif declare -F forge_issue_comment >/dev/null 2>&1; then
-          forge_issue_comment "$forge_repo" "$issue_number" "$body_file" \
-            >>"$cross_dir/$key.log" 2>&1 || rc=$?
+        elif declare -F forge_issue_comment_once >/dev/null 2>&1; then
+          if (( reconcile_done )); then
+            response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
+          else
+            response="$(forge_issue_comment_once "$forge_repo" "$issue_number" "$body_file" 2>>"$cross_dir/$key.log")" || rc=$?
+            printf '%s\n' "$response" > "$cross_dir/$key.created-response"
+          fi
+          if (( rc == 0 )); then
+            readback="$(forge_issue_comment_read_json "$forge_repo" "$issue_number" "$response")" || rc=$?
+            jq -e --rawfile body "$body_file" --arg url "$response" '.body == $body and .url == $url' <<< "$readback" >/dev/null || rc=1
+          fi
         else
           echo "_filing_cross_link_enact: forge_issue_comment unavailable" >&2
           rc=1
@@ -471,8 +566,8 @@ _filing_cross_link_enact() {
         if [[ -z "$forge_repo" ]]; then
           echo "_filing_cross_link_enact: FORGE_REPO unset; skipping reopen-suggestion for #$issue_number" >&2
           rc=1
-        elif declare -F forge_issue_create >/dev/null 2>&1; then
-          local title="[reopen-candidate] consider re-opening #$issue_number"
+        elif declare -F forge_issue_create_once >/dev/null 2>&1; then
+          title="[reopen-candidate] consider re-opening #$issue_number"
           # Prepend a banner so reviewers can see this is a RepoLens-emitted
           # reopen suggestion with the source closed issue called out
           # explicitly in the body.
@@ -483,8 +578,18 @@ _filing_cross_link_enact() {
             cat "$body_file"
             printf '\n\nLabel suggestion: `%s`\n' "$reopen_label"
           } > "$banner_file"
-          forge_issue_create "$forge_repo" "$title" "$banner_file" \
-            >>"$cross_dir/$key.log" 2>&1 || rc=$?
+          if (( reconcile_done )); then
+            response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
+          else
+            response="$(forge_issue_create_once "$forge_repo" "$title" "$banner_file" 2>>"$cross_dir/$key.log")" || rc=$?
+            printf '%s\n' "$response" > "$cross_dir/$key.created-response"
+          fi
+          if (( rc == 0 )); then
+            new_number="$(forge_issue_number_from_url "$forge_repo" "$response")" || rc=$?
+            readback="$(forge_issue_read_json "$forge_repo" "$new_number")" || rc=$?
+            jq -e --arg title "$title" --rawfile body "$banner_file" --arg url "$response" \
+              '.title == $title and .body == $body and .url == $url and .state == "open"' <<< "$readback" >/dev/null || rc=1
+          fi
         else
           echo "_filing_cross_link_enact: forge_issue_create unavailable" >&2
           rc=1
@@ -497,6 +602,7 @@ _filing_cross_link_enact() {
     esac
 
     if (( rc == 0 )); then
+      rm -f "$cross_dir/$key.unverified-done"
       : > "$sentinel_done"
     else
       printf 'rc=%d action=%s issue=%s\n' "$rc" "$action_type" "$issue_number" \
@@ -510,10 +616,8 @@ _filing_cross_link_enact() {
 
 # dispatch_filing_batch <run_id>
 #   Consumes logs/<run-id>/final/manifest.json and fans out one filing
-#   agent per cluster, in parallel, with per-cluster lock files for
-#   idempotent retry. The dispatcher only writes .lock; the filing agent
-#   (driven by prompts/_base/file-issue.md) owns the .url/.failed
-#   transition.
+#   governor per cluster, in parallel. The deterministic governor owns .url/.failed transitions;
+#   .attempted and atomic reservations prevent repeating ambiguous POSTs.
 #
 #   Per-cluster state machine for each manifest entry:
 #     1. .url present                            -> SKIP (Skipped-existing)
@@ -578,6 +682,12 @@ dispatch_filing_batch() {
     return 1
   fi
 
+  if ! jq -e 'all(.[]; (.cluster_id | type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9_.:-]*$")))
+    and (([.[].cluster_id] | unique | length) == length)' "$manifest" >/dev/null 2>&1; then
+    echo "dispatch_filing_batch: invalid or duplicate cluster ids" >&2
+    return 1
+  fi
+
   local entry_count
   entry_count="$(jq 'length' "$manifest")"
   if (( entry_count == 0 )); then
@@ -610,12 +720,17 @@ dispatch_filing_batch() {
   local age
 
   for cid in "${cluster_ids[@]}"; do
+    if [[ -e "$filed_dir/$cid.url" && "${_FILING_AGENT_CALLBACK:-_filing_real_agent}" == _filing_real_agent ]]; then
+      _filing_real_agent "$run_id" "$cid" >/dev/null 2>&1 || {
+        _filing_fail "$filed_dir" "$cid" 'success marker could not be reconciled'
+      }
+    fi
     if [[ -e "$filed_dir/$cid.url" ]]; then
       pre_existing_url["$cid"]=1
       skipped_existing=$((skipped_existing + 1))
       continue
     fi
-    if [[ -e "$filed_dir/$cid.failed" ]]; then
+    if [[ -e "$filed_dir/$cid.failed" || -e "$filed_dir/$cid.attempted" ]]; then
       # Terminal failure state. Do not retry within this dispatcher
       # invocation; operator must rm the .failed marker to retry.
       continue

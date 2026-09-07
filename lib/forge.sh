@@ -1738,3 +1738,176 @@ _forge_warn() {
     printf '[WARN] %s\n' "$*" >&2
   fi
 }
+
+# Typed filing adapters. The governor owns policy; these helpers accept only
+# explicit arguments, never commands or URLs supplied by model text.
+forge_filing_capable() {
+  case "${FORGE_PROVIDER:-}:${1:-create}" in
+    gh:create|gh:comment) _forge_gh_filing_host >/dev/null ;;
+    tea:create|glab:create) return 0 ;;
+    *) _forge_warn "Structured filing/readback is unavailable for ${FORGE_PROVIDER:-unset} (${1:-create}); use --local"; return 1 ;;
+  esac
+}
+
+_forge_normalize_issues_json() {
+  jq -ce '
+    def labels:
+      if type == "array" then map(if type == "object" then .name else . end)
+      else error("invalid labels") end;
+    if type != "array" then error("expected issue array") else . end
+    | map({number: ((.number // .index) | tonumber), title: .title,
+        body: .body, state: (.state | ascii_downcase),
+        url: (.html_url // .url), labels: (.labels | labels)})
+    | if all(.[]; (.number | type == "number" and . > 0 and . == floor)
+        and (.title | type == "string") and (.body | type == "string")
+        and (.state == "open" or .state == "closed")
+        and (.url | type == "string" and length > 0)
+        and all(.labels[]; type == "string"))
+      then . else error("invalid issue readback") end'
+}
+
+# Returns the complete canonical array, or fails closed if the CLI reaches its
+# bounded result limit (the list might be truncated). No failure becomes [].
+forge_issue_list_json() {
+  local repo="$1" state="${2:-open}" output
+  [[ "$state" == open || "$state" == closed || "$state" == all ]] || return 1
+  case "${FORGE_PROVIDER:-}" in
+    gh)
+      output="$(_forge_gh_filing issue list -R "$repo" --state "$state" --limit 1000 \
+        --json number,title,body,state,url,labels)" || return 1 ;;
+    tea)
+      output="$(_forge_tea_api_pages "$repo" "repos/$repo/issues?state=$state&type=issues")" || return 1 ;;
+    glab) _forge_glab_issue_list_json "$repo" "$state"; return $? ;;
+    *) forge_filing_capable create >&2; return 1 ;;
+  esac
+  output="$(_forge_normalize_issues_json <<< "$output")" || return 1
+  jq -e --arg state "$state" '$state == "all" or all(.[]; .state == $state)' <<< "$output" >/dev/null || return 1
+  [[ "$(jq 'length' <<< "$output")" -lt 1000 ]] || {
+    _forge_warn 'Structured filing issue list reached 1000 results; refusing an incomplete dedup check'
+    return 1
+  }
+  printf '%s\n' "$output"
+}
+
+forge_issue_read_json() {
+  local repo="$1" number="$2" output
+  [[ "$number" =~ ^[1-9][0-9]*$ ]] || return 1
+  case "${FORGE_PROVIDER:-}" in
+    gh)
+      output="$(_forge_gh_filing issue view "$number" -R "$repo" --json number,title,body,state,url,labels)" || return 1
+      output="$(jq -c '[.]' <<< "$output" | _forge_normalize_issues_json)" || return 1 ;;
+    tea)
+      output="$(_forge_tea_api "$repo" "repos/$repo/issues/$number")" || return 1
+      output="$(jq -c '[.]' <<< "$output" | _forge_normalize_issues_json)" || return 1 ;;
+    glab) _forge_glab_issue_read_json "$repo" "$number"; return $? ;;
+    *) return 1 ;;
+  esac
+  jq -ce --argjson number "$number" '[.[] | select(.number == $number)] | select(length == 1) | .[0]' <<< "$output"
+}
+
+# Parse an issue URL only after binding it to the configured host and repo.
+# This URL is never passed to the CLI as an arbitrary request destination.
+forge_issue_number_from_url() {
+  local repo="$1" url="$2" host="${FORGE_HOST:-}" prefix number
+  [[ -n "$host" ]] || { [[ "${FORGE_PROVIDER:-}" == gh ]] && host=github.com; }
+  host="${host#https://}"
+  host="${host%/}"
+  [[ -n "$host" && "$host" != http:* && "$host" != *'@'* && "$host" != *'?'* && "$host" != *'#'* ]] || return 1
+  prefix="https://$host/$repo/issues/"
+  [[ "${FORGE_PROVIDER:-}" == glab ]] && prefix="https://$host/$repo/-/issues/"
+  [[ "$url" == "$prefix"* ]] || return 1
+  number="${url#"$prefix"}"
+  [[ "$number" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$number"
+}
+
+# Exactly one create request. In particular the legacy GitHub retry/dedup
+# wrapper must not be used for governed publication after an ambiguous POST.
+forge_issue_create_once() {
+  local repo="$1" title="$2" body_file="$3"
+  shift 3
+  case "${FORGE_PROVIDER:-}" in
+    gh)
+      local -a argv=(issue create -R "$repo" --title "$title" --body-file "$body_file")
+      local label
+      for label in "$@"; do argv+=(--label "$label"); done
+      _forge_gh_filing "${argv[@]}" ;;
+    tea) _forge_tea_issue_create_once "$repo" "$title" "$body_file" "$@" ;;
+    glab) _forge_glab_issue_create_once "$repo" "$title" "$body_file" "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+forge_issue_comment_once() {
+  [[ "${FORGE_PROVIDER:-}" == gh ]] || return 1
+  _forge_gh_filing issue comment "$2" -R "$1" --body-file "$3"
+}
+
+# The caller supplies the create-response URL as an equality selector only.
+forge_issue_comment_read_json() {
+  local repo="$1" number="$2" url="$3" output
+  [[ "${FORGE_PROVIDER:-}" == gh && "$number" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$url" == "https://$(_forge_gh_filing_host)/$repo/issues/$number#issuecomment-"* ]] || return 1
+  output="$(_forge_gh_filing issue view "$number" -R "$repo" --json comments)" || return 1
+  jq -ce --arg url "$url" '[.comments[] | select(.url == $url)] | select(length == 1) | .[0] | {url,body}' <<< "$output"
+}
+
+# tea's human issue-create output and flattened label column cannot establish
+# exact result integrity. Use its documented authenticated API interface; older
+# tea versions without `api` fail before any create request.
+_forge_tea_api() {
+  local repo="$1" endpoint="$2"
+  shift 2
+  local -a target=()
+  if [[ -n "${FORGE_PROJECT_PATH:-}" ]]; then
+    target=(--repo "$FORGE_PROJECT_PATH" --remote "${FORGE_REMOTE_NAME:-origin}")
+  elif [[ -n "${FORGE_TEA_LOGIN:-}" ]]; then
+    target=(--repo "$repo" --login "$FORGE_TEA_LOGIN")
+  else return 1; fi
+  tea api "${target[@]}" "$@" "$endpoint"
+}
+
+_forge_tea_api_pages() {
+  local repo="$1" endpoint="$2" separator='?' page output accumulated='[]'
+  [[ "$endpoint" == *'?'* ]] && separator='&'
+  for (( page=1; page<=100; page++ )); do
+    output="$(_forge_tea_api "$repo" "${endpoint}${separator}limit=50&page=$page")" || return 1
+    jq -e 'type == "array"' <<< "$output" >/dev/null || return 1
+    if [[ "$(jq length <<< "$output")" == 0 ]]; then
+      printf '%s\n' "$accumulated"
+      return 0
+    fi
+    accumulated="$(jq -cn --argjson old "$accumulated" --argjson page "$output" '$old+$page')" || return 1
+  done
+  _forge_warn 'tea API pagination limit reached; refusing incomplete response'
+  return 1
+}
+
+_forge_tea_issue_create_once() {
+  local repo="$1" title="$2" body_file="$3" available label id output payload ids='[]'
+  shift 3
+  if (( $# > 0 )); then
+    available="$(_forge_tea_api_pages "$repo" "repos/$repo/labels")" || return 1
+    for label in "$@"; do
+      id="$(jq -ce --arg name "$label" '[.[] | select(.name == $name)] | select(length == 1) | .[0].id | select(type == "number" and . > 0 and . == floor)' <<< "$available")" || return 1
+      ids="$(jq -c --argjson id "$id" '. + [$id]' <<< "$ids")" || return 1
+    done
+  fi
+  payload="$(jq -cn --arg title "$title" --rawfile body "$body_file" --argjson labels "$ids" '{title:$title,body:$body,labels:$labels}')" || return 1
+  output="$(_forge_tea_api "$repo" "repos/$repo/issues" --method POST --data @- <<< "$payload")" || return 1
+  jq -er '.html_url | select(type == "string" and length > 0)' <<< "$output"
+}
+
+_forge_gh_filing_host() {
+  local host="${FORGE_HOST:-github.com}"
+  host="${host#https://}"
+  host="${host%/}"
+  [[ "$host" =~ ^[A-Za-z0-9_.-]+(:[0-9]+)?$ ]] || return 1
+  printf '%s\n' "$host"
+}
+
+_forge_gh_filing() {
+  local host
+  host="$(_forge_gh_filing_host)" || return 1
+  GH_HOST="$host" gh "$@"
+}

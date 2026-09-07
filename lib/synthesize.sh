@@ -25,6 +25,9 @@ if ! declare -F severity_normalize >/dev/null 2>&1; then
   unset _synthesize_core_lib
 fi
 
+# shellcheck source=lib/branch-scope.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/branch-scope.sh"
+
 # _synthesize_repo_root
 #   Resolves the repository root from this file's location. Used to locate
 #   prompts/_base/synthesize.md and to compute default LOG_BASE values when
@@ -329,7 +332,7 @@ _synthesize_filter_manifest_min_severity() {
       | $entry.cluster_id as $cid
       | ($entry.cross_link_actions // [])[]
       | select(.type == "comment")
-      | { cluster_id: $cid, source_finding_paths: ($entry.source_finding_paths // []), type, issue_number, body }
+      | { cluster_id: $cid, source_finding_paths: ($entry.source_finding_paths // []), evidence_body: $entry.body, type, issue_number, body }
     ]
   ' "$manifest" > "$preserved_tmp"; then
     rm -f "$tmp" "$preserved_tmp"
@@ -1096,6 +1099,12 @@ run_synthesizer() {
   rm -f "$final_dir/manifest.json"
   rm -f "$final_dir/cross-link-actions.preserved.json"
 
+  local scope_output_dir
+  for scope_output_dir in "$rounds_dir"/round-*/lens-outputs; do
+    [[ -d "$scope_output_dir" ]] || continue
+    branch_scope_filter_directory "$scope_output_dir" || return 1
+  done
+
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
     total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*' -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
@@ -1161,6 +1170,10 @@ run_synthesizer() {
     echo "run_synthesizer: prompt composition failed" >&2
     return 1
   }
+
+  if [[ "${REPOLENS_MODE:-${MODE:-}}" == "branch-review" ]]; then
+    prompt_text+=$'\n\nBranch-review contract: retain the original regression Summary, Introduced By, Before / After, Impact, Complexity, Recommended Fix, References, and Validation sections. Preserve regression labels and source evidence. Only changed-file findings surviving the mechanical scope filter are eligible. Propose data only; the deterministic governor performs remote publication.'
+  fi
 
   local transcript_path="$final_dir/synthesizer-output.txt"
   local envelope_path="$transcript_path.envelope.json"
@@ -1247,6 +1260,11 @@ run_synthesizer() {
     rm -f "$candidate"
     rm -f "$final_dir/manifest.json"
     rm -f "$final_dir/cross-link-actions.preserved.json"
+    return 5
+  fi
+
+  if ! branch_scope_filter_manifest "$candidate"; then
+    rm -f "$candidate"
     return 5
   fi
 

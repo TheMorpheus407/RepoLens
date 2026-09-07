@@ -226,6 +226,8 @@ The wrapper API that runtime code calls is:
 - `forge_label_create <label> <color> <owner/repo>` - creates labels best-effort/idempotently for the active provider
 - `forge_issue_list_count <owner/repo> <label>` - returns the number of open issues for a label and exits non-zero with empty stdout when the provider query fails
 
+The synthesized filing governor uses a stricter typed API: `forge_issue_list_json`, `forge_issue_read_json`, `forge_issue_create_once`, `forge_issue_comment_once`, and `forge_issue_comment_read_json`. Lists and reads return canonical JSON (`number`, `title`, `body`, `state`, `url`, `labels`); errors must not become empty success responses. Mutation helpers never retry an ambiguous POST. `forge_filing_capable` must fail before mutation when exact readback is unsupported. Bind every request to the configured provider host and repository, and test both provider failures and mismatched readbacks.
+
 Adjacent prompt helpers in the same file render provider-specific commands for agents: `forge_prompt_issue_create`, `forge_prompt_label_create`, and `forge_prompt_issue_list`.
 
 ### Adding a New Forge

@@ -294,18 +294,34 @@ source "$FILING_LIB"
 # success/failure exit code controlled by the FORGE_STUB_BEHAVIOR env var.
 forge_comment_log=""
 forge_create_log=""
-forge_issue_comment() {
+forge_issue_comment_once() {
   printf 'comment %s %s %s\n' "$1" "$2" "$3" >> "$forge_comment_log"
+  jq -n --rawfile body "$3" '{body:$body,url:"https://github.com/example/repo/issues/142#issuecomment-1"}' > "$TMPDIR/comment-readback.json"
+  printf 'https://github.com/example/repo/issues/142#issuecomment-1\n'
   return "${FORGE_STUB_COMMENT_RC:-0}"
 }
-forge_issue_create() {
+forge_issue_create_once() {
   printf 'create %s %s %s\n' "$1" "$2" "$3" >> "$forge_create_log"
+  jq -n --arg title "$2" --rawfile body "$3" '{title:$title,body:$body,state:"open",url:"https://github.com/example/repo/issues/900"}' > "$TMPDIR/create-readback.json"
+  printf 'https://github.com/example/repo/issues/900\n'
   shift 3
   for lbl in "$@"; do
     printf '  label=%s\n' "$lbl" >> "$forge_create_log"
   done
   return "${FORGE_STUB_CREATE_RC:-0}"
 }
+
+forge_filing_capable() { return 0; }
+forge_issue_number_from_url() { printf '900\n'; }
+forge_issue_read_json() {
+  if [[ "$2" == 900 ]]; then cat "$TMPDIR/create-readback.json";
+  elif [[ "$2" == 99 ]]; then printf '{"state":"closed"}\n';
+  else printf '{"state":"open"}\n'; fi
+}
+forge_issue_comment_read_json() { cat "$TMPDIR/comment-readback.json"; }
+PROJECT_PATH="$TMPDIR/evidence"
+mkdir -p "$PROJECT_PATH"
+printf 'verified source\n' > "$PROJECT_PATH/evidence.sh"
 
 # Stub callback that immediately writes a .url marker.
 test_stub_filing_callback() {
@@ -339,7 +355,7 @@ cat > "$RUN_LOG/final/manifest.json" <<'JSON'
       { "type": "comment", "issue_number": 142, "body": "Round 1 reproduces issue #142.\nSee the new evidence." }
     ],
     "granularity": "independent",
-    "body": "body alpha bravo charlie delta echo foxtrot golf hotel"
+    "body": "body alpha bravo charlie delta echo foxtrot golf hotel evidence.sh:1"
   },
   {
     "cluster_id": "cluster-2",
@@ -356,7 +372,7 @@ cat > "$RUN_LOG/final/manifest.json" <<'JSON'
       { "type": "comment", "issue_number": 142, "body": "Duplicate hit from cluster-2 should de-dup." }
     ],
     "granularity": "independent",
-    "body": "body kilo lima mike november oscar papa quebec romeo sierra"
+    "body": "body kilo lima mike november oscar papa quebec romeo sierra evidence.sh:1"
   }
 ]
 JSON
@@ -471,7 +487,7 @@ cat > "$RUN_LOG/final/manifest.json" <<'JSON'
       { "type": "comment", "issue_number": 7, "body": "Round 1 evidence." }
     ],
     "granularity": "independent",
-    "body": "body alpha bravo charlie delta echo foxtrot golf hotel"
+    "body": "body alpha bravo charlie delta echo foxtrot golf hotel evidence.sh:1"
   }
 ]
 JSON
@@ -522,7 +538,7 @@ cat > "$RUN_LOG/final/manifest.json" <<'JSON'
     "proposed_labels": ["bug"],
     "cross_link_actions": [],
     "granularity": "independent",
-    "body": "body alpha bravo charlie delta echo foxtrot golf hotel"
+    "body": "body alpha bravo charlie delta echo foxtrot golf hotel evidence.sh:1"
   }
 ]
 JSON

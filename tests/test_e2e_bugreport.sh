@@ -146,22 +146,49 @@ The README example assigns when it should compare; users see unexpected output
 when reading the project intro at README.md:1.
 EOF
 
-cat > "$FAKE_BIN/codex" <<EOF
+export REPOLENS_GOVERNOR_MOCK_AGENT="$SCRIPT_DIR/tests/mock-agent.sh"
+cat > "$FAKE_BIN/codex" <<'EOF'
 #!/usr/bin/env bash
-exec "$SCRIPT_DIR/tests/mock-agent.sh" "\$@"
+set -uo pipefail
+output="$("$REPOLENS_GOVERNOR_MOCK_AGENT" "$@")" || exit $?
+if jq -e 'type == "array"' <<< "$output" >/dev/null 2>&1; then
+  jq 'map(if .cluster_id == "mock-round-handoff" then .body += "\n\n## References\nREADME.md:1" else . end)' <<< "$output"
+else
+  printf '%s\n' "$output"
+fi
 EOF
 cat > "$FAKE_BIN/gh" <<'EOF'
 #!/usr/bin/env bash
+set -uo pipefail
 printf '%s\n' "$*" >> "${REPOLENS_FAKE_GH_LOG:-/dev/null}"
-case "$1 $2" in
-  "auth status") exit 0 ;;
-  "label list") printf '[]\n'; exit 0 ;;
-  "label create") exit 0 ;;
-  "issue list") printf '[]\n'; exit 0 ;;
-  "issue create") printf 'https://github.com/example/repo/issues/2340\n'; exit 0 ;;
-  "issue view") printf '{"title":"mock"}\n'; exit 0 ;;
+command="$1 $2"; shift 2
+case "$command" in
+  'auth status'|'label create') exit 0 ;;
+  'label list') printf '[]\n' ;;
+  'issue list')
+    if [[ "${REPOLENS_MOCK_FILING_DEDUP:-0}" == 1 ]]; then
+      printf '[{"number":204,"title":"[low] Keep deterministic mock finding wired","body":"existing","state":"OPEN","url":"https://github.com/example/repo/issues/204","labels":[]}]\n'
+    else printf '[]\n'; fi ;;
+  'issue create')
+    [[ "${REPOLENS_MOCK_FILING_FAIL:-0}" == 1 ]] && exit 1
+    title='' body_file='' labels='[]'
+    while (( $# )); do
+      case "$1" in
+        --title) title="$2"; shift 2 ;;
+        --body-file) body_file="$2"; shift 2 ;;
+        --label) labels="$(jq -c --arg label "$2" '.+[$label]' <<< "$labels")"; shift 2 ;;
+        -R) shift 2 ;;
+        *) exit 99 ;;
+      esac
+    done
+    jq -n --arg title "$title" --rawfile body "$body_file" --argjson labels "$labels" \
+      '{number:2040,title:$title,body:$body,labels:$labels,state:"OPEN",url:"https://github.com/example/repo/issues/2040"}' > "$REPOLENS_FAKE_GH_LOG.readback"
+    printf 'https://github.com/example/repo/issues/2040\n' ;;
+  'issue view')
+    [[ "${REPOLENS_MOCK_FILING_MISSING:-0}" == 1 ]] && exit 1
+    cat "$REPOLENS_FAKE_GH_LOG.readback" ;;
+  *) exit 99 ;;
 esac
-exit 0
 EOF
 chmod +x "$FAKE_BIN/codex" "$FAKE_BIN/gh" "$SCRIPT_DIR/tests/mock-agent.sh"
 
@@ -234,12 +261,12 @@ assert_file_exists "final/manifest.json exists" "$manifest"
 assert_jq "manifest is non-empty array" "$manifest" 'type == "array" and length >= 1'
 assert_file_exists "filing marker exists" "$RUN_LOG_DIR/final/filed/mock-round-handoff.url"
 assert_contains_file "filing marker carries issue URL" \
-  "https://example.invalid/issues/mock-round-handoff" \
+  "https://github.com/example/repo/issues/2040" \
   "$RUN_LOG_DIR/final/filed/mock-round-handoff.url"
 assert_contains_file "orchestrator logged filing batch complete" \
   "Filing: batch complete" "$run_output"
-assert_eq "mock agent handled one filing prompt" "1" \
-  "$(grep -c '^filing$' "$MOCK_LOG" 2>/dev/null || printf '0')"
+assert_eq "governor never invokes a filing model" "0" \
+  "$(grep -c '^filing$' "$MOCK_LOG" 2>/dev/null || true)"
 assert_eq "mock agent handled one synthesizer prompt" "1" \
   "$(grep -c '^synthesizer$' "$MOCK_LOG" 2>/dev/null || printf '0')"
 assert_eq "mock agent handled two meta-orchestrator prompts" "2" \
