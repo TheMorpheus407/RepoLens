@@ -798,7 +798,7 @@ run_repolens "minimal-resume-no-boundary" \
 assert_eq "bundle resume without a current execution boundary fails closed" "1" \
   "$(cat "$TMPDIR/minimal-resume-no-boundary.rc")"
 assert_contains "missing-boundary rejection names both explicit choices" \
-  "pass --local (optionally --output <path>) or --forge <gh|tea|fj>" \
+  "pass --local (optionally --output <path>) or --forge <gh|glab|tea|fj>" \
   "$(cat "$TMPDIR/minimal-resume-no-boundary.out")"
 
 run_repolens "minimal-resume-no-mode" \
