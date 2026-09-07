@@ -1,0 +1,37 @@
+name: Process scope containment
+on:
+  push:
+    branches: [master, 'harness/**']
+  pull_request:
+
+jobs:
+  containment:
+    name: Linux cgroup v2 (Bash ${{ matrix.bash }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        bash: [system, '4.0']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential jq python3 curl
+      - name: Build the minimum supported Bash
+        if: matrix.bash == '4.0'
+        run: |
+          curl --fail --location --retry 3 https://ftp.gnu.org/gnu/bash/bash-4.0.tar.gz -o /tmp/bash-4.0.tar.gz
+          echo '9793d394f640a95030c77d5ac989724afe196921956db741bcaf141801c50518  /tmp/bash-4.0.tar.gz' | sha256sum --check
+          tar -xzf /tmp/bash-4.0.tar.gz -C /tmp
+          cd /tmp/bash-4.0
+          CFLAGS='-std=gnu89 -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types' ./configure --prefix=/tmp/repolens-bash4
+          make -j2
+          make install
+      - name: Verify real delegated process scopes
+        env:
+          BASH_VERSION_UNDER_TEST: ${{ matrix.bash }}
+        run: |
+          task_path="$PATH"
+          if [[ "$BASH_VERSION_UNDER_TEST" == 4.0 ]]; then task_path="/tmp/repolens-bash4/bin:$PATH"; fi
+          task_path_bash="$(PATH="$task_path" command -v bash)"
+          sudo systemd-run --quiet --wait --pipe --collect -p Delegate=yes --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" --setenv="PATH=$task_path" --setenv=REPOLENS_TEST_PROCESS_SCOPES_REQUIRED=1 "$task_path_bash" ci/check-process-scopes.sh

@@ -28,6 +28,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SCRIPT_DIR/lib/logging.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/parallel.sh"
+source "$SCRIPT_DIR/tests/process_scope_test_support.sh"
+require_process_scopes
 
 PASS=0
 FAIL=0
@@ -239,8 +241,8 @@ spawn_lens "kill9" cb_kill_self
 wait_all >/dev/null 2>&1
 wait_rc=$?
 assert_eq "SIGKILLed worker surfaces a wait_all failure" "1" "$wait_rc"
-assert_eq "SIGKILLed worker leaves one orphan before GC" \
-          "1" "$(token_count_in "$case_dir")"
+assert_eq "SIGKILLed worker scope is collected without an orphan token" \
+          "0" "$(token_count_in "$case_dir")"
 init_parallel "$case_dir" 2
 assert_eq "Startup GC removes the SIGKILL orphan" \
           "0" "$(token_count_in "$case_dir")"

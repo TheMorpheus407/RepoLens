@@ -18,6 +18,9 @@
 # Uses a file-based semaphore approach for controlling max concurrent processes.
 # Background child PIDs are tracked for cleanup on SIGINT/SIGTERM.
 
+# shellcheck source=lib/process_scope.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/process_scope.sh"
+
 # Global state
 # _REPOLENS_CHILD_PIDS, _REPOLENS_CHILD_LENS_IDS, and
 # _REPOLENS_CHILD_STARTED_AT are parallel arrays kept index-aligned.
@@ -84,7 +87,15 @@ _parallel_agent_abort_pending() {
 #   Creates semaphore directory, sets max parallel count.
 #   Installs signal handlers for clean shutdown.
 init_parallel() {
-  local sem_dir="$1" max_parallel="${2:-8}"
+  local sem_dir="$1" max_parallel="${2:-8}" tracked
+  for tracked in "${_REPOLENS_CHILD_PIDS[@]:-}"; do
+    [[ -z "$tracked" ]] || { log_warn "Cannot reinitialize parallel state with owned scopes still tracked."; return 1; }
+  done
+  parallel_preflight || { _REPOLENS_SCOPE_FAILED=1; return 1; }
+  (( _REPOLENS_SCOPE_READY == 1 )) || return 1
+  (( _REPOLENS_SCOPE_FAILED == 0 )) || return 1
+  _REPOLENS_SCOPE_KILLED=0
+  _REPOLENS_WAIT_RC=0
   _REPOLENS_SEM_DIR="$sem_dir"
   _REPOLENS_SEM_OWNER="${RUN_ID:-manual}:$$"
   _REPOLENS_MAX_PARALLEL="$max_parallel"
@@ -131,7 +142,7 @@ _sem_read_token() {
 # _sem_gc_stale
 #   Remove stale semaphore token files from a previous crashed run.
 _sem_gc_stale() {
-  local token pid owner
+  local token pid owner i owned
 
   [[ -n "$_REPOLENS_SEM_DIR" && -d "$_REPOLENS_SEM_DIR" ]] || return 0
 
@@ -151,7 +162,15 @@ _sem_gc_stale() {
       continue
     fi
 
-    if ! kill -0 "$pid" 2>/dev/null; then
+    # Wrapper exit cannot free capacity while its scope remains tracked.
+    owned=0
+    for i in "${!_REPOLENS_CHILD_PIDS[@]}"; do
+      if [[ "${_REPOLENS_CHILD_PIDS[$i]:-}" == "$pid" && -n "${_REPOLENS_SCOPE_RUNTIMES[$i]:-}" ]]; then
+        owned=1
+        break
+      fi
+    done
+    if (( owned == 0 )) && ! kill -0 "$pid" 2>/dev/null; then
       rm -f "$token"
     fi
   done
@@ -160,88 +179,57 @@ _sem_gc_stale() {
 # _cleanup_children
 #   Kill all tracked child processes with bounded TERM-to-KILL cleanup.
 _cleanup_children() {
-  local pid cleanup_grace waited remaining sigkill_count total_children
-  local tracked_pids=("${_REPOLENS_CHILD_PIDS[@]}")
-
-  echo ""
-
-  if [[ "$_REPOLENS_CLEANUP_IN_PROGRESS" == "1" ]]; then
+  local i grace="${REPOLENS_CLEANUP_GRACE:-5}" count=0 result=0
+  local active=()
+  if (( _REPOLENS_CLEANUP_IN_PROGRESS == 1 )); then
+    # Do not re-enter an in-flight request or signal numeric identities.
     _REPOLENS_CLEANUP_FORCE_KILL=1
-    log_warn "Cleanup already in progress; forcing SIGKILL for remaining children."
-    for pid in "${tracked_pids[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        kill -KILL "$pid" 2>/dev/null
-      fi
+    for i in "${!_REPOLENS_SCOPE_RUNTIMES[@]}"; do
+      [[ -d "${_REPOLENS_SCOPE_RUNTIMES[$i]:-}" ]] || continue
+      printf '%s\n' "${_REPOLENS_SCOPE_NONCES[$i]}" > "${_REPOLENS_SCOPE_RUNTIMES[$i]}/force-kill"
     done
+    log_warn "Cleanup already in progress; forcing owned scopes to SIGKILL."
+    return 0
+  fi
+  _REPOLENS_CLEANUP_IN_PROGRESS=1
+  if [[ ! "$grace" =~ ^[0-9]+$ ]]; then
+    log_warn "Invalid REPOLENS_CLEANUP_GRACE='$grace'; using default 5s."
+    grace=5
+  fi
+  grace=$((10#$grace))
+  _REPOLENS_SCOPE_KILLED=0
+  for i in "${!_REPOLENS_CHILD_PIDS[@]}"; do
+    [[ -n "${_REPOLENS_CHILD_PIDS[$i]:-}" ]] || continue
+    active+=("$i")
+    count=$((count + 1))
+  done
+  if (( count > 0 )); then
+    _scope_terminate_batch "$grace" "${active[@]}" || result=1
+  fi
+  for i in "${active[@]:-}"; do
+    [[ -n "$i" ]] || continue
+    if [[ "${_REPOLENS_SCOPE_BATCH_RESULTS[$i]:-1}" == 0 ]]; then
+      wait "${_REPOLENS_CHILD_PIDS[$i]}" 2>/dev/null || true
+      if _scope_destroy "$i"; then
+        sem_token_remove "${_REPOLENS_CHILD_LENS_IDS[$i]}"
+        _REPOLENS_CHILD_PIDS[i]=""
+        _REPOLENS_CHILD_LENS_IDS[i]=""
+        _REPOLENS_CHILD_STARTED_AT[i]=""
+      else
+        result=1
+      fi
+    else
+      result=1
+    fi
+  done
+  if (( result == 0 )); then
     _REPOLENS_CHILD_PIDS=()
     _REPOLENS_CHILD_LENS_IDS=()
     _REPOLENS_CHILD_STARTED_AT=()
-    return 0
   fi
-
-  _REPOLENS_CLEANUP_IN_PROGRESS=1
-  _REPOLENS_CLEANUP_FORCE_KILL=0
-  total_children="${#tracked_pids[@]}"
-  sigkill_count=0
-
-  cleanup_grace="${REPOLENS_CLEANUP_GRACE:-5}"
-  if [[ ! "$cleanup_grace" =~ ^[0-9]+$ ]]; then
-    log_warn "Invalid REPOLENS_CLEANUP_GRACE='$cleanup_grace'; using default 5s."
-    cleanup_grace=5
-  else
-    cleanup_grace=$((10#$cleanup_grace))
-  fi
-
-  log_warn "Interrupt received. Stopping ${total_children} child processes..."
-  for pid in "${tracked_pids[@]}"; do
-    kill -TERM "$pid" 2>/dev/null
-  done
-
-  waited=0
-  while (( waited < cleanup_grace )); do
-    remaining=0
-    for pid in "${tracked_pids[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        remaining=$((remaining + 1))
-      else
-        wait "$pid" 2>/dev/null || true
-      fi
-    done
-    (( remaining == 0 || _REPOLENS_CLEANUP_FORCE_KILL == 1 )) && break
-    sleep 1
-    waited=$((waited + 1))
-  done
-
-  for pid in "${tracked_pids[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -KILL "$pid" 2>/dev/null
-      sigkill_count=$((sigkill_count + 1))
-    else
-      wait "$pid" 2>/dev/null || true
-    fi
-  done
-
-  waited=0
-  while (( waited < 2 )); do
-    remaining=0
-    for pid in "${tracked_pids[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        remaining=$((remaining + 1))
-      else
-        wait "$pid" 2>/dev/null || true
-      fi
-    done
-    (( remaining == 0 )) && break
-    sleep 1
-    waited=$((waited + 1))
-  done
-
-  _REPOLENS_CHILD_PIDS=()
-  _REPOLENS_CHILD_LENS_IDS=()
-  _REPOLENS_CHILD_STARTED_AT=()
   _REPOLENS_CLEANUP_IN_PROGRESS=0
-  _REPOLENS_CLEANUP_FORCE_KILL=0
-  log_warn "Stopped ${total_children} children (${sigkill_count} SIGKILL'd)"
+  log_warn "Stopped $count children (${_REPOLENS_SCOPE_KILLED} SIGKILL'd)"
+  return "$result"
 }
 
 # sem_acquire
@@ -269,6 +257,8 @@ sem_acquire() {
   next_heartbeat=$((now + heartbeat_interval))
 
   while true; do
+    (( _REPOLENS_SCOPE_FAILED == 0 )) || return 1
+    _parallel_poll_once || return 1
     if _parallel_agent_abort_pending; then
       return 1
     fi
@@ -315,7 +305,7 @@ sem_token_create() {
   tmp="$(mktemp "$_REPOLENS_SEM_DIR/.${token##*/}.XXXXXX")" || return 1
   {
     printf 'owner=%s\n' "${_REPOLENS_SEM_OWNER:-manual:$$}"
-    printf 'pid=%s\n' "$BASHPID"
+    printf 'pid=%s\n' "${2:-$BASHPID}"
   } > "$tmp" || {
     rm -f "$tmp"
     return 1
@@ -393,30 +383,96 @@ _repolens_emit_heartbeat() {
 #   The callback function receives lens_id + any extra args.
 #   On completion, releases semaphore token.
 spawn_lens() {
-  local lens_id="$1"
-  shift
-  local callback="$1"
-  shift
-
+  local lens_id="$1" callback="$2"
+  shift 2
+  local index runtime nonce server ready child gate deadline enrollment_path enrollment_fd ready_fd go_fd
+  local scope_owner="$BASHPID"
+  (( _REPOLENS_SCOPE_READY == 1 && _REPOLENS_SCOPE_FAILED == 0 )) || {
+    log_warn "Parallel callback refused: process-scope capability was not established."
+    return 1
+  }
   sem_acquire || return 1
-  if _parallel_agent_abort_pending; then
+  _parallel_agent_abort_pending && return 1
+  runtime="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/repolens-scope.XXXXXXXX")" || return 1
+  nonce="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+  mkfifo -m 600 "$runtime/ready" "$runtime/go" || return 1
+  python3 "$_REPOLENS_SCOPE_HELPER" serve "$runtime" "$nonce" "$scope_owner" \
+    >"$runtime/supervisor.log" 2>&1 &
+  server=$!
+  index=${#_REPOLENS_CHILD_PIDS[@]}
+  _REPOLENS_SCOPE_RUNTIMES[index]="$runtime"
+  _REPOLENS_SCOPE_NONCES[index]="$nonce"
+  _REPOLENS_SCOPE_SERVERS[index]="$server"
+  deadline=$((SECONDS + 5))
+  while [[ ! -e "$runtime/server.ready" ]]; do
+    if (( SECONDS >= deadline )) || ! kill -0 "$server" 2>/dev/null; then
+      _scope_terminal_failure "$index"
+      return 1
+    fi
+    sleep 0.02
+  done
+  enrollment_path="$(_scope_call "$index" enrollment-file)" || { _scope_terminal_failure "$index"; return 1; }
+  _scope_open_fd enrollment_fd "$enrollment_path" write || { _scope_terminal_failure "$index"; return 1; }
+  if ! _scope_call "$index" verify-enrollment-file "$BASHPID" "$enrollment_fd" >/dev/null; then
+    eval "exec ${enrollment_fd}>&-"
+    _scope_terminal_failure "$index"
     return 1
   fi
-  sem_token_create "$lens_id"
-
+  # FIFO O_RDWR avoids an unbounded open. Spare descriptors preserve every
+  # existing caller descriptor in both parent and callback.
+  if ! _scope_open_fd ready_fd "$runtime/ready" fifo; then
+    eval "exec ${enrollment_fd}>&-"
+    _scope_terminal_failure "$index"
+    return 1
+  fi
+  if ! _scope_open_fd go_fd "$runtime/go" fifo; then
+    eval "exec ${enrollment_fd}>&- ${ready_fd}>&-"
+    _scope_terminal_failure "$index"
+    return 1
+  fi
   (
-    sem_token_create "$lens_id"
-    # EXIT trap fires on every bash-trappable exit path (clean return,
-    # exit N, errexit, SIGTERM, SIGHUP, SIGINT) so the token is always
-    # released. SIGKILL / OOM still leak a token, but its recorded child
-    # PID lets startup-time GC remove it on resume.
-    trap 'sem_token_remove "$lens_id"' EXIT
-    "$callback" "$@"
+    printf '%s %s\n' "$nonce" "$BASHPID" >&"$ready_fd"
+    IFS= read -r -t 5 gate <&"$go_fd" || exit 125
+    [[ "$gate" == "$nonce ENROLL" ]] || exit 125
+    # Kernel self-enrollment cannot migrate a reused numeric PID.
+    builtin printf '0' >&"$enrollment_fd" || exit 125
+    eval "exec ${enrollment_fd}>&-"
+    builtin printf '%s %s ENROLLED\n' "$nonce" "$BASHPID" >&"$ready_fd"
+    IFS= read -r -t 5 gate <&"$go_fd" || exit 125
+    [[ "$gate" == "$nonce GO" ]] || exit 125
+    eval "exec ${ready_fd}>&- ${go_fd}>&-"
+    "$callback" ${1+"$@"}
   ) &
-
-  _REPOLENS_CHILD_PIDS+=($!)
-  _REPOLENS_CHILD_LENS_IDS+=("$lens_id")
-  _REPOLENS_CHILD_STARTED_AT+=("$(date +%s)")
+  child=$!
+  eval "exec ${enrollment_fd}>&-"
+  _REPOLENS_CHILD_PIDS[index]="$child"
+  _REPOLENS_CHILD_LENS_IDS[index]="$lens_id"
+  _REPOLENS_CHILD_STARTED_AT[index]="$(date +%s)"
+  sem_token_create "$lens_id" "$child" || { eval "exec ${ready_fd}>&- ${go_fd}>&-"; _scope_terminal_failure "$index"; return 1; }
+  # The parent and child each retain independent copies of the FIFO FDs.
+  if ! (
+    IFS= read -r -t 5 ready <&"$ready_fd" || exit 1
+    [[ "$ready" == "$nonce $child" ]] || exit 1
+    builtin printf '%s ENROLL\n' "$nonce" >&"$go_fd"
+    IFS= read -r -t 5 ready <&"$ready_fd" || exit 1
+    [[ "$ready" == "$nonce $child ENROLLED" ]] || exit 1
+    _scope_call "$index" enroll "$child" >/dev/null || exit 1
+    printf '%s GO\n' "$nonce" >&"$go_fd"
+  ); then
+    eval "exec ${ready_fd}>&- ${go_fd}>&-"
+    # No callback has been released. The bounded gate self-exits without signals.
+    _scope_terminal_failure "$index"
+    _scope_terminate "$index" 0 || return 1
+    deadline=$((SECONDS + 6))
+    while kill -0 "$child" 2>/dev/null && (( SECONDS < deadline )); do sleep 0.02; done
+    if kill -0 "$child" 2>/dev/null; then return 1; fi
+    wait "$child" 2>/dev/null || true
+    _scope_destroy "$index" || return 1
+    _REPOLENS_CHILD_PIDS[index]=""
+    return 1
+  fi
+  eval "exec ${ready_fd}>&- ${go_fd}>&-"
+  return 0
 }
 
 # wait_batch_complete <barrier_dir> [timeout_seconds]
@@ -488,107 +544,35 @@ wait_batch_complete() {
   done
 }
 
-# wait_all
-#   Wait for all tracked children with a per-child deadline. Returns 0 if
-#   all succeeded, 1 if any child failed or was killed by the deadline.
-#
-#   REPOLENS_CHILD_MAX_WAIT (env, seconds): hard ceiling per child.
-#     Default: 144000 (40h). This is an outer backstop above the per-lens
-#     REPOLENS_LENS_MAX_WALL budget. Keep it large enough for the configured
-#     lens wall budget plus rate-limit sleep and non-agent I/O (gh queries,
-#     file locks, etc.).
-#
-#   Bash 4.0-compatible: polls with `kill -0` + `sleep 1`, NOT `wait -t`
-#   (bash 5.1+ only). If a child exceeds the deadline, it is sent SIGTERM,
-#   given up to 10s to exit gracefully, then SIGKILL'd if still alive. The
-#   stuck lens id is logged and rc=1 is returned, but the remaining
-#   children are still processed — one stall must not block the rest.
+# wait_all: an outer per-scope deadline; GNU timeout agent semantics are unchanged.
 wait_all() {
   local max_wait="${REPOLENS_CHILD_MAX_WAIT:-144000}"
-  local heartbeat_interval="${REPOLENS_HEARTBEAT_INTERVAL:-60}"
-  local rc=0
-  local i pid lens_id started_at now elapsed grace remaining next_heartbeat
-
+  local heartbeat_interval="${REPOLENS_HEARTBEAT_INTERVAL:-60}" next_heartbeat now
   if [[ ! "$max_wait" =~ ^[0-9]+$ ]]; then
     log_warn "Invalid REPOLENS_CHILD_MAX_WAIT='$max_wait'; using default 144000s."
     max_wait=144000
   else
     max_wait=$((10#$max_wait))
   fi
-
   if [[ ! "$heartbeat_interval" =~ ^[0-9]+$ ]]; then
     log_warn "Invalid REPOLENS_HEARTBEAT_INTERVAL='$heartbeat_interval'; using default 60s."
     heartbeat_interval=60
-  else
-    heartbeat_interval=$((10#$heartbeat_interval))
   fi
-
-  now="$(date +%s)"
-  next_heartbeat=$((now + heartbeat_interval))
-
+  heartbeat_interval=$((10#$heartbeat_interval))
+  next_heartbeat=$(( $(date +%s) + heartbeat_interval ))
   while true; do
+    _parallel_poll_once || return 1
+    (( _REPOLENS_SCOPE_REMAINING == 0 )) && break
     now="$(date +%s)"
-    remaining=0
-
-    for i in "${!_REPOLENS_CHILD_PIDS[@]}"; do
-      pid="${_REPOLENS_CHILD_PIDS[$i]:-}"
-      [[ -n "$pid" ]] || continue
-      lens_id="${_REPOLENS_CHILD_LENS_IDS[$i]:-<unknown>}"
-      started_at="${_REPOLENS_CHILD_STARTED_AT[$i]:-$now}"
-      if [[ ! "$started_at" =~ ^[0-9]+$ ]]; then
-        started_at="$now"
-      else
-        started_at=$((10#$started_at))
-      fi
-      elapsed=$((now - started_at))
-      (( elapsed < 0 )) && elapsed=0
-
-      if kill -0 "$pid" 2>/dev/null; then
-        if (( elapsed >= max_wait )); then
-          log_warn "[$lens_id] exceeded REPOLENS_CHILD_MAX_WAIT=${max_wait}s, terminating (pid=$pid)"
-          kill -TERM "$pid" 2>/dev/null
-          grace=0
-          while kill -0 "$pid" 2>/dev/null && (( grace < 10 )); do
-            sleep 1
-            grace=$((grace + 1))
-          done
-          if kill -0 "$pid" 2>/dev/null; then
-            log_warn "[$lens_id] did not exit after SIGTERM; sending SIGKILL"
-            kill -KILL "$pid" 2>/dev/null
-          fi
-          rc=1
-          wait "$pid" 2>/dev/null || true
-          _REPOLENS_CHILD_PIDS[i]=""
-          _REPOLENS_CHILD_LENS_IDS[i]=""
-          _REPOLENS_CHILD_STARTED_AT[i]=""
-        else
-          remaining=$((remaining + 1))
-        fi
-      else
-        # Reap the child (non-blocking if it is already dead) and surface
-        # its exit status. A non-zero exit here is a callback failure or
-        # signal termination that happened outside the deadline path.
-        if ! wait "$pid" 2>/dev/null; then
-          rc=1
-        fi
-        _REPOLENS_CHILD_PIDS[i]=""
-        _REPOLENS_CHILD_LENS_IDS[i]=""
-        _REPOLENS_CHILD_STARTED_AT[i]=""
-      fi
-    done
-
-    (( remaining == 0 )) && break
-
     if (( heartbeat_interval > 0 && now >= next_heartbeat )); then
       _repolens_emit_heartbeat "$now" "$max_wait" "[heartbeat]"
       next_heartbeat=$((now + heartbeat_interval))
     fi
-
     sleep 1
   done
-
   _REPOLENS_CHILD_PIDS=()
   _REPOLENS_CHILD_LENS_IDS=()
   _REPOLENS_CHILD_STARTED_AT=()
-  return "$rc"
+  (( _REPOLENS_SCOPE_FAILED == 0 )) || return 1
+  return "${_REPOLENS_WAIT_RC:-0}"
 }

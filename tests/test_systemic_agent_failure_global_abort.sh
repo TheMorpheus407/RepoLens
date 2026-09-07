@@ -116,13 +116,19 @@ install_failing_codex() {
 set -uo pipefail
 state_dir="${FAKE_AGENT_STATE_DIR:?}"
 mkdir -p "$state_dir"
-counter_file="$state_dir/calls"
-count=0
-if [[ -f "$counter_file" ]]; then
-  count="$(cat "$counter_file")"
-fi
-count=$((count + 1))
-printf '%s\n' "$count" > "$counter_file"
+# Establish the five-concurrent-lens premise before any fake invocation can
+# fail. Launch overhead must not decide whether systemic escalation is tested.
+: > "$state_dir/call-$BASHPID"
+deadline=$((SECONDS + 20))
+while true; do
+  calls=("$state_dir"/call-*)
+  (( ${#calls[@]} >= 5 )) && break
+  if (( SECONDS >= deadline )); then
+    : > "$state_dir/barrier-timeout"
+    exit 1
+  fi
+  sleep 0.05
+done
 printf 'provider unavailable\n'
 exit 1
 SH
@@ -165,6 +171,7 @@ fi
 summary_file="$SCRIPT_DIR/logs/$run_id/summary.json"
 
 assert_nonzero "systemic no-progress run exits non-zero" "$exit_code"
+assert_eq "five concurrent fake agents reached the bounded barrier" "0" "$(test -e "$TMPDIR/state/barrier-timeout" && printf 1 || printf 0)"
 assert_not_contains "systemic run avoids per-lens safety cap" "Hit safety cap" "$OUT_FILE"
 assert_not_contains "systemic run avoids iteration 20 burn" "Iteration 20" "$OUT_FILE"
 assert_file_exists "systemic run writes no-progress sentinel" "$SCRIPT_DIR/logs/$run_id/.agent-no-progress-abort"

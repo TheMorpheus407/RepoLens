@@ -393,6 +393,12 @@ Environment:
   REPOLENS_RATE_LIMIT_MAX_SLEEP
                            Maximum parsed agent rate-limit wait in seconds
                            before falling back to abort behavior (default: 21600).
+  REPOLENS_PROCESS_SCOPE  Parallel backend: auto (default) or linux-cgroup-v2.
+                           Requires delegated cgroup v2 and Python 3.9+ pidfds.
+                           Unavailable capability refuses parallel callbacks.
+  REPOLENS_PARALLEL_FALLBACK
+                           error (default), or explicit sequential fallback
+                           for auto. Resolved before run state and dry-run.
   REPOLENS_CHILD_MAX_WAIT  Per-child parallel-worker deadline in seconds
                            (default: 144000). Outer safety net for parallel mode:
                            wait_all polls each background lens and SIGTERM/KILLs
@@ -2328,6 +2334,11 @@ else
   MAX_PARALLEL="$(repolens_auto_max_parallel "$(detect_nproc)")"
 fi
 
+# Resolve lifecycle containment before creating run state or dispatching lenses.
+if $PARALLEL; then
+  parallel_preflight || die "Parallel process-scope preflight failed."
+fi
+
 # --- Derive DONE streak threshold ---
 DONE_STREAK_REQUIRED_ENV="${DONE_STREAK_REQUIRED:-}"
 DONE_STREAK_REQUIRED="$(mode_default_depth "$MODE")"
@@ -4203,6 +4214,9 @@ if $DRY_RUN; then
     # the line order is unchanged: cost block, then the estimate, then the blank.
     print_wall_estimate
     echo ""
+  fi
+  if [[ -n "${REPOLENS_PROCESS_SCOPE_RESOLVED:-}" ]]; then
+    echo "Process scope: $REPOLENS_PROCESS_SCOPE_RESOLVED"
   fi
   echo "Lenses that would run:"
   for lens_entry in "${LENS_LIST[@]}"; do

@@ -31,6 +31,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SCRIPT_DIR/lib/logging.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/parallel.sh"
+source "$SCRIPT_DIR/tests/process_scope_test_support.sh"
+require_process_scopes
 
 PASS=0
 FAIL=0
@@ -283,7 +285,9 @@ export REPOLENS_CLEANUP_GRACE
 
 spawn_lens "stubborn-a" cb_ignore_term "$ready_marker"
 spawn_lens "stubborn-b" cb_ignore_term "$ready_marker"
-wait_for_lines "$ready_marker" 2 5 || { echo "workers did not become ready"; exit 10; }
+spawn_lens "stubborn-c" cb_ignore_term "$ready_marker"
+spawn_lens "stubborn-d" cb_ignore_term "$ready_marker"
+wait_for_lines "$ready_marker" 4 5 || { echo "workers did not become ready"; exit 10; }
 
 start=$SECONDS
 _cleanup_children 2>"$stderr_log"
@@ -291,7 +295,7 @@ elapsed=$((SECONDS - start))
 stderr_out="$(cat "$stderr_log")"
 
 (( elapsed < 8 )) || { echo "cleanup took ${elapsed}s"; exit 11; }
-[[ "$stderr_out" == *"Stopped 2 children (2 SIGKILL'd)"* ]] || {
+[[ "$stderr_out" == *"Stopped 4 children (4 SIGKILL'd)"* ]] || {
   echo "missing SIGKILL count in cleanup log"
   printf '%s\n' "$stderr_out"
   exit 12
@@ -378,20 +382,7 @@ else
   echo "  FAIL: _cleanup_children missing REPOLENS_CLEANUP_GRACE default 5"
 fi
 
-TOTAL=$((TOTAL + 1))
-if [[ "$cleanup_src" == *"kill -0"* ]] \
-   && [[ "$cleanup_src" == *"sleep 1"* ]] \
-   && [[ "$cleanup_src" == *"kill -TERM"* ]] \
-   && [[ "$cleanup_src" == *"kill -KILL"* ]]; then
-  PASS=$((PASS + 1))
-  echo "  PASS: _cleanup_children uses bounded poll and TERM-to-KILL escalation"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: _cleanup_children missing bounded cleanup primitives"
-  echo "  ---- current _cleanup_children body ----"
-  printf '%s\n' "$cleanup_src" | sed 's/^/    /'
-  echo "  ----------------------------------------"
-fi
+assert_contains "Cleanup delegates to owned scope TERM/KILL backend" "_scope_terminate_batch" "$cleanup_src"
 
 bare_wait_lines="$(printf '%s\n' "$cleanup_src" | grep -E '^[[:space:]]*wait([[:space:]]*(#.*)?$|[[:space:]]+[0-9]?>|[[:space:]]+2>|[[:space:]]*;)' || true)"
 assert_eq "Structural guard: _cleanup_children does not call bare wait" "" "$bare_wait_lines"

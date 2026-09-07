@@ -35,6 +35,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # installs its trap.
 source "$SCRIPT_DIR/lib/logging.sh"
 source "$SCRIPT_DIR/lib/parallel.sh"
+source "$SCRIPT_DIR/tests/process_scope_test_support.sh"
+require_process_scopes
 
 PASS=0
 FAIL=0
@@ -104,7 +106,7 @@ cb_exit_nonzero() { exit 1; }
 fresh_sem
 spawn_lens "exit1" cb_exit_nonzero
 wait_all; wait_rc=$?
-assert_eq "exit 1: token removed via EXIT trap" "0" "$(token_count)"
+assert_eq "exit 1: token removed via empty-scope collection" "0" "$(token_count)"
 assert_eq "exit 1: wait_all surfaces failure"   "1" "$wait_rc"
 
 # ---------------------------------------------------------------------------
@@ -124,7 +126,7 @@ cb_errexit() {
 fresh_sem
 spawn_lens "errexit" cb_errexit
 wait_all; wait_rc=$?
-assert_eq "errexit: token removed via EXIT trap" "0" "$(token_count)"
+assert_eq "errexit: token removed via empty-scope collection" "0" "$(token_count)"
 assert_eq "errexit: wait_all surfaces failure"   "1" "$wait_rc"
 
 # ---------------------------------------------------------------------------
@@ -141,7 +143,7 @@ cb_term() {
 fresh_sem
 spawn_lens "term" cb_term
 wait_all; wait_rc=$?
-assert_eq "SIGTERM: token removed via EXIT trap" "0" "$(token_count)"
+assert_eq "SIGTERM: token removed via empty-scope collection" "0" "$(token_count)"
 
 # ---------------------------------------------------------------------------
 # 4. Callback sends SIGHUP to its own subshell — must also release.
@@ -153,7 +155,7 @@ cb_hup() {
 fresh_sem
 spawn_lens "hup" cb_hup
 wait_all; wait_rc=$?
-assert_eq "SIGHUP: token removed via EXIT trap" "0" "$(token_count)"
+assert_eq "SIGHUP: token removed via empty-scope collection" "0" "$(token_count)"
 
 # ---------------------------------------------------------------------------
 # 5. SIGKILL limitation — bash cannot trap SIGKILL, so the token IS
@@ -168,8 +170,8 @@ cb_kill() {
 fresh_sem
 spawn_lens "kill9" cb_kill
 wait_all; wait_rc=$?
-assert_eq "SIGKILL: token IS leaked (documented; see issue #117)" \
-          "1" "$(token_count)"
+assert_eq "SIGKILL: empty-scope collection removes token" \
+          "0" "$(token_count)"
 
 # ---------------------------------------------------------------------------
 # 6. Parent INT/TERM trap installed by init_parallel must NOT be
@@ -221,23 +223,8 @@ assert_eq "Concurrent spawns: SIGTERM'd worker token released" \
           "0" "$(token_count)"
 
 # ---------------------------------------------------------------------------
-# 8. Structural guard — spawn_lens must install an EXIT trap that calls
-#    sem_token_remove. This pins the fix into place so a future edit
-#    that reverts to the unguarded subshell (the bug) trips the test.
-# ---------------------------------------------------------------------------
-spawn_lens_src="$(declare -f spawn_lens)"
-TOTAL=$((TOTAL + 1))
-if [[ "$spawn_lens_src" =~ trap[[:space:]].*sem_token_remove.*EXIT ]] \
-   || [[ "$spawn_lens_src" =~ trap[[:space:]].*EXIT.*sem_token_remove ]]; then
-  PASS=$((PASS + 1))
-  echo "  PASS: spawn_lens installs an EXIT trap that removes the token"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: spawn_lens body does not install 'trap ... sem_token_remove ... EXIT'"
-  echo "  ---- current spawn_lens body ----"
-  printf '%s\n' "$spawn_lens_src" | sed 's/^/    /'
-  echo "  ---------------------------------"
-fi
+# 8. Scope ownership releases capacity only after kernel-confirmed emptiness.
+# This is exercised above for normal, abnormal, and SIGKILL callback exits.
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

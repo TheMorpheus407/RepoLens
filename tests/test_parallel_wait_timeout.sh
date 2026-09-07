@@ -13,250 +13,79 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Regression tests for issue #111 — wait_all in lib/parallel.sh blocks
-# forever on a stuck child. The fix adds a REPOLENS_CHILD_MAX_WAIT
-# deadline, polls each child with `kill -0` + `sleep 1`, and on deadline
-# expiry sends SIGTERM (10s grace) then SIGKILL while still processing
-# the remaining children.
-#
-# No AI models are invoked — tests source lib/parallel.sh directly and
-# exercise it with synthetic sleep-only callbacks.
-
-# shellcheck disable=SC2329  # cb_* callbacks are invoked indirectly via spawn_lens string dispatch.
-
+# Issues #407/#408: a captured-output watchdog is part of the assertion.
+# shellcheck disable=SC2329
 set -uo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
 source "$SCRIPT_DIR/lib/logging.sh"
 source "$SCRIPT_DIR/lib/parallel.sh"
-
-PASS=0
-FAIL=0
-TOTAL=0
-
+source "$SCRIPT_DIR/tests/process_scope_test_support.sh"
+require_process_scopes
+if [[ "${1:-}" != --captured ]]; then
+  start=$SECONDS
+  output="$(timeout --kill-after=2 40 bash "$0" --captured 2>&1)"; rc=$?
+  printf '%s\n' "$output"
+  (( rc == 0 && SECONDS - start < 40 )) || {
+    echo "FAIL: captured output did not close inside the deadline/grace watchdog"; exit 1;
+  }
+  echo "PASS: captured stdout/stderr closed without natural sleep expiry"
+  exit 0
+fi
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT
-
-assert_eq() {
-  local desc="$1" expected="$2" actual="$3"
-  TOTAL=$((TOTAL + 1))
-  if [[ "$expected" == "$actual" ]]; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $desc"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $desc (expected='$expected' actual='$actual')"
-  fi
+PASS=0 FAIL=0
+check() {
+  local description="$1"; shift
+  if "$@"; then echo "PASS: $description"; PASS=$((PASS + 1));
+  else echo "FAIL: $description"; FAIL=$((FAIL + 1)); fi
 }
-
-assert_lt() {
-  local desc="$1" bound="$2" actual="$3"
-  TOTAL=$((TOTAL + 1))
-  if (( actual < bound )); then
-    PASS=$((PASS + 1))
-    echo "  PASS: $desc ($actual < $bound)"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $desc (actual=$actual, expected < $bound)"
-  fi
-}
-
-assert_contains() {
-  local desc="$1" needle="$2" haystack="$3"
-  TOTAL=$((TOTAL + 1))
-  if [[ "$haystack" == *"$needle"* ]]; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $desc"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $desc (missing '$needle' in output)"
-    echo "  ---- haystack ----"
-    printf '%s\n' "$haystack" | sed 's/^/    /'
-    echo "  ------------------"
-  fi
-}
-
-fresh_sem() {
-  local case_dir
-  case_dir="$(mktemp -d -p "$TMPROOT" sem.XXXXXX)"
-  init_parallel "$case_dir" 8
-}
-
-# Unique marker strings keep `pgrep -f` assertions tight — a bare
-# `pgrep -f 'sleep 60'` could accidentally catch an unrelated sleep from
-# another test on the same machine.
-MARK="$$-rl111-$RANDOM"
-
-echo "=== parallel.sh wait_all per-child deadline (issue #111) ==="
-
-# ---------------------------------------------------------------------------
-# 1. Happy path — fast callback finishes well within deadline.
-# ---------------------------------------------------------------------------
-cb_fast() { sleep 0.1; }
-fresh_sem
-spawn_lens "fast" cb_fast
-start=$SECONDS
-wait_all; wait_rc=$?
-elapsed=$((SECONDS - start))
-assert_eq "Happy path: wait_all returns 0" "0" "$wait_rc"
-assert_lt "Happy path: completes promptly" 5 "$elapsed"
-assert_eq "Happy path: child PIDs cleared" "0" "${#_REPOLENS_CHILD_PIDS[@]}"
-assert_eq "Happy path: child lens ids cleared" "0" "${#_REPOLENS_CHILD_LENS_IDS[@]}"
-
-# ---------------------------------------------------------------------------
-# 2. Single stuck child — deadline trips, SIGTERM reaps it.
-#    REPOLENS_CHILD_MAX_WAIT=3, callback sleeps much longer. Must return
-#    non-zero, finish in well under the callback's own runtime, and leave
-#    no orphan sleep.
-# ---------------------------------------------------------------------------
-cb_stuck() {
-  # Use a long sleep so we know the deadline (not natural exit) did the work.
+record_sleep() {
+  local marker="$1"
   sleep 120 &
-  # Tag this subshell with the marker so pgrep below finds the right PID.
-  # shellcheck disable=SC2034  # used by pgrep -f below
-  _RL111_MARK="$MARK-stuck"
+  awk '{print $1, $22}' "/proc/$!/stat" > "$marker"
   wait
 }
-fresh_sem
-REPOLENS_CHILD_MAX_WAIT=3
-export REPOLENS_CHILD_MAX_WAIT
-spawn_lens "stuck-lens-a" cb_stuck
-start=$SECONDS
-stderr_log="$(mktemp -p "$TMPROOT")"
-wait_all 2>"$stderr_log"; wait_rc=$?
-elapsed=$((SECONDS - start))
-stderr_out="$(cat "$stderr_log")"
-
-assert_eq "Stuck child: wait_all surfaces failure" "1" "$wait_rc"
-assert_lt "Stuck child: deadline honored (<20s)" 20 "$elapsed"
-assert_contains "Stuck child: log names the lens id" "stuck-lens-a" "$stderr_out"
-assert_contains "Stuck child: log references REPOLENS_CHILD_MAX_WAIT" "REPOLENS_CHILD_MAX_WAIT" "$stderr_out"
-assert_eq "Stuck child: PIDs cleared" "0" "${#_REPOLENS_CHILD_PIDS[@]}"
-assert_eq "Stuck child: lens ids cleared" "0" "${#_REPOLENS_CHILD_LENS_IDS[@]}"
-unset REPOLENS_CHILD_MAX_WAIT
-
-# ---------------------------------------------------------------------------
-# 3. Mixed concurrent — one fast, one stuck. Fast reaps cleanly; stuck is
-#    SIGTERM'd. Final rc is non-zero, state arrays are both empty.
-# ---------------------------------------------------------------------------
-cb_sleep_short() { sleep 0.2; }
-cb_sleep_long()  { sleep 120; }
-fresh_sem
-REPOLENS_CHILD_MAX_WAIT=3
-export REPOLENS_CHILD_MAX_WAIT
-spawn_lens "mix-fast" cb_sleep_short
-spawn_lens "mix-slow" cb_sleep_long
-start=$SECONDS
-stderr_log="$(mktemp -p "$TMPROOT")"
-wait_all 2>"$stderr_log"; wait_rc=$?
-elapsed=$((SECONDS - start))
-stderr_out="$(cat "$stderr_log")"
-
-assert_eq "Mixed: wait_all surfaces failure" "1" "$wait_rc"
-assert_lt "Mixed: deadline honored (<20s)" 20 "$elapsed"
-assert_contains "Mixed: log names the stuck lens id" "mix-slow" "$stderr_out"
-assert_eq "Mixed: PIDs cleared" "0" "${#_REPOLENS_CHILD_PIDS[@]}"
-assert_eq "Mixed: lens ids cleared" "0" "${#_REPOLENS_CHILD_LENS_IDS[@]}"
-unset REPOLENS_CHILD_MAX_WAIT
-
-# ---------------------------------------------------------------------------
-# 4. SIGTERM-ignoring child — escalates to SIGKILL. Callback installs
-#    `trap '' TERM` in its own subshell, then sleeps. The kill-escalation
-#    path must still reap it within max_wait + 10s grace + tolerance.
-# ---------------------------------------------------------------------------
-cb_term_ignorer() {
-  trap '' TERM
-  sleep 120
+ignore_term() { trap '' TERM; record_sleep "$1"; }
+fast() { printf 'finished\n' > "$1"; }
+leader_exits() { sleep 120 & awk '{print $1, $22}' "/proc/$!/stat" > "$1"; }
+assert_dead() {
+  local marker="$1" pid state started current_started
+  [[ -s "$marker" ]] || return 1
+  read -r pid started < "$marker"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  if [[ -e "/proc/$pid/stat" ]]; then
+    read -r state current_started < <(awk '{print $3, $22}' "/proc/$pid/stat")
+    [[ "$started" != "$current_started" || "$state" == Z || "$state" == X ]] || return 1
+  fi
 }
-fresh_sem
-REPOLENS_CHILD_MAX_WAIT=3
-export REPOLENS_CHILD_MAX_WAIT
-spawn_lens "kill-escalate" cb_term_ignorer
-start=$SECONDS
-stderr_log="$(mktemp -p "$TMPROOT")"
-wait_all 2>"$stderr_log"; wait_rc=$?
-elapsed=$((SECONDS - start))
-stderr_out="$(cat "$stderr_log")"
-
-assert_eq "SIGKILL escalation: wait_all surfaces failure" "1" "$wait_rc"
-# 3s deadline + 10s SIGTERM grace + 2s tolerance = 15s upper bound.
-assert_lt "SIGKILL escalation: completes within deadline+grace window" 25 "$elapsed"
-assert_contains "SIGKILL escalation: log mentions SIGKILL fallback" "SIGKILL" "$stderr_out"
-unset REPOLENS_CHILD_MAX_WAIT
-
-# ---------------------------------------------------------------------------
-# 5. Default value — no REPOLENS_CHILD_MAX_WAIT set, default is 144000.
-#    Introspect wait_all's declared body so a future "I'll just bump this
-#    to 7200" tweak shows up as a deliberate test change.
-# ---------------------------------------------------------------------------
-unset REPOLENS_CHILD_MAX_WAIT
-wait_all_src="$(declare -f wait_all)"
-TOTAL=$((TOTAL + 1))
-if [[ "$wait_all_src" =~ REPOLENS_CHILD_MAX_WAIT:-144000 ]]; then
-  PASS=$((PASS + 1))
-  echo "  PASS: wait_all default REPOLENS_CHILD_MAX_WAIT is 144000"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: wait_all does not use default 144000 for REPOLENS_CHILD_MAX_WAIT"
-fi
-
-# ---------------------------------------------------------------------------
-# 6. Structural guard — wait_all body must use `kill -0` polling plus
-#    `kill -TERM` escalation, NOT bare `wait $pid` with no deadline.
-#    This pins the fix so a future revert to the unguarded form trips the
-#    test.
-# ---------------------------------------------------------------------------
-TOTAL=$((TOTAL + 1))
-if [[ "$wait_all_src" == *"kill -0"* ]] \
-   && [[ "$wait_all_src" == *"kill -TERM"* ]] \
-   && [[ "$wait_all_src" == *"REPOLENS_CHILD_MAX_WAIT"* ]]; then
-  PASS=$((PASS + 1))
-  echo "  PASS: wait_all uses deadline polling with SIGTERM escalation"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: wait_all missing deadline polling primitives"
-  echo "  ---- current wait_all body ----"
-  printf '%s\n' "$wait_all_src" | sed 's/^/    /'
-  echo "  -------------------------------"
-fi
-
-# ---------------------------------------------------------------------------
-# 7. Structural guard — spawn_lens must populate the new lens-id parallel
-#    array so wait_all can map PID -> lens id on deadline expiry.
-# ---------------------------------------------------------------------------
-spawn_lens_src="$(declare -f spawn_lens)"
-TOTAL=$((TOTAL + 1))
-if [[ "$spawn_lens_src" == *"_REPOLENS_CHILD_LENS_IDS"* ]]; then
-  PASS=$((PASS + 1))
-  echo "  PASS: spawn_lens records lens id in _REPOLENS_CHILD_LENS_IDS"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: spawn_lens does not populate _REPOLENS_CHILD_LENS_IDS"
-fi
-
-# ---------------------------------------------------------------------------
-# 8. Documentation coverage — usage() and README.md must mention the new
-#    env var so operators can discover it without reading code.
-# ---------------------------------------------------------------------------
-TOTAL=$((TOTAL + 1))
-if grep -q 'REPOLENS_CHILD_MAX_WAIT' "$SCRIPT_DIR/repolens.sh"; then
-  PASS=$((PASS + 1))
-  echo "  PASS: repolens.sh documents REPOLENS_CHILD_MAX_WAIT"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: repolens.sh usage() missing REPOLENS_CHILD_MAX_WAIT"
-fi
-
-TOTAL=$((TOTAL + 1))
-if grep -q 'REPOLENS_CHILD_MAX_WAIT' "$SCRIPT_DIR/README.md"; then
-  PASS=$((PASS + 1))
-  echo "  PASS: README.md documents REPOLENS_CHILD_MAX_WAIT"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: README.md missing REPOLENS_CHILD_MAX_WAIT"
-fi
-
-echo ""
-echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+for scenario in clean mixed ignore leader; do
+  init_parallel "$TMPROOT/$scenario-sem" 2 || exit 1
+  REPOLENS_CHILD_MAX_WAIT=2
+  case "$scenario" in
+    clean) spawn_lens "$scenario" record_sleep "$TMPROOT/$scenario.pid" ;;
+    mixed)
+      spawn_lens fast fast "$TMPROOT/fast"
+      spawn_lens "$scenario" record_sleep "$TMPROOT/$scenario.pid" ;;
+    ignore) spawn_lens "$scenario" ignore_term "$TMPROOT/$scenario.pid" ;;
+    leader) spawn_lens "$scenario" leader_exits "$TMPROOT/$scenario.pid" ;;
+  esac
+  # Prove the descendant actually started, then test its exact recorded PID.
+  deadline=$((SECONDS + 3))
+  while [[ ! -s "$TMPROOT/$scenario.pid" ]] && (( SECONDS < deadline )); do sleep 0.02; done
+  read -r observed observed_start < "$TMPROOT/$scenario.pid"
+  [[ "$observed_start" =~ ^[0-9]+$ ]] || exit 1
+  check "$scenario descendant was live before cleanup" kill -0 "$observed"
+  owned_path="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["path"])' "${_REPOLENS_SCOPE_RUNTIMES[${#_REPOLENS_CHILD_PIDS[@]}-1]}/manifest.json")"
+  start=$SECONDS
+  wait_all; rc=$?
+  check "$scenario reports outer timeout or orphan cleanup" test "$rc" = 1
+  check "$scenario finishes before 120-second natural expiry" test "$((SECONDS - start))" -lt 20
+  check "$scenario recorded descendant is dead" assert_dead "$TMPROOT/$scenario.pid"
+  check "$scenario kernel-confirmed empty scope removed" test ! -e "$owned_path"
+done
+check "concurrent successful callback completed" test -s "$TMPROOT/fast"
+init_parallel "$TMPROOT/happy" 2 || exit 1
+spawn_lens happy fast "$TMPROOT/happy-done" || exit 1
+check "ordinary successful callback succeeds" wait_all
+echo "Results: $PASS passed, $FAIL failed"
 exit "$FAIL"

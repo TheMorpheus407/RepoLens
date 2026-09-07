@@ -348,6 +348,7 @@ _write_status_snapshot_locked() {
     --arg agent "$agent" \
     --arg remote_target "$remote_target" \
     --arg remote_label "$remote_label" \
+    --arg process_scope "${REPOLENS_PROCESS_SCOPE_RESOLVED:-sequential}" \
     --argjson parallel "$parallel" \
     --argjson max_parallel "$max_parallel" \
     --arg started_at "$started_at" \
@@ -397,6 +398,7 @@ _write_status_snapshot_locked() {
           remote_target: (if $remote_target == "" then null else $remote_target end),
           remote_label: (if $remote_label == "" then null else $remote_label end),
           parallel: $parallel,
+          process_scope: $process_scope,
           max_parallel: $max_parallel,
           started_at: $started_at,
           updated_at: $updated_at,
