@@ -151,6 +151,16 @@ check "unavailable frozen commit is named in the failure" contains "$preview_out
 check "unavailable frozen commit never falls back to another checkout" test ! -e "$TEST_DIR/unavailable-head.checked-out"
 cp "$TEST_DIR/manifest.original" "$run_dir/branch-manifest.md"
 
+# A saved base name is provenance, not a fresh requirement to resolve that ref.
+"$REPOLENS_RESUME_REAL_GIT" -C "$TEST_DIR/source" branch review-base main || exit 1
+run_preview removable-base --branch-base review-base --branch-head feature
+check "review with a separate base branch succeeds" test "$preview_rc" = 0
+removed_base_run="${RUN_IDS[${#RUN_IDS[@]}-1]}"
+"$REPOLENS_RESUME_REAL_GIT" -C "$TEST_DIR/source" branch -D review-base >/dev/null || exit 1
+run_preview removed-base-resume --resume "$removed_base_run" --branch-base review-base --branch-head feature
+check "matching refs resume after the remote base branch is removed" test "$preview_rc" = 0
+check "removed base name remains in the saved provenance" contains "$preview_output" 'Branch base:  review-base ('
+
 # Empty-delta manifests intentionally contain no SHA; preserve no-op resumes.
 run_preview empty --branch-base main
 empty_run="${RUN_IDS[${#RUN_IDS[@]}-1]}"

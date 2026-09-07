@@ -649,6 +649,8 @@ BRANCH_HEAD="HEAD"
 BRANCH_HEAD_SET=false
 BRANCH_BASE_SHA=""
 BRANCH_HEAD_SHA=""
+CLONED_BRANCH_BASE_SHA=""
+CLONED_BRANCH_HEAD_SHA=""
 BRANCH_MERGE_BASE=""
 SPEC_TRUSTED_MANIFEST_SHA256=""
 MAX_ISSUES=""
@@ -2039,11 +2041,14 @@ trap _handle_interrupt INT
 trap _handle_termination TERM
 
 if [[ "$PROJECT_PATH" =~ ^(https://|git@|ssh://|git://) ]]; then
+  _clone_base="$BRANCH_BASE"
   _clone_head="$BRANCH_HEAD"
   if [[ "$MODE" == branch-review && -n "$RESUME_RUN_ID" ]]; then
     # URL resumes create a new checkout. Select the frozen commit before the
     # clone becomes read-only; a saved branch name may have advanced meanwhile.
     # Keep CLI refs untouched for the later explicit-ref/provenance checks.
+    # The persisted base ref need not exist on the remote anymore.
+    _clone_base=""
     _clone_branch_manifest="$RESUME_LOG_BASE_CANONICAL/branch-manifest.md"
     [[ -f "$_clone_branch_manifest" && ! -L "$_clone_branch_manifest" ]] \
       || die "Resume of branch-review run $RUN_ID requires a regular non-symlink persisted branch-manifest.md artifact"
@@ -2062,7 +2067,7 @@ if [[ "$PROJECT_PATH" =~ ^(https://|git@|ssh://|git://) ]]; then
   CLONE_DIR="$(mktemp -d)"
   _repo_basename="$(basename "$PROJECT_PATH" .git)"
   echo "Cloning remote repository: $PROJECT_PATH"
-  clone_project_for_mode "$PROJECT_PATH" "$CLONE_DIR/$_repo_basename" "$MODE" "$BRANCH_BASE" "$_clone_head" \
+  clone_project_for_mode "$PROJECT_PATH" "$CLONE_DIR/$_repo_basename" "$MODE" "$_clone_base" "$_clone_head" \
     || die "Failed to clone: $PROJECT_PATH"
   PROJECT_PATH="$CLONE_DIR/$_repo_basename"
 
@@ -2070,7 +2075,7 @@ if [[ "$PROJECT_PATH" =~ ^(https://|git@|ssh://|git://) ]]; then
   chmod -R a-w "$PROJECT_PATH"
   find "$PROJECT_PATH" -type f -exec chmod a-x {} +
   echo "Read-only isolation applied to clone."
-  unset _repo_basename _clone_head
+  unset _repo_basename _clone_base _clone_head
 fi
 
 # --- Deploy target dispatch state (issue #88) ---
@@ -2842,13 +2847,21 @@ if [[ "$MODE" == "branch-review" ]]; then
     fi
     unset _branch_resume_base _branch_resume_head
   else
-    BRANCH_BASE_SHA="$(git -C "$PROJECT_PATH" rev-parse --verify --quiet "${BRANCH_BASE}^{commit}" 2>/dev/null)" \
-      || die "Mode 'branch-review' could not resolve --branch-base '$BRANCH_BASE' to a commit in $PROJECT_PATH — check that it is a valid git ref (fetch it first if it only exists on the remote)."
+    # The URL helper resolved both refs before checkout; HEAD-relative refs
+    # would change meaning if evaluated again in the detached working tree.
+    BRANCH_BASE_SHA="$CLONED_BRANCH_BASE_SHA"
+    if [[ -z "$BRANCH_BASE_SHA" ]]; then
+      BRANCH_BASE_SHA="$(git -C "$PROJECT_PATH" rev-parse --verify --quiet --end-of-options "${BRANCH_BASE}^{commit}" 2>/dev/null)" \
+        || die "Mode 'branch-review' could not resolve --branch-base '$BRANCH_BASE' to a commit in $PROJECT_PATH — check that it is a valid git ref (fetch it first if it only exists on the remote)."
+    fi
     [[ -n "$BRANCH_BASE_SHA" ]] \
       || die "Mode 'branch-review' could not resolve --branch-base '$BRANCH_BASE' to a commit in $PROJECT_PATH — check that it is a valid git ref (fetch it first if it only exists on the remote)."
 
-    BRANCH_HEAD_SHA="$(git -C "$PROJECT_PATH" rev-parse --verify --quiet "${BRANCH_HEAD}^{commit}" 2>/dev/null)" \
-      || die "Mode 'branch-review' could not resolve --branch-head '$BRANCH_HEAD' to a commit in $PROJECT_PATH — check that it is a valid git ref."
+    BRANCH_HEAD_SHA="$CLONED_BRANCH_HEAD_SHA"
+    if [[ -z "$BRANCH_HEAD_SHA" ]]; then
+      BRANCH_HEAD_SHA="$(git -C "$PROJECT_PATH" rev-parse --verify --quiet --end-of-options "${BRANCH_HEAD}^{commit}" 2>/dev/null)" \
+        || die "Mode 'branch-review' could not resolve --branch-head '$BRANCH_HEAD' to a commit in $PROJECT_PATH — check that it is a valid git ref."
+    fi
     [[ -n "$BRANCH_HEAD_SHA" ]] \
       || die "Mode 'branch-review' could not resolve --branch-head '$BRANCH_HEAD' to a commit in $PROJECT_PATH — check that it is a valid git ref."
 

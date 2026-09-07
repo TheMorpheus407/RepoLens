@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Resolve remote branch-review refs and revision expressions through local aliases in the temporary clone, retaining both resolved commits before checkout so `HEAD`-relative refs keep their original meaning. Qualified branch refs, tags, and commit SHAs use Git's normal resolution rules.
+
 - Resume branch reviews of remote URLs at the saved commit before applying read-only isolation, including when refs are omitted or the remote branch has advanced. Preserve explicit ref checks, the original delta, and the saved task-hour cap.
 
 - Keep process-scope supervisors alive when an RPC client disconnects or cannot receive its reply, preserving worker cleanup and parent-death monitoring; completed scope destruction still shuts down cleanly without a delivered reply.

@@ -617,26 +617,40 @@ run_agent() {
 
 # Clone all ancestry and refs for a branch review. Ordinary audits retain the
 # inexpensive shallow clone. Ref aliases are created only inside this new clone.
+# Successful reviews return CLONED_BRANCH_{BASE,HEAD}_SHA as resolved before
+# checkout, so HEAD-relative expressions are not evaluated again afterward.
 clone_project_for_mode() {
   local remote="$1" destination="$2" mode="$3" base="${4:-}" head="${5:-HEAD}"
+  CLONED_BRANCH_BASE_SHA="" CLONED_BRANCH_HEAD_SHA=""
   if [[ "$mode" != branch-review ]]; then
     git clone --depth 1 -- "$remote" "$destination"
     return "$?"
   fi
   git clone --no-single-branch -- "$remote" "$destination" || return 1
-  local ref sha
-  for ref in "$base" "$head"; do
-    [[ -n "$ref" && "$ref" != HEAD ]] || continue
-    if ! git -C "$destination" rev-parse --verify --quiet --end-of-options "${ref}^{commit}" >/dev/null; then
-      sha="$(git -C "$destination" rev-parse --verify --quiet --end-of-options "refs/remotes/origin/${ref}^{commit}")" || continue
-      git -C "$destination" branch -- "$ref" "$sha" || return 1
-    fi
-  done
-  if [[ "$head" != HEAD ]]; then
-    sha="$(git -C "$destination" rev-parse --verify --quiet --end-of-options "${head}^{commit}")" || {
-      printf 'Unable to resolve --branch-head %s in the cloned repository.\n' "$head" >&2
+  local refs ref sha symbolic_ref local_ref base_sha="" head_sha
+  # Materialize branch names, not revision expressions. Git can then resolve
+  # feature~1, refs/heads/feature, and heads/feature using its normal rules,
+  # including tag precedence for an ambiguous short name. Skip origin/HEAD.
+  refs="$(git -C "$destination" for-each-ref --format='%(refname) %(objectname) %(symref)' refs/remotes/origin/)" || return 1
+  while IFS=' ' read -r ref sha symbolic_ref; do
+    [[ -n "$ref" && -z "$symbolic_ref" ]] || continue
+    local_ref="refs/heads/${ref#refs/remotes/origin/}"
+    git -C "$destination" show-ref --verify --quiet -- "$local_ref" && continue
+    git -C "$destination" update-ref --no-deref -- "$local_ref" "$sha" || return 1
+  done <<< "$refs"
+  if [[ -n "$base" ]]; then
+    base_sha="$(git -C "$destination" rev-parse --verify --quiet --end-of-options "${base}^{commit}")" || {
+      printf 'Unable to resolve --branch-base %s in the cloned repository.\n' "$base" >&2
       return 1
     }
-    git -C "$destination" checkout --detach "$sha" || return 1
   fi
+  head_sha="$(git -C "$destination" rev-parse --verify --quiet --end-of-options "${head}^{commit}")" || {
+    printf 'Unable to resolve --branch-head %s in the cloned repository.\n' "$head" >&2
+    return 1
+  }
+  if [[ "$head" != HEAD ]]; then
+    git -C "$destination" checkout --detach "$head_sha" || return 1
+  fi
+  # shellcheck disable=SC2034 # Returned to the calling branch-review pipeline.
+  CLONED_BRANCH_BASE_SHA="$base_sha" CLONED_BRANCH_HEAD_SHA="$head_sha"
 }
