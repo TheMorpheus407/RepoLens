@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- OpenCode invocations use `--auto` so non-interactive lenses can write findings to output directories outside the audited repository; explicit permission denials remain enforced (#409).
+
 - `branch-review --local` now preserves the regression finding contract—`[REGRESSION][SEVERITY]` titles, `Introduced By` / `Before / After`, exact complexity metadata, and validation evidence—instead of also presenting the generic `[SEVERITY]` audit-file contract; ordinary local audit output is unchanged ([#402](https://github.com/TheMorpheus407/RepoLens/issues/402))
 - `branch-review` regression findings now use the same implementation-effort routing contract as audit findings: each issue selects exactly one 1-5 complexity tier, applies the matching `repolens/complexity/<n>` label, and records `- **Complexity:** <n> (<Descriptor>)` in its body, while RepoLens pre-creates the five labels for branch-review runs ([#404](https://github.com/TheMorpheus407/RepoLens/issues/404))
 - `branch-review` resume now fails fast when a non-empty run's persisted review head is not the checked-out commit, preventing its frozen delta from being paired with a different working tree. Check out the persisted head or start a new branch review; matching-head and empty-delta resumes are unchanged ([#398](https://github.com/TheMorpheus407/RepoLens/issues/398))

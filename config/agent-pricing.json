@@ -1,6 +1,6 @@
 {
   "_comment": "USD per 1M tokens. Update when model pricing changes. 'agent_default_model' maps --agent values to a model id in 'models'. <agent>/<model> for claude/codex/antigravity parses the <model> segment and looks it up in 'models'; an unknown model buckets by keyword into generic-flash/pro/premium-default (opencode/<model> keeps its opencode-default fallback). Cursor and cursor/<model>, as well as cursor-ide, always use the authenticated Cursor subscription marker instead of API-token pricing.",
-  "updated_at": "2026-07-29",
+  "updated_at": "2026-08-16",
   "models": {
     "claude-sonnet-4-5": {
       "label": "Claude Sonnet 4.5",
@@ -66,6 +66,11 @@
       "label": "Cursor subscription (Auto or pinned plan model)",
       "input_per_mtok": 0.00,
       "output_per_mtok": 0.00
+    },
+    "minimax-coding-plan/MiniMax-M3": {
+      "label": "MiniMax-M3 via minimax-coding-plan",
+      "input_per_mtok": 0.30,
+      "output_per_mtok": 1.20
     }
   },
   "agent_default_model": {

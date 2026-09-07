@@ -515,11 +515,13 @@ run_agent() {
         timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" codex exec --yolo -m gpt-5.3-codex-spark -c reasoning_effort="xhigh" "$prompt"
         ;;
       opencode)
-        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run "$prompt"
+        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run --auto "$prompt"
         ;;
       opencode/*)
         local opencode_model="${agent#opencode/}"
-        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run -m "$opencode_model" "$prompt"
+        # Auto-approve external output-directory writes in headless runs.
+        # OpenCode still enforces explicit permission denials.
+        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" opencode run --auto -m "$opencode_model" "$prompt"
         ;;
       antigravity)
         timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" agy --dangerously-skip-permissions -p "$prompt"
