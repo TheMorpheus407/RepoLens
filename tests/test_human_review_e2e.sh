@@ -142,7 +142,7 @@ assert_not_contains() {
 assert_str_contains() {
   local desc="$1" hay="$2" needle="$3"
   TOTAL=$((TOTAL + 1))
-  if printf '%s' "$hay" | grep -qF -- "$needle"; then
+  if [[ "$hay" == *"$needle"* ]]; then
     pass_with "$desc"
   else
     fail_with "$desc" "expected to find: $needle (got: $hay)"
@@ -153,7 +153,7 @@ assert_str_contains() {
 assert_str_not_contains() {
   local desc="$1" hay="$2" needle="$3"
   TOTAL=$((TOTAL + 1))
-  if printf '%s' "$hay" | grep -qF -- "$needle"; then
+  if [[ "$hay" == *"$needle"* ]]; then
     fail_with "$desc" "did not expect to find: $needle (got: $hay)"
   else
     pass_with "$desc"
