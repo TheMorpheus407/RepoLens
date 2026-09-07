@@ -524,7 +524,7 @@ The synthesized filing path (multi-round `bugreport` and remote `branch-review`)
 
 Filing records live under `logs/<run-id>/final/filed/`: `.request.json`, `.created-response`, and `.readback.json` support reconciliation; `.url` means confirmed success and `.failed` records rejection. An `.attempted` marker prevents automatic repetition after an ambiguous network failure or crash. Removing `.failed` alone does not retry a POST. Inspect the saved response and the remote repository before explicitly clearing an attempt or stale `.governor` reservation.
 
-Structured publication supports GitHub, GitLab through `glab api`, and Gitea with `tea api` support. The Forgejo CLI currently exposes display output without a structured readback interface, so governed publication fails before any mutation for `fj`; use `--local`. Gitea and GitLab cross-link comments remain disabled until a structured comment adapter is available. Legacy direct-filing modes keep their existing provider behavior.
+Structured publication supports GitHub, GitLab through `glab api`, and Gitea with `tea api` support. Governed publication requires a valid HTTPS target binding; missing or HTTP bindings fail before provider calls. The Forgejo CLI currently exposes display output without a structured readback interface, so governed publication fails before any mutation for `fj`; use `--local`. Gitea and GitLab cross-link comments remain disabled until a structured comment adapter is available. Legacy direct-filing modes keep their existing provider behavior.
 
 ## Remote deploy mode
 

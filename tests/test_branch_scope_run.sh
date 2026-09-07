@@ -49,7 +49,7 @@ Historical merge-base evidence from `git show BASE:src/app.sh`:
 ```sh
 return 1
 ```
-The base returned one; the head returns zero.
+The base returned one; the head returns zero. Historical documentation mentions 1 hour.
 ## Impact
 The caller accepts an invalid request.
 ## Complexity
@@ -72,6 +72,7 @@ cat > "$TMP/bin/codex" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
 prompt="${!#}"
+[[ "$prompt" == *'6 hours'* ]] || exit 98
 output_dir="$(sed -n 's/^Write all findings to: `\(.*\)`$/\1/p' <<< "$prompt" | head -1)"
 if [[ -n "$output_dir" ]]; then
   printf 'lens\n' >> "$GATE_TEST_TMP/models"
@@ -123,20 +124,20 @@ for kind in remote local; do
   : > "$TMP/mutations"
   extra=()
   [[ "$kind" == local ]] && extra=(--local --output "$TMP/local-output")
-  env PATH="$TMP/bin:$PATH" GATE_TEST_TMP="$TMP" GATE_TEST_LOCAL="$([[ "$kind" == local ]] && printf 1 || printf 0)" \
+  env REPOLENS_MODE=audit PATH="$TMP/bin:$PATH" GATE_TEST_TMP="$TMP" GATE_TEST_LOCAL="$([[ "$kind" == local ]] && printf 1 || printf 0)" \
     REPOLENS_AGENT_TIMEOUT=10 REPOLENS_AGENT_KILL_GRACE=1 REPOLENS_LENS_HEARTBEAT_INTERVAL=0 \
     bash "$SCRIPT_DIR/repolens.sh" --project "$TMP/project" --agent codex \
-    --mode branch-review --branch-base HEAD~1 --focus injection --depth 1 --no-verifier --yes "${extra[@]}" > "$TMP/$kind.log" 2>&1
+    --mode branch-review --branch-base HEAD~1 --focus injection --depth 1 --task-hours 6 --no-verifier --yes "${extra[@]}" > "$TMP/$kind.log" 2>&1
   rc=$?
   run_id="$(sed -n 's/.*RepoLens run \([^ ]*\) complete.*/\1/p' "$TMP/$kind.log" | tail -1)"
   if [[ -n "$run_id" ]]; then RUN_DIRS+=("$SCRIPT_DIR/logs/$run_id"); fi
   check "$kind branch run completes with a stubbed model" test "$rc" = 0
   source_path="$(cat "$TMP/source-path" 2>/dev/null || true)"
-  check "$kind nested out-of-scope finding is quarantined" test -f "${source_path%/*}/nested/002-unrelated.md.out-of-scope"
+  check "$kind CLI branch mode overrides conflicting ambient audit mode" test -f "${source_path%/*}/nested/002-unrelated.md.out-of-scope"
   if [[ "$kind" == remote ]]; then
     check 'remote branch creates exactly one issue through governor' test "$(wc -l < "$TMP/mutations")" = 1
     check 'remote branch preserves regression title and complexity label' jq -e '.title=="[REGRESSION][HIGH] Restore return contract" and (.labels|index("repolens/complexity/2"))!=null' "$TMP/created.json"
-    check 'remote branch preserves all exact source body sections and evidence' jq -e --rawfile body "$TMP/body.md" '.body==$body' "$TMP/created.json"
+    check 'six-hour sizing preserves exact historical head/base evidence including original one-hour text' jq -e --rawfile body "$TMP/body.md" '.body==$body' "$TMP/created.json"
     check 'remote branch runs investigator then synthesizer without a filing model' test "$(paste -sd, "$TMP/models")" = lens,synthesizer
   else
     check 'local branch retains findings without invoking optional synthesizer' test "$(cat "$TMP/models")" = lens

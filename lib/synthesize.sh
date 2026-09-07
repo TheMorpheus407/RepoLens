@@ -1171,7 +1171,7 @@ run_synthesizer() {
     return 1
   }
 
-  if [[ "${REPOLENS_MODE:-${MODE:-}}" == "branch-review" ]]; then
+  if [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]]; then
     prompt_text+=$'\n\nBranch-review contract: retain the original regression Summary, Introduced By, Before / After, Impact, Complexity, Recommended Fix, References, and Validation sections. Preserve regression labels and source evidence. Only changed-file findings surviving the mechanical scope filter are eligible. Propose data only; the deterministic governor performs remote publication.'
   fi
 

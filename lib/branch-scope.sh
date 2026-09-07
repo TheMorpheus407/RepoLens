@@ -40,7 +40,7 @@ repolens_extract_citations() {
 }
 
 branch_scope_verify_body() {
-  [[ "${REPOLENS_MODE:-${MODE:-}}" == "branch-review" ]] || return 0
+  [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local body="${1:-}" scope="${BRANCH_SCOPE_FILE:-${LOG_BASE:-}/branch-scope.json}" paths citations path
   if [[ ! -f "$scope" || -L "$scope" ]] \
       || ! paths="$(jq -ce 'select(type == "array" and all(.[]; type == "string"))' "$scope" 2>/dev/null)"; then
@@ -63,7 +63,7 @@ branch_scope_verify_body() {
 # companion reason, so all downstream *.md consumers exclude them, including
 # local registries, round digests, verifier, and synthesizer.
 branch_scope_filter_directory() {
-  [[ "${REPOLENS_MODE:-${MODE:-}}" == "branch-review" ]] || return 0
+  [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local dir="$1" file reason
   [[ -d "$dir" ]] || return 0
   while IFS= read -r -d '' file; do
@@ -77,7 +77,7 @@ branch_scope_filter_directory() {
 # Side effects: filter a synthesized candidate before promotion, preserve
 # rejected proposals, and retain the branch title convention mechanically.
 branch_scope_filter_manifest() {
-  [[ "${REPOLENS_MODE:-${MODE:-}}" == "branch-review" ]] || return 0
+  [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local manifest="$1" entry reason kept rejected
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1

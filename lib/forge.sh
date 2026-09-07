@@ -1514,7 +1514,7 @@ _forge_glab_host() {
   local host="${FORGE_HOST:-}"
   [[ "$host" != http://* ]] || return 1
   host="${host#https://}"
-  [[ -n "$host" && "$host" != */* && "$host" != *@* && "$host" != *[[:space:]]* ]] || return 1
+  [[ "$host" =~ ^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9_.-]+)(:[0-9]+)?$ ]] || return 1
   printf '%s\n' "$host"
 }
 
@@ -1744,7 +1744,8 @@ _forge_warn() {
 forge_filing_capable() {
   case "${FORGE_PROVIDER:-}:${1:-create}" in
     gh:create|gh:comment) _forge_gh_filing_host >/dev/null ;;
-    tea:create|glab:create) return 0 ;;
+    tea:create) _forge_tea_filing_host >/dev/null ;;
+    glab:create) _forge_glab_host >/dev/null ;;
     *) _forge_warn "Structured filing/readback is unavailable for ${FORGE_PROVIDER:-unset} (${1:-create}); use --local"; return 1 ;;
   esac
 }
@@ -1777,12 +1778,12 @@ forge_issue_list_json() {
         --json number,title,body,state,url,labels)" || return 1 ;;
     tea)
       output="$(_forge_tea_api_pages "$repo" "repos/$repo/issues?state=$state&type=issues")" || return 1 ;;
-    glab) _forge_glab_issue_list_json "$repo" "$state"; return $? ;;
+    glab) output="$(_forge_glab_issue_list_json "$repo" "$state")" || return 1 ;;
     *) forge_filing_capable create >&2; return 1 ;;
   esac
   output="$(_forge_normalize_issues_json <<< "$output")" || return 1
   jq -e --arg state "$state" '$state == "all" or all(.[]; .state == $state)' <<< "$output" >/dev/null || return 1
-  [[ "$(jq 'length' <<< "$output")" -lt 1000 ]] || {
+  [[ "${FORGE_PROVIDER:-}" == glab || "$(jq 'length' <<< "$output")" -lt 1000 ]] || {
     _forge_warn 'Structured filing issue list reached 1000 results; refusing an incomplete dedup check'
     return 1
   }
@@ -1808,11 +1809,13 @@ forge_issue_read_json() {
 # Parse an issue URL only after binding it to the configured host and repo.
 # This URL is never passed to the CLI as an arbitrary request destination.
 forge_issue_number_from_url() {
-  local repo="$1" url="$2" host="${FORGE_HOST:-}" prefix number
-  [[ -n "$host" ]] || { [[ "${FORGE_PROVIDER:-}" == gh ]] && host=github.com; }
-  host="${host#https://}"
-  host="${host%/}"
-  [[ -n "$host" && "$host" != http:* && "$host" != *'@'* && "$host" != *'?'* && "$host" != *'#'* ]] || return 1
+  local repo="$1" url="$2" host prefix number
+  case "${FORGE_PROVIDER:-}" in
+    gh) host="$(_forge_gh_filing_host)" || return 1 ;;
+    glab) host="$(_forge_glab_host)" || return 1 ;;
+    tea) host="$(_forge_tea_filing_host)" || return 1 ;;
+    *) return 1 ;;
+  esac
   prefix="https://$host/$repo/issues/"
   [[ "${FORGE_PROVIDER:-}" == glab ]] && prefix="https://$host/$repo/-/issues/"
   [[ "$url" == "$prefix"* ]] || return 1
@@ -1858,6 +1861,7 @@ forge_issue_comment_read_json() {
 _forge_tea_api() {
   local repo="$1" endpoint="$2"
   shift 2
+  _forge_tea_filing_host >/dev/null || return 1
   local -a target=()
   if [[ -n "${FORGE_PROJECT_PATH:-}" ]]; then
     target=(--repo "$FORGE_PROJECT_PATH" --remote "${FORGE_REMOTE_NAME:-origin}")
@@ -1910,4 +1914,20 @@ _forge_gh_filing() {
   local host
   host="$(_forge_gh_filing_host)" || return 1
   GH_HOST="$host" gh "$@"
+}
+
+# Gitea may live below an HTTPS instance path. Require a usable secure binding
+# before any governed provider operation, while retaining that base path for
+# exact browser-URL readback matching. An HTTP origin yields no such binding.
+_forge_tea_filing_host() {
+  local host="${FORGE_HOST:-}" authority path
+  [[ -n "$host" && "$host" != http://* ]] || return 1
+  host="${host#https://}"
+  host="${host%/}"
+  authority="${host%%/*}"
+  [[ "$authority" =~ ^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9_.-]+)(:[0-9]+)?$ ]] || return 1
+  path="${host#"$authority"}"
+  [[ "$path" != *[[:space:]]* && "$path" != *'@'* && "$path" != *'?'* && "$path" != *'#'* && "$path" != *\\* ]] || return 1
+  [[ "/$path/" != */../* && "/$path/" != */./* && "$path" != *//* ]] || return 1
+  printf '%s\n' "$host"
 }
