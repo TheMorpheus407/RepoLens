@@ -253,6 +253,8 @@ chmod +x "$FAKE_BIN/claude"
 git init -q "$PROJECT_DIR"
 printf '2026-01-01T00:00:00Z stage=coverage-test duration_s=10\n2026-01-01T02:00:00Z stage=coverage-test duration_s=18\n' > "$LOG_DIR/app.log"
 
+# This fixture deliberately resumes an empty but existing run directory.
+mkdir -p "$SCRIPT_DIR/logs/$RUN_ID"
 focus_output="$(PATH="$FAKE_BIN:$PATH" bash "$SCRIPT_DIR/repolens.sh" \
   --project "$PROJECT_DIR" \
   --agent claude \

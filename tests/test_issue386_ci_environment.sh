@@ -135,22 +135,22 @@ SH
 }
 
 path_without_agent_clis() {
-  local new_path="" dir agent drop
+  # On NixOS, agents and core utilities can share a PATH directory. Mirror
+  # executables individually so hiding agents never removes bash/git/jq too.
+  local clean_bin="$TMPDIR/agent-free-bin" dir executable name
+  mkdir -p "$clean_bin"
   local IFS=:
   for dir in $PATH; do
-    [[ -n "$dir" ]] || continue
-    drop=false
-    for agent in claude codex opencode agy; do
-      if [[ -x "$dir/$agent" ]]; then
-        drop=true
-        break
-      fi
+    [[ -n "$dir" && -d "$dir" ]] || continue
+    for executable in "$dir"/*; do
+      [[ -f "$executable" && -x "$executable" ]] || continue
+      name="${executable##*/}"
+      case "$name" in claude|codex|opencode|agy|copilot|cursor-agent) continue ;; esac
+      [[ -e "$clean_bin/$name" ]] && continue
+      ln -s "$executable" "$clean_bin/$name" || return 1
     done
-    if [[ "$drop" == "false" ]]; then
-      new_path="${new_path:+$new_path:}$dir"
-    fi
   done
-  printf '%s' "$new_path"
+  printf '%s' "$clean_bin"
 }
 
 assert_agent_free_path() {

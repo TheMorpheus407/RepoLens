@@ -98,6 +98,7 @@ printf 'started\n' > "$LOG_FILE"
 
 run_repolens() {
   local run_id="$1"
+  mkdir -p "$SCRIPT_DIR/logs/$run_id"
   shift
   PATH="$FAKE_BIN:$PATH" bash "$SCRIPT_DIR/repolens.sh" \
     --project "$PROJECT_DIR" \

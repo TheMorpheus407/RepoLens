@@ -290,6 +290,8 @@ chmod +x "$FAKE_BIN/claude"
 git init -q "$PROJECT_DIR"
 printf '[stage-start issue=1]\n[stage-start issue=2]\n[stage-end issue=2]\n[run-end]\n' > "$LOG_FILE"
 
+# This fixture deliberately resumes an empty but existing run directory.
+mkdir -p "$SCRIPT_DIR/logs/$RUN_ID"
 alias_output="$(PATH="$FAKE_BIN:$PATH" bash "$SCRIPT_DIR/repolens.sh" \
   --project "$PROJECT_DIR" \
   --agent claude \

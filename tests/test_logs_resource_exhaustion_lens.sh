@@ -263,6 +263,8 @@ chmod +x "$FAKE_BIN/claude"
 git init -q "$PROJECT_DIR"
 printf '2026-05-09T12:00:00Z kernel: Out of memory: Killed process 1234 (api)\n' > "$LOG_DIR/app.log"
 
+# This fixture deliberately resumes an empty but existing run directory.
+mkdir -p "$SCRIPT_DIR/logs/$RUN_ID"
 focus_output="$(PATH="$FAKE_BIN:$PATH" bash "$SCRIPT_DIR/repolens.sh" \
   --project "$PROJECT_DIR" \
   --agent claude \

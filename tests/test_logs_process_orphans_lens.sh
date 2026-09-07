@@ -242,6 +242,8 @@ chmod +x "$FAKE_BIN/claude"
 git init -q "$PROJECT_DIR"
 printf 'run=1 owner exited\nrun=1 killed orphan pid=123\n' > "$LOG_DIR/app.log"
 
+# This fixture deliberately resumes an empty but existing run directory.
+mkdir -p "$SCRIPT_DIR/logs/$RUN_ID"
 focus_output="$(PATH="$FAKE_BIN:$PATH" bash "$SCRIPT_DIR/repolens.sh" \
   --project "$PROJECT_DIR" \
   --agent claude \
