@@ -16,10 +16,9 @@
 # Regression tests for issue #112 — semaphore tokens leak on abnormal
 # subshell exit.
 #
-# The fix installs an EXIT trap inside the spawn_lens subshell so that
-# sem_token_remove runs on any bash-trappable exit path (normal return,
-# exit 1, SIGTERM, SIGHUP). SIGKILL is outside bash's reach and is
-# covered by a separate follow-up (#117 — startup-time stale-token GC).
+# The parent collects tokens after the owned scope is empty, including exits
+# caused by signals. Workers must not inherit the parent's global EXIT cleanup,
+# but callbacks may install their own cleanup handlers.
 #
 # No AI models are invoked — tests source lib/parallel.sh directly and
 # exercise it with synthetic callbacks.
@@ -225,6 +224,47 @@ assert_eq "Concurrent spawns: SIGTERM'd worker token released" \
 # ---------------------------------------------------------------------------
 # 8. Scope ownership releases capacity only after kernel-confirmed emptiness.
 # This is exercised above for normal, abnormal, and SIGKILL callback exits.
+
+# 9. Heartbeat-style trap save/restore must not activate parent cleanup in a
+# worker. Inspect the first READY write as well: isolation precedes enrollment.
+(
+  trap 'touch "$TMPROOT/parent-exit-ran"' EXIT
+  fresh_sem || exit 1
+  parent_exit_before="$(trap -p EXIT)"
+  printf() {
+    if [[ "${1:-}" == '%s %s\n' ]]; then
+      trap -p EXIT > "$TMPROOT/gate-exit-trap"
+    fi
+    # shellcheck disable=SC2059 # Preserve the wrapped builtin format.
+    builtin printf "$@"
+  }
+  cb_restore_exit() {
+    local previous_exit
+    previous_exit="$(trap -p EXIT)"
+    builtin printf '%s' "$previous_exit" > "$TMPROOT/callback-exit-trap"
+    trap ':' EXIT
+    if [[ -n "$previous_exit" ]]; then eval "$previous_exit"; else trap - EXIT; fi
+  }
+  spawn_lens trap-isolation cb_restore_exit || exit 1
+  wait_all || exit 1
+  [[ "$(trap -p EXIT)" == "$parent_exit_before" ]] || exit 1
+  trap - EXIT
+); assert_eq "Worker trap isolation preserves the parent's EXIT handler" "0" "$?"
+assert_eq "Inherited EXIT is cleared before the READY handshake" "true" \
+  "$([[ -f "$TMPROOT/gate-exit-trap" && ! -s "$TMPROOT/gate-exit-trap" ]] && echo true || echo false)"
+assert_eq "Callback cannot capture the parent's global EXIT cleanup" "true" \
+  "$([[ -f "$TMPROOT/callback-exit-trap" && ! -s "$TMPROOT/callback-exit-trap" ]] && echo true || echo false)"
+assert_eq "Callback trap restoration never runs parent cleanup" "false" \
+  "$([[ -e "$TMPROOT/parent-exit-ran" ]] && echo true || echo false)"
+
+cb_own_exit() { trap 'touch "$TMPROOT/worker-exit-ran"' EXIT; exit 7; }
+fresh_sem
+spawn_lens own-exit cb_own_exit
+wait_all; wait_rc=$?
+assert_eq "Callback-installed EXIT cleanup still runs" "true" \
+  "$([[ -f "$TMPROOT/worker-exit-ran" ]] && echo true || echo false)"
+assert_eq "Callback EXIT cleanup preserves a failing worker result" "1" "$wait_rc"
+assert_eq "Callback EXIT cleanup leaves scope token collection intact" "0" "$(token_count)"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

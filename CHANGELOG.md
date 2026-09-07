@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Clear inherited parent EXIT cleanup before parallel worker enrollment, so default heartbeat trap restoration cannot delete a shared remote clone while sibling lenses are still running. Callback cleanup and parent-owned scope collection remain active.
+
 - Restore log-lens test fixtures to the required existing-run resume contract, retain core utilities in the CI-like agent-free PATH on NixOS, and run CI on harness integration branches before publication (#405).
 
 - Branch reviews of remote project URLs clone full history and all branches, then check out an explicit review head before analysis, so merge-base resolution works (#400).

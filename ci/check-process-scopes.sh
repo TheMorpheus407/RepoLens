@@ -22,4 +22,5 @@ done
 # Bash 4.0 still executes the real run_agent topology and 124/137 parity above.
 if (( BASH_VERSINFO[0] > 4 || BASH_VERSINFO[1] >= 2 )); then
   bash tests/test_agent_timeout_kill_grace.sh || exit 1
+  bash tests/test_parallel_remote_clone_cleanup.sh || exit 1
 fi

@@ -431,6 +431,11 @@ spawn_lens() {
     return 1
   fi
   (
+    # Bash exposes the parent's EXIT handler to trap -p in a subshell even
+    # though it does not run it by default. Callback save/restore (heartbeat)
+    # would reactivate global cleanup here. Clear it before the handshake;
+    # callbacks may install their own cleanup, while the parent owns the scope.
+    trap - EXIT
     printf '%s %s\n' "$nonce" "$BASHPID" >&"$ready_fd"
     IFS= read -r -t 5 gate <&"$go_fd" || exit 125
     [[ "$gate" == "$nonce ENROLL" ]] || exit 125
