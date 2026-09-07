@@ -614,3 +614,29 @@ run_agent() {
     esac
   )
 }
+
+# Clone all ancestry and refs for a branch review. Ordinary audits retain the
+# inexpensive shallow clone. Ref aliases are created only inside this new clone.
+clone_project_for_mode() {
+  local remote="$1" destination="$2" mode="$3" base="${4:-}" head="${5:-HEAD}"
+  if [[ "$mode" != branch-review ]]; then
+    git clone --depth 1 -- "$remote" "$destination"
+    return "$?"
+  fi
+  git clone --no-single-branch -- "$remote" "$destination" || return 1
+  local ref sha
+  for ref in "$base" "$head"; do
+    [[ -n "$ref" && "$ref" != HEAD ]] || continue
+    if ! git -C "$destination" rev-parse --verify --quiet --end-of-options "${ref}^{commit}" >/dev/null; then
+      sha="$(git -C "$destination" rev-parse --verify --quiet --end-of-options "refs/remotes/origin/${ref}^{commit}")" || continue
+      git -C "$destination" branch -- "$ref" "$sha" || return 1
+    fi
+  done
+  if [[ "$head" != HEAD ]]; then
+    sha="$(git -C "$destination" rev-parse --verify --quiet --end-of-options "${head}^{commit}")" || {
+      printf 'Unable to resolve --branch-head %s in the cloned repository.\n' "$head" >&2
+      return 1
+    }
+    git -C "$destination" checkout --detach "$sha" || return 1
+  fi
+}

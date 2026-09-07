@@ -494,6 +494,8 @@ git -C ~/my-app switch feature/checkout-rewrite
 ./repolens.sh --project ~/my-app --agent claude --mode branch-review --branch-base main
 ```
 
+For a remote `--project <url>`, RepoLens clones full history and all branches so the merge base is available. An explicit `--branch-head` is checked out in the temporary clone; the default `HEAD` reviews the remote default branch. Branch names and tags are resolved from the fetched repository.
+
 `--branch-base` is required and names the ref the branch is compared against. `--branch-head` defaults to `HEAD` and must resolve to the checked-out commit — lenses read the working tree, so a head that is not checked out would be reviewed against files that are not on disk.
 
 The delta is **three-dot**: everything the head added on top of the merge base it shares with the base ref, equivalent to `git diff main...HEAD`. A two-dot comparison would report commits that exist only on the base as things the branch deleted, and every one of those would be filed as a regression the branch never caused.

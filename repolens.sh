@@ -2036,7 +2036,8 @@ if [[ "$PROJECT_PATH" =~ ^(https://|git@|ssh://|git://) ]]; then
   CLONE_DIR="$(mktemp -d)"
   _repo_basename="$(basename "$PROJECT_PATH" .git)"
   echo "Cloning remote repository: $PROJECT_PATH"
-  git clone --depth 1 "$PROJECT_PATH" "$CLONE_DIR/$_repo_basename" || die "Failed to clone: $PROJECT_PATH"
+  clone_project_for_mode "$PROJECT_PATH" "$CLONE_DIR/$_repo_basename" "$MODE" "$BRANCH_BASE" "$BRANCH_HEAD" \
+    || die "Failed to clone: $PROJECT_PATH"
   PROJECT_PATH="$CLONE_DIR/$_repo_basename"
 
   # Read-only isolation: prevent agent from modifying or executing repo files

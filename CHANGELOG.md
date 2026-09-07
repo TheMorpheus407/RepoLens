@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Branch reviews of remote project URLs clone full history and all branches, then check out an explicit review head before analysis, so merge-base resolution works (#400).
+
 - OpenCode invocations use `--auto` so non-interactive lenses can write findings to output directories outside the audited repository; explicit permission denials remain enforced (#409).
 
 - `branch-review --local` now preserves the regression finding contract—`[REGRESSION][SEVERITY]` titles, `Introduced By` / `Before / After`, exact complexity metadata, and validation evidence—instead of also presenting the generic `[SEVERITY]` audit-file contract; ordinary local audit output is unchanged ([#402](https://github.com/TheMorpheus407/RepoLens/issues/402))
