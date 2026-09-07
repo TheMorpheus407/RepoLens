@@ -29,7 +29,7 @@ At execution time, a template engine merges a mode-specific base template with t
 - **Independent iteration** — each lens runs its own loop until it declares itself done
 - **Deterministic termination** — the DONE×3 streak protocol prevents premature or runaway exits
 - **Parallel execution** — lenses run concurrently via a file-based semaphore, with no shared state
-- **Agent-agnostic** — any supported LLM agent CLI (claude, codex, spark, Cursor, opencode, Antigravity), or the explicit Cursor IDE/Composer handoff, can execute lenses
+- **Agent-agnostic** — any supported LLM agent CLI (claude, codex, spark, Cursor, opencode, Antigravity, Copilot), or the explicit Cursor IDE/Composer handoff, can execute lenses
 
 The current lens inventory spans 34 domains with 338 total lenses, broken down as: 230 code analysis/audit-visible lenses (209 code analysis plus 21 runtime log analysis) + 18 tool gate + 14 product discovery + 43 deployment and Android audit + 13 open-source readiness + 18 content quality + 1 greenfield planning + 1 spec-change planning. Polish mode adds 16 suggestion lenses across the `fluency`, `effort-signal`, and `hedonic` domains.
 

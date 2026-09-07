@@ -257,8 +257,8 @@ require_cmd() {
 validate_agent() {
   local agent="$1"
   case "$agent" in
-    claude|codex|spark|sparc|opencode|antigravity|cursor|cursor-ide) ;;
-    claude/*|codex/*|opencode/*|antigravity/*|cursor/*)
+    claude|codex|spark|sparc|opencode|antigravity|cursor|cursor-ide|copilot) ;;
+    claude/*|codex/*|opencode/*|antigravity/*|cursor/*|copilot/*)
       # <agent>/<model> targets a specific model on the CLI (issue #384). The
       # empty-model guard mirrors the original opencode/* one so a trailing slash
       # (a typo) never silently routes to a blank model.
@@ -269,7 +269,7 @@ validate_agent() {
       # /model suffix would fight the preset, so it is rejected with a hint.
       die "Invalid agent: $agent (spark/sparc are fixed presets; use codex/<model> to target a specific model)"
       ;;
-    *) die "Invalid agent: $agent (expected claude, codex, spark/sparc, cursor, cursor-ide, opencode, antigravity, or <agent>/<model> for claude/codex/cursor/opencode/antigravity)" ;;
+    *) die "Invalid agent: $agent (expected claude, codex, spark/sparc, cursor, cursor-ide, opencode, antigravity, copilot, or <agent>/<model> for claude/codex/cursor/opencode/antigravity/copilot)" ;;
   esac
 }
 
@@ -286,6 +286,7 @@ require_agent_cmd() {
     antigravity|antigravity/*) require_cmd agy ;;
     cursor|cursor/*) require_cmd cursor-agent ;;
     cursor-ide) ;; # Filesystem handoff to Cursor Composer; no CLI binary.
+    copilot|copilot/*) require_cmd gh ;;
     *) die "Internal error: unsupported agent '$agent' for command check" ;;
   esac
 }
@@ -395,6 +396,7 @@ resolve_agent_timeout() {
     opencode|opencode/*) agent_vars=(REPOLENS_AGENT_TIMEOUT_OPENCODE) ;;
     antigravity|antigravity/*) agent_vars=(REPOLENS_AGENT_TIMEOUT_ANTIGRAVITY) ;;
     cursor|cursor/*|cursor-ide) agent_vars=(REPOLENS_AGENT_TIMEOUT_CURSOR) ;;
+    copilot|copilot/*) agent_vars=(REPOLENS_AGENT_TIMEOUT_COPILOT) ;;
     "") ;;
     *) ;;
   esac
@@ -593,6 +595,18 @@ run_agent() {
           die "Internal error: cursor-ide backend is unavailable (source lib/cursor_ide.sh)"
         fi
         run_cursor_ide_agent "$prompt" "$project_path" "$timeout_secs" "$envelope_file"
+        ;;
+      copilot|copilot/*)
+        # gh forwards to the standalone Copilot CLI (downloading if needed).
+        # Allow tools, output paths outside the project, and audit URLs in
+        # unattended runs. Explicit denial rules still take precedence.
+        # Keep only the final response for DONE detection and pass flags after
+        # -- so gh cannot consume flags intended for Copilot.
+        local copilot_model_args=()
+        if [[ "$agent" == copilot/* ]]; then
+          copilot_model_args=(--model "${agent#copilot/}")
+        fi
+        timeout --kill-after="${kill_grace_secs}s" "${timeout_secs}s" gh copilot -- -p "$prompt" --allow-all-tools --allow-all-paths --allow-all-urls --no-ask-user --no-color -s "${copilot_model_args[@]+"${copilot_model_args[@]}"}"
         ;;
       *)
         die "Internal error: unsupported agent '$agent'"

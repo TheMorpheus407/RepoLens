@@ -145,7 +145,7 @@ any git repository and creates remote issues for real findings.
 
 Required:
   --project <path|url>    Local path or remote Git URL (cloned read-only if URL)
-  --agent <agent>         claude | codex | spark | sparc | cursor | cursor/<model> | cursor-ide | opencode | opencode/<model> | antigravity
+  --agent <agent>         claude | codex | spark | sparc | cursor | cursor/<model> | cursor-ide | opencode | opencode/<model> | antigravity | copilot | copilot/<model>
 
 Commands:
   status [run-id]         Show a live run snapshot from logs/<run-id>/status.json
@@ -309,6 +309,8 @@ Examples:
   repolens.sh --project ~/myapp --agent cursor-ide --local --focus injection
   repolens.sh --project ~/myapp --agent claude --local --output ~/reports/myapp-audit
   repolens.sh --project ~/myapp --agent claude --local --domain security --parallel
+  repolens.sh --project ~/myapp --agent copilot
+  repolens.sh --project ~/myapp --agent copilot --domain security --parallel
 
 Environment:
   REPOLENS_AGENT_TIMEOUT   Global per-invocation timeout override in seconds.
@@ -348,6 +350,9 @@ Environment:
   REPOLENS_CURSOR_IDE_HANDOFF_DIR
                            Optional parent directory for request-scoped Cursor
                            IDE handoff artifacts. Defaults under the run logs.
+  REPOLENS_AGENT_TIMEOUT_COPILOT
+                           GitHub Copilot CLI per-invocation timeout override;
+                           also used for copilot/<model>.
   REPOLENS_AGENT_TIMEOUT_AUDIT
                            Audit default: 1800.
   REPOLENS_AGENT_TIMEOUT_FEATURE
@@ -3526,8 +3531,8 @@ run_lens_heartbeat_exit_trap() {
 
 # --- Cost estimation (token-based, model-aware, repo-size-aware) ---
 # Resolve an --agent value to a model id in agent-pricing.json.
-# Handles: claude, codex, spark, sparc, cursor, opencode, antigravity, and the
-# <agent>/<model> forms claude/, codex/, cursor/, opencode/, antigravity/.
+# Handles: claude, codex, spark, sparc, cursor, opencode, antigravity, copilot, and the
+# <agent>/<model> forms claude/, codex/, cursor/, opencode/, antigravity/, copilot/.
 # For a slashed agent: an explicit id in models{} is priced directly; otherwise
 # a keyword heuristic buckets the model name into a generic-{flash,pro,premium}
 # class so a brand-new model name is approximated instead of falling back to an
