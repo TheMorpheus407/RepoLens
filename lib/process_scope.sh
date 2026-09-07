@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Bash 4-compatible client for the descriptor-owning cgroup supervisor.
+# RepoLens — Bash 4-compatible client for the cgroup supervisor.
 set -uo pipefail
 _REPOLENS_SCOPE_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/process_scope.py"
 _REPOLENS_SCOPE_READY=0
