@@ -160,6 +160,22 @@ _template_resolve_file_backed_value() {
   printf '%s' "$value"
 }
 
+# Render the shipped task-sizing language before inserting any lens, spec,
+# backlog, or other untrusted material. Default rendering stays byte-identical.
+_template_task_scope() {
+  local text="$1" hours="${TASK_HOURS:-1}"
+  [[ "$hours" =~ ^[1-9][0-9]*$ ]] || {
+    printf '%s\n' 'Task hours must be a positive integer.' >&2
+    return 1
+  }
+  if [[ "$hours" != 1 ]]; then
+    text="${text//1 hour/${hours} hours}"
+    text="${text//~1h/~${hours}h}"
+    text="${text//one-hour/${hours}-hour}"
+  fi
+  printf '%s' "$text"
+}
+
 # compose_prompt <base_template> <lens_file> <variables_string> [spec_file] [mode] [max_issues] [source_file] [hosted] [local_mode] [local_output_dir]
 #   1. Reads the base template
 #   2. Reads the lens body
@@ -198,7 +214,7 @@ compose_prompt() {
   local -a pairs=()
   local -A prompt_vars=()
 
-  base_content="$(cat "$base_file")"
+  base_content="$(_template_task_scope "$(cat "$base_file")")" || return 1
   lens_body="$(read_body "$lens_file")"
   sentinel_seed="${BASHPID:-$$}_${RANDOM}_${RANDOM}"
   prior_round_digest_sentinel="__REPOLENS_PRIOR_ROUND_DIGEST_${sentinel_seed}__"
@@ -669,6 +685,7 @@ Before writing a new finding, check if a file with a similar title already exist
     fi
   fi
 
+  local_mode_section="$(_template_task_scope "$local_mode_section")" || return 1
   prompt="${prompt//\{\{LOCAL_MODE_SECTION\}\}/$local_mode_section}"
 
   # Step 5c: Build current greenfield backlog section and hold its prompt

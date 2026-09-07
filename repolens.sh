@@ -220,6 +220,8 @@ Options:
                           would be reviewed against files that are not there.
   --max-issues <n>        Stop after creating n total issues (dry-run quality check)
   --min-severity <level>  Only file findings at or above level: critical|high|medium|low
+  --task-hours <n>        Target maximum human implementation hours per issue
+                         (positive integer; default: 1).
   --depth <n>             DONE streak depth per lens. Defaults: 3 for audit/feature/bugfix,
                            1 otherwise. Must be between 1 and 19.
   --rounds <n>            Cross-lens rounds (default: 1, except --mode
@@ -645,6 +647,8 @@ BRANCH_MERGE_BASE=""
 SPEC_TRUSTED_MANIFEST_SHA256=""
 MAX_ISSUES=""
 MIN_SEVERITY=""
+TASK_HOURS=1
+TASK_HOURS_SET=false
 DEPTH=""
 DEPTH_SET=false
 ROUNDS=""
@@ -841,6 +845,12 @@ while [[ $# -gt 0 ]]; do
     --min-severity)
       [[ $# -ge 2 ]] || die "Option --min-severity requires an argument (critical|high|medium|low)."
       MIN_SEVERITY="$2"
+      shift 2
+      ;;
+    --task-hours)
+      [[ $# -ge 2 && "$2" =~ ^[1-9][0-9]*$ ]] || die "--task-hours requires a positive integer number of human implementation hours."
+      TASK_HOURS="$2"
+      TASK_HOURS_SET=true
       shift 2
       ;;
     --depth)
@@ -1075,6 +1085,12 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
       ;;
   esac
   RESUME_LOG_BASE_CANONICAL="$_resume_log_base"
+  if [[ "$TASK_HOURS_SET" == false && -e "$_resume_log_base/task-hours" ]]; then
+    [[ -f "$_resume_log_base/task-hours" && ! -L "$_resume_log_base/task-hours" ]] \
+      || die "Persisted task hours must be a regular file."
+    TASK_HOURS="$(cat "$_resume_log_base/task-hours")"
+    [[ "$TASK_HOURS" =~ ^[1-9][0-9]*$ ]] || die "Persisted task hours must be a positive integer."
+  fi
 
   _resume_metadata="$_resume_log_base/resume-metadata.json"
   _resume_manifest="$_resume_log_base/spec-files.json"
@@ -2434,6 +2450,11 @@ fi
 LOG_BASE="${RESUME_LOG_BASE_CANONICAL:-$SCRIPT_DIR/logs/$RUN_ID}"
 export LOG_BASE
 acquire_run_lock
+export TASK_HOURS
+[[ ! -L "$LOG_BASE/task-hours" ]] || die "Persisted task hours must not be a symlink."
+printf '%s\n' "$TASK_HOURS" > "$LOG_BASE/task-hours.tmp.$$" \
+  && mv -f -- "$LOG_BASE/task-hours.tmp.$$" "$LOG_BASE/task-hours" \
+  || die "Unable to persist task hours."
 HEARTBEAT_DIR="$LOG_BASE/.heartbeat"
 mkdir -p "$HEARTBEAT_DIR"
 # Record the start of THIS invocation for the per-attempt audit trail (#371).
@@ -2979,6 +3000,7 @@ if [[ -n "$MIN_SEVERITY_MODE_EXEMPT" ]]; then
   log_warn "--min-severity has no effect in ${MIN_SEVERITY_MODE_EXEMPT} mode (this mode does not use severity)"
 fi
 [[ -n "$MIN_SEVERITY" ]] && log_info "Min severity: $MIN_SEVERITY"
+log_info "Task scope: up to $TASK_HOURS human implementation hour(s) per issue"
 [[ "$MODE" == "discover" ]] && log_info "Discover mode: single-pass brainstorming (DONE streak: 1)"
 [[ "$MODE" == "deploy" ]] && log_info "Deploy mode: single-pass server audit (DONE streak: 1)"
 if [[ "$MODE" == "deploy" && "${TARGET_TYPE:-server}" == "android" && -n "${ANDROID_APK_PATH:-}" ]]; then
