@@ -401,6 +401,7 @@ DIFF_ARTIFACT="$SCRIPT_DIR/logs/$diff_run_id/branch-diff.txt"
 MANIFEST_ARTIFACT="$SCRIPT_DIR/logs/$diff_run_id/branch-manifest.md"
 assert_file_exists "branch-diff.txt persisted to the run log dir" "$DIFF_ARTIFACT"
 assert_file_exists "branch-manifest.md persisted to the run log dir" "$MANIFEST_ARTIFACT"
+assert_eq "mechanical scope is the branch delta only" '["src/app.js"]' "$(jq -c . "$SCRIPT_DIR/logs/$diff_run_id/branch-scope.json")"
 if [[ -f "$DIFF_ARTIFACT" ]]; then
   persisted_diff="$(cat "$DIFF_ARTIFACT")"
   assert_contains "persisted diff covers the changed file" "src/app.js" "$persisted_diff"

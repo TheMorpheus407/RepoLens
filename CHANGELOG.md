@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Synthesized filing now uses a deterministic governor: live citation verification, fresh duplicate checks, exact provider readbacks, atomic reservations, and permanent attempt markers replace the privileged filing agent. Invalid or stale success markers cannot bypass the gate; unsupported structured adapters fail before mutation ([#406](https://github.com/TheMorpheus407/RepoLens/issues/406)).
+- Branch-review findings are mechanically filtered against the pinned changed-file set before counting and synthesis and again before publication. Remote branch lenses produce drafts for governed filing; rejected proposals remain available with scope diagnostics ([#403](https://github.com/TheMorpheus407/RepoLens/issues/403)).
+
 - `branch-review --local` now preserves the regression finding contract—`[REGRESSION][SEVERITY]` titles, `Introduced By` / `Before / After`, exact complexity metadata, and validation evidence—instead of also presenting the generic `[SEVERITY]` audit-file contract; ordinary local audit output is unchanged ([#402](https://github.com/TheMorpheus407/RepoLens/issues/402))
 - `branch-review` regression findings now use the same implementation-effort routing contract as audit findings: each issue selects exactly one 1-5 complexity tier, applies the matching `repolens/complexity/<n>` label, and records `- **Complexity:** <n> (<Descriptor>)` in its body, while RepoLens pre-creates the five labels for branch-review runs ([#404](https://github.com/TheMorpheus407/RepoLens/issues/404))
 - `branch-review` resume now fails fast when a non-empty run's persisted review head is not the checked-out commit, preventing its frozen delta from being paired with a different working tree. Check out the persisted head or start a new branch review; matching-head and empty-delta resumes are unchanged ([#398](https://github.com/TheMorpheus407/RepoLens/issues/398))
