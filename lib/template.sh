@@ -578,6 +578,7 @@ The commit(s) or hunk in the branch delta that introduced the regression, with t
 
 ## Before / After
 What the code did at the merge base versus what it does now at the head.
+Put each live-head path:line anchor on its own line, separate from historical snippets. Record base-side evidence separately as git show <resolved-merge-base-sha>:<path> or git diff <resolved-merge-base-sha>..<resolved-head-sha> -- <path>, followed by quoted output on separate lines; use the resolved hashes from this run.
 
 ## Impact
 What breaks for users, callers, or operators because of this change.
@@ -617,6 +618,7 @@ Before writing a new finding, check if a file with a similar title already exist
 - Do **NOT** use \`gh label create\` — no GitHub labels needed
 - Do **NOT** use \`gh issue list\` — check existing files in the output directory instead
 - Keep the \`[REGRESSION][SEVERITY]\` title prefix, the \`Introduced By\` and \`Before / After\` sections, and the regression discriminator from the Issue Creation rules above — local mode only changes WHERE findings are written, not WHAT a regression finding contains
+- Keep historical output separate from live-head citations. Governed remote filing quarantines deleted-file-only findings without a surviving changed-file head anchor; do not invent one.
 - Create the output subdirectory with \`mkdir -p\` before writing files"
     else
       local_mode_section="## LOCAL MODE OVERRIDE

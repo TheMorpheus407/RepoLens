@@ -76,10 +76,15 @@ Every issue MUST have this structure:
 ### How to Fill the `## Validation` Block
 The fields above are a contract; the points below are the quality bar for each. A block that is present but vague is worthless — downstream tooling and reviewers cannot act on it.
 
-- **`proof_anchors`** — Use an EXACT `path:line` reference (e.g. `lib/template.sh:208`) or a verbatim quote of the offending code, plus the merge-base counterpart. A regression claim with no base-side anchor is unverifiable and must not be filed.
+- **`proof_anchors`** — Include an EXACT live-head `path:line` reference (e.g. `lib/template.sh:208`) and the merge-base counterpart. A regression claim with no base-side anchor is unverifiable and must not be filed.
 - **`suggested_validation`** — Prefer a single runnable LOCAL command that confirms the regression: `grep -n …`, `bash tests/…`, `git diff <merge-base>..HEAD -- <path>`, `test …`. Only name an external scanner (e.g. semgrep, trivy, npm audit) when the finding genuinely cannot be confirmed from local source or state — and say so explicitly with the phrase **needs external scanner**.
 - **`attacker_source` → `missing_guard` → `sink_effect`** — Tell the source → guard → sink chain. For non-security regressions (correctness, performance, docs) where there is no attacker, write `n/a` for these fields.
 - **`preconditions`** — List the conditions that must hold for the regression to trigger, or `none` if it always applies.
+
+### Evidence Anchor Format
+- Put each live-head `path:line` anchor on its own line, separate from historical snippets. Any quoted snippet on that line must match the live head near the cited line.
+- Record merge-base evidence separately: use `git show <resolved-merge-base-sha>:<path>` or `git diff <resolved-merge-base-sha>..<resolved-head-sha> -- <path>`, followed by the relevant quoted output on separate lines. Replace the commit placeholders with the resolved hashes from this run. Historical output is base evidence, not a live-source citation.
+- Keep the **Before / After** comparison and **Introduced By** evidence. The governed remote filing path requires at least one surviving changed-file head anchor; deleted-file-only findings without one are quarantined. Do not invent a surviving anchor to force publication.
 
 ### Quality Standards
 - Only report **real regressions** backed by evidence at BOTH the head and the merge base. No hypotheticals.
