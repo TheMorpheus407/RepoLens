@@ -500,6 +500,8 @@ git -C ~/my-app switch feature/checkout-rewrite
 
 For a remote `--project <url>`, RepoLens clones full history and all branches so the merge base is available. An explicit `--branch-head` is checked out in the temporary clone; the default `HEAD` reviews the remote default branch. Both refs are resolved before checkout, including expressions such as `feature~1`, `refs/heads/feature`, and `HEAD~1`. Git's normal tag and branch precedence applies; use a qualified ref to disambiguate a shared name. The manifest retains the requested ref spellings and the resolved commits.
 
+Remote branch reviews finish the selected investigations before governed publication. `--max-issues` caps created issues, including reopen suggestions; drafts are counted separately in the summary. An uncertain creation attempt keeps its budget reservation until reconciled. Resumes retain the previous cap; pass a higher `--max-issues` value to publish deferred findings.
+
 `--branch-base` is required and names the ref the branch is compared against. `--branch-head` defaults to `HEAD` and must resolve to the checked-out commit — lenses read the working tree, so a head that is not checked out would be reviewed against files that are not on disk.
 
 The delta is **three-dot**: everything the head added on top of the merge base it shares with the base ref, equivalent to `git diff main...HEAD`. A two-dot comparison would report commits that exist only on the base as things the branch deleted, and every one of those would be filed as a regression the branch never caused.

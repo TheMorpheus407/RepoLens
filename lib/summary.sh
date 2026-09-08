@@ -120,9 +120,37 @@ _increment_summary_issues_created_locked() {
   return "$rc"
 }
 
+# Replace the governed publication snapshot, rather than adding it again on
+# resume. Remote branch lens files are drafts, including legacy saved counts.
+reconcile_summary_filing() {
+  local file="$1" count="$2" max_issues="${3:-}"
+  [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _reconcile_summary_filing_locked "$file" "$count" "$max_issues"
+}
+
+_reconcile_summary_filing_locked() {
+  local file="$1" count="$2" max_issues="$3" tmp rc
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+  jq --argjson count "$count" --argjson cap "${max_issues:-null}" '
+    if .mode == "branch-review" and .output_mode != "local" then
+      .lenses |= map(.findings_drafted = ((.findings_drafted // 0) + (.issues_created // 0)) | .issues_created = 0)
+      | .totals.findings_drafted = ([.lenses[].findings_drafted] | add // 0)
+      | .totals.issues_created = $count
+    else
+      .totals.issues_created = ([0, ((.totals.issues_created // 0) - (.totals.governed_issues_created // 0))] | max) + $count
+    end
+    | .totals.governed_issues_created = $count
+    | .max_issues = $cap
+  ' "$file" > "$tmp" && mv "$tmp" "$file"
+  rc=$?
+  rm -f "$tmp"
+  return "$rc"
+}
+
 # record_lens <summary_file> <domain> <lens_id> <iterations> <status> \
 #             [issues] [rate_limit_sleep_seconds] \
-#             [started_at] [completed_at] [duration_seconds]
+#             [started_at] [completed_at] [duration_seconds] [findings_drafted]
 #   Appends a lens result to the summary. The `round` field is sourced from
 #   the ambient CURRENT_ROUND_INDEX variable (set by `run_rounds` for
 #   multi-round runs), defaulting to 0 for non-rounded runs so that
@@ -138,9 +166,10 @@ record_lens() {
   local started_at="${8:-}"
   local completed_at="${9:-}"
   local duration_seconds="${10:-0}"
+  local findings_drafted="${11:-0}"
   with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
     _record_lens_locked "$file" "$domain" "$lens_id" "$iterations" "$status" "$issues" "$rate_limit_sleep_seconds" \
-      "$started_at" "$completed_at" "$duration_seconds"
+      "$started_at" "$completed_at" "$duration_seconds" "$findings_drafted"
 }
 
 _record_lens_locked() {
@@ -150,6 +179,7 @@ _record_lens_locked() {
   local started_at="${8:-}"
   local completed_at="${9:-}"
   local duration_seconds="${10:-0}"
+  local findings_drafted="${11:-0}"
   local tmp
   local lenses_increment=1
   local round="${CURRENT_ROUND_INDEX:-0}"
@@ -168,12 +198,13 @@ _record_lens_locked() {
   fi
   jq --arg d "$domain" --arg l "$lens_id" --argjson i "$iterations" --arg s "$status" \
      --argjson iss "$issues" --argjson rlss "$rate_limit_sleep_seconds" --argjson lr "$lenses_increment" \
-     --argjson rnd "$round" \
+     --argjson rnd "$round" --argjson drafts "$findings_drafted" \
      --arg sa "$started_at" --arg ca "$completed_at" --argjson dur "$duration_seconds" \
-    '.lenses += [{"domain": $d, "lens": $l, "iterations": $i, "status": $s, "issues_created": $iss, "rate_limit_sleep_seconds": $rlss, "round": $rnd, "started_at": ($sa | if . == "" then null else . end), "completed_at": ($ca | if . == "" then null else . end), "duration_seconds": $dur}] |
+    '.lenses += [{"domain": $d, "lens": $l, "iterations": $i, "status": $s, "issues_created": $iss, "findings_drafted": $drafts, "rate_limit_sleep_seconds": $rlss, "round": $rnd, "started_at": ($sa | if . == "" then null else . end), "completed_at": ($ca | if . == "" then null else . end), "duration_seconds": $dur}] |
      .totals.lenses_run += $lr |
      .totals.iterations_total += $i |
-     .totals.issues_created += $iss' "$file" > "$tmp" && mv "$tmp" "$file"
+     .totals.issues_created += $iss |
+     .totals.findings_drafted = ((.totals.findings_drafted // 0) + $drafts)' "$file" > "$tmp" && mv "$tmp" "$file"
   local rc=$?
   rm -f "$tmp" 2>/dev/null || true
   return "$rc"

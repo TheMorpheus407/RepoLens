@@ -36,6 +36,95 @@
 
 # shellcheck source=lib/branch-scope.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/branch-scope.sh"
+# shellcheck source=lib/locking.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/locking.sh"
+
+# Reserve a possible creation under a shared run lock, immediately before POST.
+# Attempts survive ambiguous failures and cap changes. Comments never enter this
+# budget. Return 2 for deferral, 1 for an accounting/reservation failure.
+_filing_reserve_issue_attempt() {
+  local filed_dir="$1" marker="$2"
+  with_file_lock "$filed_dir/.issue-budget.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _filing_reserve_issue_attempt_locked "$filed_dir" "$marker"
+}
+
+_filing_reserve_issue_attempt_locked() {
+  local filed_dir="$1" marker="$2" path key
+  local cap="${MAX_ISSUES:-}" used="${GLOBAL_ISSUES_CREATED:-0}"
+  local -A reservations=()
+  # Count each operation once, including old/quarantined successes whose
+  # permanent attempt marker may predate the governor.
+  for path in "$filed_dir"/*.attempted "$filed_dir"/*.url "$filed_dir"/*.unverified-url \
+      "$filed_dir"/cross-link/reopen-suggestion-*.attempted \
+      "$filed_dir"/cross-link/reopen-suggestion-*.done \
+      "$filed_dir"/cross-link/reopen-suggestion-*.unverified-done; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    key="${path%.*}"
+    reservations["$key"]=1
+  done
+  [[ "$used" =~ ^[0-9]+$ ]] || return 1
+  used=$((used + ${#reservations[@]}))
+  if [[ -n "$cap" ]]; then
+    [[ "$cap" =~ ^[1-9][0-9]*$ ]] || return 1
+    (( used < cap )) || return 2
+  fi
+  ( set -o noclobber; : > "$marker" ) 2>/dev/null
+}
+
+# Count only matching successful receipts, including reopen-suggestion issues.
+# Reattest even historical receipts omitted from a regenerated manifest;
+# quarantined markers retain their budget reservation but drop out of totals.
+# Unique URLs describe actual creations even if two records reference one URL.
+filing_verified_issue_count() {
+  local run_id="$1" filed_dir marker prefix url entry number readback
+  local verified_urls="" rc=0
+  filed_dir="$(_filing_log_base "$run_id")/final/filed"
+  local repo="${FORGE_REPO:-${REPO_OWNER:-}/${REPO_NAME:-}}"
+  for marker in "$filed_dir"/*.url; do
+    [[ -e "$marker" || -L "$marker" ]] || continue
+    prefix="${marker%.url}"
+    if [[ ! -f "$marker" || -L "$marker" \
+        || ! -f "$prefix.request.json" || -L "$prefix.request.json" \
+        || -L "$prefix.readback.json" ]] \
+        || ! url="$(cat "$marker")" \
+        || ! entry="$(cat "$prefix.request.json")" \
+        || ! number="$(forge_issue_number_from_url "$repo" "$url")" \
+        || ! readback="$(forge_issue_read_json "$repo" "$number")" \
+        || ! _filing_readback_matches "$entry" "$url" "$number" "$readback"; then
+      _filing_fail "$filed_dir" "${prefix##*/}" 'saved creation receipt could not be reconciled'
+      rc=1
+      continue
+    fi
+    printf '%s\n' "$readback" > "$prefix.readback.json" || rc=1
+    verified_urls+="$url"$'\n'
+  done
+  for marker in "$filed_dir"/cross-link/reopen-suggestion-*.done; do
+    [[ -e "$marker" || -L "$marker" ]] || continue
+    prefix="${marker%.done}"
+    if [[ ! -f "$marker" || -L "$marker" \
+        || -L "$prefix.readback.json" \
+        || ! -f "$prefix.created-response" || -L "$prefix.created-response" \
+        || ! -f "$prefix.body.banner.md" || -L "$prefix.body.banner.md" ]] \
+        || ! url="$(cat "$prefix.created-response")" \
+        || ! number="$(forge_issue_number_from_url "$repo" "$url")" \
+        || ! readback="$(forge_issue_read_json "$repo" "$number")" \
+        || ! jq -e --arg url "$url" --argjson number "$number" \
+          --arg title "[reopen-candidate] consider re-opening #${prefix##*/reopen-suggestion-}" \
+          --rawfile body "$prefix.body.banner.md" \
+          '.url == $url and .number == $number and .title == $title and .body == $body and .state == "open"' \
+          <<< "$readback" >/dev/null; then
+      mv "$marker" "$prefix.unverified-done" || return 1
+      : > "$prefix.attempted" || return 1
+      printf 'VERIFICATION_FAILED: saved creation receipt could not be reconciled\n' > "$prefix.failed" || return 1
+      rc=1
+      continue
+    fi
+    printf '%s\n' "$readback" > "$prefix.readback.json" || rc=1
+    verified_urls+="$url"$'\n'
+  done
+  printf '%s' "$verified_urls" | LC_ALL=C sort -u | wc -l | tr -d '[:space:]'
+  return "$rc"
+}
 
 # _filing_repo_root
 #   Resolves the repository root from this file's location. Used to locate
@@ -232,7 +321,7 @@ filing_verify_cluster_citations() {
 # sentinels participate in this credential-bearing phase.
 _filing_real_agent() {
   local run_id="$1" cluster_id="$2" log_base entry reason repo title body_file
-  local open_issues duplicate created_url number readback label
+  local open_issues duplicate created_url number readback label reserve_rc
   log_base="$(_filing_log_base "$run_id")"
   local filed_dir="$log_base/final/filed"
   [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || return 1
@@ -241,6 +330,7 @@ _filing_real_agent() {
   # racing on an expired legacy .lock marker. A crash leaves this reservation
   # for operator reconciliation, never an automatic repeat of a possible POST.
   mkdir "$filed_dir/$cluster_id.governor" 2>/dev/null || return 1
+  rm -f "$filed_dir/$cluster_id.deferred"
   if [[ ! -e "$filed_dir/$cluster_id.url" ]] && [[ -e "$filed_dir/$cluster_id.failed" || -e "$filed_dir/$cluster_id.attempted" ]]; then
     rmdir "$filed_dir/$cluster_id.governor"
     return 0
@@ -307,6 +397,19 @@ _filing_real_agent() {
   jq -jr '.body' <<< "$entry" > "$body_file" || return 1
   local -a labels=()
   while IFS= read -r label; do labels+=("$label"); done < <(jq -r '.proposed_labels[]' <<< "$entry")
+  # Validated duplicates and invalid drafts never reserve creation capacity.
+  # This marker also guards uncapped runs against repeating ambiguous POSTs.
+  reserve_rc=0
+  _filing_reserve_issue_attempt "$filed_dir" "$filed_dir/$cluster_id.attempted" || reserve_rc=$?
+  if (( reserve_rc == 2 )); then
+    printf 'BUDGET_DEFERRED: new-issue limit %s reached\n' "$MAX_ISSUES" > "$filed_dir/$cluster_id.deferred"
+    rm -f "$filed_dir/$cluster_id.lock" "$body_file"
+    rmdir "$filed_dir/$cluster_id.governor"
+    return 0
+  elif (( reserve_rc != 0 )); then
+    _filing_fail "$filed_dir" "$cluster_id" 'unable to reserve new-issue budget'
+    return 1
+  fi
   for label in "${labels[@]}"; do
     if [[ "${FORGE_PROVIDER:-}" == gh ]]; then
       GH_HOST="$(_forge_gh_filing_host)" forge_label_create "$label" ededed "$repo" >> "$filed_dir/$cluster_id.log" 2>&1 || true
@@ -314,8 +417,7 @@ _filing_real_agent() {
       forge_label_create "$label" ededed "$repo" >> "$filed_dir/$cluster_id.log" 2>&1 || true
     fi
   done
-  # Mark the attempt BEFORE the call; ambiguous transport failures are terminal.
-  : > "$filed_dir/$cluster_id.attempted" || return 1
+  # The attempt is already reserved; ambiguous transport failures are terminal.
   if ! created_url="$(forge_issue_create_once "$repo" "$title" "$body_file" "${labels[@]}" 2>> "$filed_dir/$cluster_id.log")"; then
     _filing_fail "$filed_dir" "$cluster_id" 'forge create failed; reconcile remote state before retry'
     return 1
@@ -453,7 +555,7 @@ _filing_cross_link_enact() {
   local -A seen=()
 
   local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc
-  local evidence reason target response readback title new_number reconcile_done body_json
+  local evidence reason target response readback title new_number reconcile_done body_json reserve_rc
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
     [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || continue
     [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || continue
@@ -483,6 +585,7 @@ _filing_cross_link_enact() {
 
     sentinel_done="$cross_dir/$key.done"
     sentinel_failed="$cross_dir/$key.failed"
+    rm -f "$cross_dir/$key.deferred"
     reconcile_done=0
     if [[ -e "$sentinel_done" ]]; then
       mv "$sentinel_done" "$cross_dir/$key.unverified-done" || continue
@@ -494,6 +597,10 @@ _filing_cross_link_enact() {
 
     # If the parent cluster failed and has no .url, skip — a comment that
     # references a non-existent new issue is worse than no comment.
+    if [[ -e "$filed_dir/$cluster_id.deferred" && ! -e "$filed_dir/$cluster_id.url" ]]; then
+      printf 'BUDGET_DEFERRED: parent cluster %s deferred\n' "$cluster_id" > "$cross_dir/$key.deferred"
+      continue
+    fi
     if [[ -n "$cluster_id" && -e "$filed_dir/$cluster_id.failed" && ! -e "$filed_dir/$cluster_id.url" ]]; then
       printf 'cross_link_skipped_parent_failed: cluster=%s key=%s\n' \
         "$cluster_id" "$key" > "$sentinel_failed"
@@ -531,7 +638,19 @@ _filing_cross_link_enact() {
     fi
     # Atomic permanent reservation: failures/crashes require reconciliation.
     if (( ! reconcile_done )); then
-      ( set -o noclobber; : > "$cross_dir/$key.attempted" ) 2>/dev/null || continue
+      if [[ "$action_type" == reopen-suggestion ]]; then
+        reserve_rc=0
+        _filing_reserve_issue_attempt "$filed_dir" "$cross_dir/$key.attempted" || reserve_rc=$?
+        if (( reserve_rc == 2 )); then
+          printf 'BUDGET_DEFERRED: new-issue limit %s reached\n' "$MAX_ISSUES" > "$cross_dir/$key.deferred"
+          continue
+        elif (( reserve_rc != 0 )); then
+          printf 'VERIFICATION_FAILED: unable to reserve new-issue budget\n' > "$sentinel_failed"
+          continue
+        fi
+      else
+        ( set -o noclobber; : > "$cross_dir/$key.attempted" ) 2>/dev/null || continue
+      fi
     fi
 
     body_file="$cross_dir/$key.body.md"
@@ -602,6 +721,7 @@ _filing_cross_link_enact() {
     esac
 
     if (( rc == 0 )); then
+      printf '%s\n' "$readback" > "$cross_dir/$key.readback.json" || continue
       rm -f "$cross_dir/$key.unverified-done"
       : > "$sentinel_done"
     else

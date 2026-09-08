@@ -1115,6 +1115,13 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
   if [[ -L "$_resume_summary" ]]; then
     die "Persisted run summary must not be a symlink: $_resume_summary"
   fi
+  # A resumed governed branch review keeps its creation cap unless the caller
+  # explicitly supplies a replacement. Drafts deferred by the cap remain usable.
+  if [[ "$MODE" == branch-review && "$LOCAL_MODE" == false && -z "$MAX_ISSUES" && -f "$_resume_summary" ]]; then
+    require_cmd jq
+    MAX_ISSUES="$(jq -r '.max_issues // empty' "$_resume_summary")" \
+      || die "Unable to read persisted issue limit."
+  fi
 
   if [[ -f "$_resume_metadata" ]]; then
     require_cmd jq
@@ -4455,6 +4462,14 @@ fi
 # --- Global issue counter ---
 GLOBAL_ISSUES_CREATED=0
 
+if [[ "$MODE" == branch-review ]] && ! $LOCAL_MODE; then
+  _filing_count_rc=0
+  _verified_issues="$(filing_verified_issue_count "$RUN_ID")" || _filing_count_rc=$?
+  reconcile_summary_filing "$SUMMARY_FILE" "$_verified_issues" "$MAX_ISSUES" \
+    && (( _filing_count_rc == 0 )) || die "Unable to reconcile governed issue counts."
+  unset _verified_issues _filing_count_rc
+fi
+
 
 if [[ -n "$RESUME_RUN_ID" ]]; then
   # shellcheck disable=SC2034 # Consumed by write_status_snapshot in sourced lib/status.sh.
@@ -4480,8 +4495,10 @@ run_lens() {
   # Branch lenses produce files; only the deterministic governor may publish
   # their filtered findings after the round has finished.
   local LOCAL_MODE="$LOCAL_MODE"
+  local draft_only=false
   local CURRENT_ROUND_OUTPUT_DIR="${CURRENT_ROUND_OUTPUT_DIR:-}"
   if [[ "$MODE" == "branch-review" ]] && ! $LOCAL_MODE; then
+    draft_only=true
     LOCAL_MODE=true
     CURRENT_ROUND_OUTPUT_DIR="$(round_lens_outputs_dir "$RUN_ID" "${CURRENT_ROUND_INDEX:-1}")"
   fi
@@ -4887,7 +4904,13 @@ run_lens() {
     lens_issues=$((current_issue_count - issues_baseline))
     [[ "$lens_issues" -lt 0 ]] && lens_issues=0
     local iter_issues=$((lens_issues - prev_lens_issues))
-    [[ "$iter_issues" -gt 0 ]] && log_info "[$domain/$lens_id] $iter_issues issue(s) created this iteration ($lens_issues lens total)"
+    if (( iter_issues > 0 )); then
+      if $draft_only; then
+        log_info "[$domain/$lens_id] $iter_issues finding(s) drafted this iteration ($lens_issues lens total)"
+      else
+        log_info "[$domain/$lens_id] $iter_issues issue(s) created this iteration ($lens_issues lens total)"
+      fi
+    fi
     prev_lens_issues="$lens_issues"
 
     local done_detected=false
@@ -4926,7 +4949,7 @@ run_lens() {
     fi
 
     # Check global issue budget
-    if [[ -n "$MAX_ISSUES" ]]; then
+    if [[ -n "$MAX_ISSUES" ]] && ! $draft_only; then
       local projected=$((GLOBAL_ISSUES_CREATED + lens_issues))
       if [[ "$projected" -ge "$MAX_ISSUES" ]]; then
         log_info "[$domain/$lens_id] Global issue limit reached ($projected/$MAX_ISSUES). Stopping lens."
@@ -4967,6 +4990,11 @@ run_lens() {
   done
 
   # Update global counter
+  local findings_drafted=0
+  if $draft_only; then
+    findings_drafted="$lens_issues"
+    lens_issues=0
+  fi
   GLOBAL_ISSUES_CREATED=$((GLOBAL_ISSUES_CREATED + lens_issues))
 
   # Record result. Terminal agent guard lenses are recorded but NOT marked completed,
@@ -4980,7 +5008,7 @@ run_lens() {
   lens_duration_seconds=$((lens_end_epoch - lens_start_epoch))
   (( lens_duration_seconds < 0 )) && lens_duration_seconds=0
   record_lens "$SUMMARY_FILE" "$domain" "$lens_id" "$iteration" "$exit_status" "$lens_issues" "$rate_limit_sleep_seconds" \
-    "$lens_start_iso" "$lens_end_iso" "$lens_duration_seconds"
+    "$lens_start_iso" "$lens_end_iso" "$lens_duration_seconds" "$findings_drafted"
   if [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
       && "$exit_status" != "auth-expired" && "$exit_status" != "model-unavailable" \
       && "$exit_status" != "budget-exhausted" && "$exit_status" != "agent-refused" \
@@ -5127,6 +5155,7 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
         filing_missing=0
         filing_failed=0
         filing_dedup=0
+        filing_deferred=0
         manifest_path="$LOG_BASE/final/manifest.json"
         filed_dir="$LOG_BASE/final/filed"
         while IFS= read -r filing_cluster_id; do
@@ -5134,7 +5163,9 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
           if [[ -e "$filed_dir/$filing_cluster_id.url" ]]; then
             continue
           fi
-          if [[ -e "$filed_dir/$filing_cluster_id.failed" ]]; then
+          if [[ -e "$filed_dir/$filing_cluster_id.deferred" ]]; then
+            filing_deferred=$((filing_deferred + 1))
+          elif [[ -e "$filed_dir/$filing_cluster_id.failed" ]]; then
             filing_failed_first_line="$(head -n 1 "$filed_dir/$filing_cluster_id.failed" 2>/dev/null || true)"
             if [[ "$filing_failed_first_line" == DEDUP_HIT:* ]]; then
               filing_dedup=$((filing_dedup + 1))
@@ -5145,6 +5176,9 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
             filing_missing=$((filing_missing + 1))
           fi
         done < <(jq -r '.[].cluster_id' "$manifest_path")
+        for filing_deferred_action in "$filed_dir"/cross-link/*.deferred; do
+          [[ ! -f "$filing_deferred_action" ]] || filing_deferred=$((filing_deferred + 1))
+        done
 
         if (( filing_failed > 0 || filing_missing > 0 )); then
           log_warn "Filing: incomplete batch (failed=$filing_failed, dedup=$filing_dedup, missing=$filing_missing)"
@@ -5152,7 +5186,15 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
           set_stop_reason "$SUMMARY_FILE" "filing-failed"
           RUN_ROUNDS_RC=1
         else
-          log_info "Filing: batch complete"
+          if (( filing_deferred > 0 )); then
+            log_info "Filing: $filing_deferred finding/action(s) deferred by the new-issue limit"
+            set_stop_reason "$SUMMARY_FILE" "max-issues-reached"
+          else
+            log_info "Filing: batch complete"
+            case "$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE")" in
+              filing-failed|max-issues-reached) clear_stop_reason "$SUMMARY_FILE" ;;
+            esac
+          fi
         fi
       else
         while IFS= read -r filing_line; do
@@ -5192,6 +5234,20 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
 fi
 
 # --- Finalize ---
+# Reconcile on failed dispatch too: an earlier cluster may have been created
+# before a later failure. Replacing the snapshot makes resumed filing idempotent.
+if ! $LOCAL_MODE && { [[ "$MODE" == branch-review ]] || [[ -f "$LOG_BASE/final/manifest.json" ]]; }; then
+  _filing_count_rc=0
+  _verified_issues="$(filing_verified_issue_count "$RUN_ID")" || _filing_count_rc=$?
+  if ! reconcile_summary_filing "$SUMMARY_FILE" "$_verified_issues" "$MAX_ISSUES" \
+      || (( _filing_count_rc != 0 )); then
+    log_warn "Filing: unable to reconcile verified issue counts"
+    REPOLENS_FINAL_STATE="failed"
+    set_stop_reason "$SUMMARY_FILE" "filing-accounting-failed"
+    RUN_ROUNDS_RC=1
+  fi
+  unset _verified_issues _filing_count_rc
+fi
 # Emit deduped forge-warning rollup so the operator still sees the suppressed
 # total (issue #246). Parallel workers carry their own _FORGE_WARN_SEEN map and
 # their counts don't cross fork boundaries — what we report here is what the
