@@ -87,9 +87,10 @@ if [[ -n "$output_dir" ]]; then
 else
   printf 'synthesizer\n' >> "$GATE_TEST_TMP/models"
   [[ "${GATE_TEST_LOCAL:-0}" == 1 ]] && exit 99
+  [[ "${GATE_TEST_EMPTY:-0}" != 1 ]] || { printf '[]\n'; exit 0; }
   jq -n --rawfile body "$GATE_TEST_TMP/body.md" --arg source "$(cat "$GATE_TEST_TMP/source-path")" \
-    --arg two "${GATE_TEST_TWO:-0}" \
-    '[{cluster_id:"regression::return",title:"[high] Restore return contract",severity:"high",complexity:2,domain:"security",lens:"injection",root_cause_category:"return-code",source_finding_paths:[$source],dedup_against_existing:[],proposed_labels:["regression:security/injection","repolens/complexity/2"],cross_link_actions:[],granularity:"independent",body:$body}] | if $two=="1" then . + [.[0] | .cluster_id="regression::second" | .title="[high] Second return contract"] else . end'
+    --arg two "${GATE_TEST_TWO:-0}" --arg cross "${GATE_TEST_CROSS:-0}" \
+    '[{cluster_id:"regression::return",title:"[high] Restore return contract",severity:"high",complexity:2,domain:"security",lens:"injection",root_cause_category:"return-code",source_finding_paths:[$source],dedup_against_existing:[],proposed_labels:["regression:security/injection","repolens/complexity/2"],cross_link_actions:(if $cross=="1" then [{type:"reopen-suggestion",issue_number:9,body:"src/app.sh:1"}] else [] end),granularity:"independent",body:$body}] | if $two=="1" then . + [.[0] | .cluster_id="regression::second" | .title="[high] Second return contract"] else . end'
 fi
 STUB
 cat > "$TMP/bin/gh" <<'STUB'
@@ -122,7 +123,10 @@ case "$command" in
     printf 'create\n' >> "$GATE_TEST_TMP/mutations"
     [[ "${GATE_TEST_POSTFAIL:-0}" != 1 || "$number" != 18 ]] || exit 1
     jq -r '.url' "$GATE_TEST_TMP/created.json" ;;
-  'issue view') cat "$GATE_TEST_TMP/created-$1.json" ;;
+  'issue view')
+    if [[ "$1" == 9 ]]; then
+      printf '%s\n' '{"number":9,"title":"closed target","body":"prior","labels":[],"state":"CLOSED","url":"https://github.com/acme/gate/issues/9"}'
+    else cat "$GATE_TEST_TMP/created-$1.json"; fi ;;
   *) exit 99 ;;
 esac
 STUB
@@ -213,5 +217,27 @@ run_id="$(sed -n 's/.*RepoLens run \([^ ]*\) starting.*/\1/p' "$TMP/partial.log"
 [[ -z "$run_id" ]] || RUN_DIRS+=("$SCRIPT_DIR/logs/$run_id")
 check 'ambiguous later POST makes the CLI fail' test "$rc" -ne 0
 check 'partial failure still records the earlier verified creation' jq -e '.totals.issues_created==1 and .stopped_reason=="filing-failed"' "$SCRIPT_DIR/logs/$run_id/summary.json"
+
+# Historical unattempted actions no longer selected on resume are not current
+# budget deferrals. Their old status must not hide a successful completed batch.
+: > "$TMP/mutations"
+env PATH="$TMP/bin:$PATH" GATE_TEST_TMP="$TMP" GATE_TEST_CROSS=1 \
+  REPOLENS_LENS_HEARTBEAT_INTERVAL=0 bash "$SCRIPT_DIR/repolens.sh" \
+  --project "$TMP/project" --agent codex --mode branch-review --branch-base HEAD~1 \
+  --focus injection --max-issues 1 --task-hours 6 --no-verifier --yes \
+  --cross-link suggest-reopen > "$TMP/cross-deferred.log" 2>&1
+rc=$?
+run_id="$(sed -n 's/.*RepoLens run \([^ ]*\) complete.*/\1/p' "$TMP/cross-deferred.log" | tail -1)"
+[[ -z "$run_id" ]] || RUN_DIRS+=("$SCRIPT_DIR/logs/$run_id")
+check 'primary creation can defer an eligible reopen action' test "$rc" = 0
+check 'reopen action has a budget deferral' test -f "$SCRIPT_DIR/logs/$run_id/final/filed/cross-link/reopen-suggestion-9.deferred"
+env PATH="$TMP/bin:$PATH" GATE_TEST_TMP="$TMP" GATE_TEST_EMPTY=1 \
+  REPOLENS_LENS_HEARTBEAT_INTERVAL=0 bash "$SCRIPT_DIR/repolens.sh" \
+  --project "$TMP/project" --agent codex --mode branch-review --resume "$run_id" \
+  --focus injection --max-issues 2 --no-verifier --yes --cross-link off > "$TMP/cross-removed.log" 2>&1
+check 'resume with removed actions completes' test "$?" = 0
+check 'removed actions clear the obsolete budget-stop reason' jq -e '.totals.issues_created==1 and .max_issues==2 and .stopped_reason==null' "$SCRIPT_DIR/logs/$run_id/summary.json"
+check 'removed actions do not cause a new POST' test "$(wc -l < "$TMP/mutations")" = 1
+check 'permanent creation reservation survives deferral cleanup' test -f "$SCRIPT_DIR/logs/$run_id/final/filed/regression::return.attempted"
 echo "Results: $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

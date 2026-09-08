@@ -810,6 +810,11 @@ dispatch_filing_batch() {
     return 1
   fi
 
+  # Deferrals describe this dispatch's selected work. Removed/disabled actions
+  # must not carry a stale budget-stop status into a resumed run. Permanent
+  # attempts and creation receipts remain intact for budget reconciliation.
+  rm -f -- "$filed_dir"/cross-link/*.deferred || return 1
+
   local entry_count
   entry_count="$(jq 'length' "$manifest")"
   if (( entry_count == 0 )); then
