@@ -34,7 +34,7 @@ TOTAL=0
 TMP_PARENT="$SCRIPT_DIR/logs/test-polish-issue-emission"
 mkdir -p "$TMP_PARENT"
 TMPDIR="$(mktemp -d "$TMP_PARENT/run.XXXXXX")"
-unset LOG_BASE RUN_ID OUTPUT_DIR CURRENT_ROUND_OUTPUT_DIR SUMMARY_FILE MAX_ISSUES GLOBAL_ISSUES_CREATED
+unset LOG_BASE RUN_ID OUTPUT_DIR CURRENT_ROUND_OUTPUT_DIR SUMMARY_FILE MAX_ISSUES GLOBAL_ISSUES_CREATED TASK_HOURS
 
 cleanup() {
   rm -rf "$TMPDIR"
@@ -476,5 +476,133 @@ run_polish_issue_emission "$RUN_ID" 3 >/dev/null 2>&1 || emission_rc=$?
 assert_eq "malformed ranked polish artifact fails clearly" "1" "$emission_rc"
 assert_eq "malformed ranked polish artifact emits no forge issues" "0" "$(wc -l < "$FORGE_CALL_LOG" | tr -d '[:space:]')"
 assert_jq "malformed ranked polish artifact leaves summary issue count unchanged" "$SUMMARY_FILE" '.totals.issues_created == 0'
+
+echo ""
+echo "Test 8: polish scope criterion follows the effective TASK_HOURS budget (issue #413)"
+hours_group='{"domain":"polish","lens_id":"writing","items":[{"title":"Clarify onboarding","source_path":"README.md","polish_rank_x1000":1000,"voice_fit":"on-brand","body":"Plan a six-hour improvement to onboarding."}]}'
+
+unset TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-default.md" "hours-repro" "ranked.json"
+default_hours_body="$(cat "$TMPDIR/body-default.md")"
+assert_contains "default polish scope criterion stays approximately one hour" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$default_hours_body"
+
+TASK_HOURS=1
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-one-hour.md" "hours-repro" "ranked.json"
+one_hour_body="$(cat "$TMPDIR/body-one-hour.md")"
+assert_contains "explicit one-hour budget keeps the default criterion" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$one_hour_body"
+
+TASK_HOURS=6
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-six-hours.md" "hours-repro" "ranked.json"
+six_hours_body="$(cat "$TMPDIR/body-six-hours.md")"
+assert_contains "configured budget renders in the polish scope criterion" \
+  "- Each accepted polish item remains scoped to approximately 6 hours." "$six_hours_body"
+assert_not_contains "configured budget replaces the hardcoded one-hour criterion" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$six_hours_body"
+assert_contains "suggestion body text passes through verbatim" \
+  "Plan a six-hour improvement to onboarding." "$six_hours_body"
+
+echo ""
+echo "Test 9: polish scope rendering updates only the generated criterion, not quoted source text (issue #413)"
+quoted_group='{"domain":"fluency","lens_id":"quoted-hours","items":[{"title":"Keep historical wording","source_path":"docs/notes.md","polish_rank_x1000":1000,"voice_fit":"strong","body":"## Polish Summary\nPreserve the historical note that the review takes 1 hour to complete."}]}'
+TASK_HOURS=6
+export TASK_HOURS
+_polish_render_issue_body "$quoted_group" "$TMPDIR/body-quoted.md" "quoted-run" "ranked.json"
+quoted_body="$(cat "$TMPDIR/body-quoted.md")"
+assert_contains "quoted 1 hour source text is preserved verbatim under a 6-hour budget" \
+  "the review takes 1 hour to complete" "$quoted_body"
+assert_not_contains "quoted source text is not rewritten to the configured budget" \
+  "the review takes 6 hours to complete" "$quoted_body"
+assert_contains "generated criterion still reflects the configured budget" \
+  "approximately 6 hours" "$quoted_body"
+
+echo ""
+echo "Test 10: local and forge-bound polish bodies share the effective TASK_HOURS budget (issue #413)"
+reset_emission_run "task-hours-local-run"
+LOCAL_MODE=true
+TASK_HOURS=6
+export LOCAL_MODE TASK_HOURS
+write_ranked_fixture "$LOG_BASE/polish/ranked-suggestions.json"
+
+emission_rc=0
+run_polish_issue_emission "$RUN_ID" 3 >/dev/null 2>&1 || emission_rc=$?
+assert_eq "local polish emission with configured budget exits successfully" "0" "$emission_rc"
+local_hours_body="$(cat "$LOG_BASE/polish/filed/fluency-spacing-consistency.md" 2>/dev/null || true)"
+assert_contains "local polish body uses the configured task-hours budget" \
+  "approximately 6 hours" "$local_hours_body"
+assert_not_contains "local polish body drops the hardcoded one-hour criterion" \
+  "approximately one hour" "$local_hours_body"
+
+reset_emission_run "task-hours-forge-run"
+TASK_HOURS=6
+export TASK_HOURS
+write_ranked_fixture "$LOG_BASE/polish/ranked-suggestions.json"
+
+emission_rc=0
+run_polish_issue_emission "$RUN_ID" 3 >/dev/null 2>&1 || emission_rc=$?
+assert_eq "forge polish emission with configured budget exits successfully" "0" "$emission_rc"
+forge_hours_body="$(cat "$BODY_CAPTURE_DIR/body-1.md" 2>/dev/null || true)"
+assert_contains "forge-bound polish body uses the configured task-hours budget" \
+  "approximately 6 hours" "$forge_hours_body"
+assert_not_contains "forge-bound polish body drops the hardcoded one-hour criterion" \
+  "approximately one hour" "$forge_hours_body"
+
+echo ""
+echo "Test 11: polish scope criterion honors a persisted task-hours value restored on resume (issue #413)"
+reset_emission_run "task-hours-resume-run"
+printf '6\n' > "$LOG_BASE/task-hours"
+unset TASK_HOURS
+TASK_HOURS="$(cat "$LOG_BASE/task-hours")"
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-resume.md" "$RUN_ID" "ranked.json"
+resume_body="$(cat "$TMPDIR/body-resume.md")"
+assert_contains "resumed task-hours budget renders in the polish scope criterion" \
+  "- Each accepted polish item remains scoped to approximately 6 hours." "$resume_body"
+assert_not_contains "resumed budget replaces the hardcoded one-hour criterion" \
+  "approximately one hour" "$resume_body"
+unset TASK_HOURS
+
+echo ""
+echo "Test 12: polish scope criterion falls back to the one-hour default for unusable TASK_HOURS values (issue #413)"
+
+TASK_HOURS=""
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-empty-hours.md" "hours-repro" "ranked.json"
+empty_hours_body="$(cat "$TMPDIR/body-empty-hours.md")"
+assert_contains "empty TASK_HOURS keeps the default one-hour criterion" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$empty_hours_body"
+
+TASK_HOURS=abc
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-invalid-hours.md" "hours-repro" "ranked.json"
+invalid_hours_body="$(cat "$TMPDIR/body-invalid-hours.md")"
+assert_contains "non-numeric TASK_HOURS keeps the default one-hour criterion" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$invalid_hours_body"
+assert_not_contains "non-numeric TASK_HOURS is not interpolated into the criterion" \
+  "approximately abc hours" "$invalid_hours_body"
+
+TASK_HOURS=0
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-zero-hours.md" "hours-repro" "ranked.json"
+zero_hours_body="$(cat "$TMPDIR/body-zero-hours.md")"
+assert_contains "zero TASK_HOURS keeps the default one-hour criterion" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$zero_hours_body"
+assert_not_contains "zero TASK_HOURS is not interpolated into the criterion" \
+  "approximately 0 hours" "$zero_hours_body"
+
+echo ""
+echo "Test 13: multi-digit task-hours budget renders in the polish scope criterion (issue #413)"
+TASK_HOURS=12
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-twelve-hours.md" "hours-repro" "ranked.json"
+twelve_hours_body="$(cat "$TMPDIR/body-twelve-hours.md")"
+assert_contains "multi-digit budget renders in the polish scope criterion" \
+  "- Each accepted polish item remains scoped to approximately 12 hours." "$twelve_hours_body"
+assert_not_contains "multi-digit budget replaces the hardcoded one-hour criterion" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$twelve_hours_body"
+unset TASK_HOURS
 
 finish

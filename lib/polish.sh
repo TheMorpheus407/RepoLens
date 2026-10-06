@@ -363,8 +363,10 @@ _polish_build_issue_groups() {
 
 _polish_render_issue_body() {
   local group_json="$1" body_file="$2" run_id="$3" ranked_file="$4"
+  local task_hours="${TASK_HOURS:-1}"
+  [[ "$task_hours" =~ ^[1-9][0-9]*$ ]] || task_hours=1
 
-  jq -r --arg run_id "$run_id" --arg ranked_file "$ranked_file" '
+  jq -r --arg run_id "$run_id" --arg ranked_file "$ranked_file" --arg task_hours "$task_hours" '
     def one_line:
       tostring
       | gsub("[\r\n]+"; " ")
@@ -408,7 +410,9 @@ _polish_render_issue_body() {
     "## Acceptance Criteria",
     "",
     "- The selected polishing refinements are reviewed independently.",
-    "- Each accepted polish item remains scoped to approximately one hour.",
+    (if $task_hours == "1" then "- Each accepted polish item remains scoped to approximately one hour."
+     else "- Each accepted polish item remains scoped to approximately \($task_hours) hours."
+     end),
     "",
     "## References",
     "",
