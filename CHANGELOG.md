@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reopen suggestions now run a fresh, complete exact-title dedup check against the repository's open issues before reserving new-issue budget or posting, so a `suggest-reopen` run no longer files a second `[reopen-candidate] consider re-opening #N` issue when one from a prior run already exists. A hit suppresses the create without charging `MAX_ISSUES` or claiming the existing issue as newly created, lookup failures or malformed/truncated results fail closed, and the one-shot create with exact readback (never retrying an ambiguous POST) is unchanged when no candidate exists ([#412](https://github.com/TheMorpheus407/RepoLens/issues/412)).
+
 - Keep remote branch-review drafts separate from verified issue counts, enforce creation limits in the filing governor (including uncertain attempts and reopen suggestions), and reconcile counts and deferred work on resume.
 
 - Resolve remote branch-review refs and revision expressions through local aliases in the temporary clone, retaining both resolved commits before checkout so `HEAD`-relative refs keep their original meaning. Qualified branch refs, tags, and commit SHAs use Git's normal resolution rules.
