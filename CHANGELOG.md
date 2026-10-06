@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Accept canonical GitHub repository casing when verifying created issues and cross-link comments, while keeping repository and issue identity checks (#411).
+
 - Grouped polish issue acceptance criteria now honor the configured task-hours budget, including resumed runs (#413).
 
 - Keep remote branch-review drafts separate from verified issue counts, enforce creation limits in the filing governor (including uncertain attempts and reopen suggestions), and reconcile counts and deferred work on resume.

@@ -55,7 +55,7 @@ gh() {
         esac
       done
       jq -n --arg title "$title" --rawfile body "$body_file" --argjson labels "$stub_labels_json" \
-        --arg url "https://github.com/$repo/issues/17" \
+        --arg url "https://github.com/${STUB_URL_REPO:-$repo}/issues/17" \
         '{number:17,title:$title,body:$body,labels:$labels,url:$url,state:"OPEN"}' > "$TMP/created.json"
       [[ "$FAULT" == create-failed ]] && return 1
       if [[ "$FAULT" == wrong-url ]]; then printf 'https://evil.invalid/steal/issues/17\n';
@@ -69,7 +69,7 @@ gh() {
           *) return 99 ;;
         esac
       done
-      jq -n --rawfile body "$body_file" --arg url "https://github.com/acme/origin/issues/$issue_number#issuecomment-42" \
+      jq -n --rawfile body "$body_file" --arg url "https://github.com/${STUB_URL_REPO:-acme/origin}/issues/$issue_number#issuecomment-42" \
         '{body:$body,url:$url}' > "$TMP/comment.json"
       jq -r '.url' "$TMP/comment.json" ;;
     'issue view')
@@ -93,7 +93,7 @@ fresh() {
   rm -rf "$TMP/run"
   LOG_BASE="$TMP/run" PROJECT_PATH="$TMP/project"
   FORGE_REPO='acme/origin' REPO_NAME='wrong-checkout-name' FORGE_PROVIDER=gh FORGE_HOST=github.com
-  MODE=audit FAULT=''
+  MODE=audit FAULT='' STUB_URL_REPO=''
   unset REPOLENS_MODE
   mkdir -p "$LOG_BASE/final/filed" "$PROJECT_PATH/src"
   printf 'return 0\n' > "$PROJECT_PATH/src/a.sh"
@@ -296,5 +296,72 @@ check 'tea maps exact label names to numeric IDs and preserves body bytes' jq -e
 check 'tea performs exactly one POST' test "$(grep -c '^repos/acme/origin/issues$' "$TMP/tea-calls")" = 1
 FORGE_PROVIDER=tea FORGE_HOST=https://tea.example/git
 check 'tea URL binding preserves configured secure instance base path' test "$(forge_issue_number_from_url acme/origin https://tea.example/git/acme/origin/issues/17)" = 17
+
+# Issue #411: GitHub owner and repository names are case-insensitive, so a
+# governed create/comment response carrying GitHub's canonical casing (for
+# example Acme/Origin) must validate against the configured FORGE_REPO casing
+# (for example acme/origin). Host, repository identity, issue number, and URL
+# structure stay bound to the configured target; other providers keep exact
+# matching.
+issue_url_rejected() { ! forge_issue_number_from_url "$@" >/dev/null; }
+comment_read_rejected() { ! forge_issue_comment_read_json "$@" >/dev/null; }
+
+fresh
+check 'gh issue URL accepts canonical repository casing' test "$(forge_issue_number_from_url acme/origin https://github.com/Acme/Origin/issues/17)" = 17
+check 'gh issue URL accepts mixed configured repository casing' test "$(forge_issue_number_from_url aCmE/oRiGiN https://github.com/Acme/Origin/issues/17)" = 17
+FORGE_HOST=ghe.example.com
+check 'gh enterprise issue URL accepts canonical repository casing' test "$(forge_issue_number_from_url acme/origin https://ghe.example.com/Acme/Origin/issues/17)" = 17
+fresh
+check 'gh issue URL rejects a foreign host' issue_url_rejected acme/origin https://evil.invalid/acme/origin/issues/17
+check 'gh issue URL rejects a different repository' issue_url_rejected acme/origin https://github.com/acme/other/issues/17
+check 'gh issue URL rejects a near-miss repository name' issue_url_rejected acme/origin https://github.com/acme/originevil/issues/17
+check 'gh issue URL rejects a truncated repository name' issue_url_rejected acme/origin https://github.com/acme/orig/issues/17
+check 'gh issue URL rejects trailing junk after the issue number' issue_url_rejected acme/origin https://github.com/Acme/Origin/issues/17/extra
+check 'gh issue URL rejects a missing issue number' issue_url_rejected acme/origin https://github.com/Acme/Origin/issues/
+FORGE_PROVIDER=glab FORGE_HOST=gitlab.example
+check 'glab issue URL keeps exact repository casing' issue_url_rejected acme/origin https://gitlab.example/Acme/Origin/-/issues/17
+check 'glab exact-case issue URL still parses' test "$(forge_issue_number_from_url acme/origin https://gitlab.example/acme/origin/-/issues/17)" = 17
+FORGE_PROVIDER=tea FORGE_HOST=https://tea.example/git
+check 'tea issue URL keeps exact repository casing' issue_url_rejected acme/origin https://tea.example/git/Acme/Origin/issues/17
+
+fresh
+jq -n '{body:"Example",url:"https://github.com/Acme/Origin/issues/17#issuecomment-123"}' > "$TMP/comment.json"
+check 'gh comment readback accepts canonical repository casing' test "$(forge_issue_comment_read_json acme/origin 17 'https://github.com/Acme/Origin/issues/17#issuecomment-123')" = '{"url":"https://github.com/Acme/Origin/issues/17#issuecomment-123","body":"Example"}'
+check 'gh comment readback rejects a foreign host' comment_read_rejected acme/origin 17 'https://evil.invalid/acme/origin/issues/17#issuecomment-123'
+check 'gh comment readback rejects a near-miss repository name' comment_read_rejected acme/origin 17 'https://github.com/acme/originevil/issues/17#issuecomment-123'
+check 'gh comment readback keeps the issue number bound' comment_read_rejected acme/origin 18 'https://github.com/Acme/Origin/issues/17#issuecomment-123'
+
+# A configured GitHub Enterprise host gets the same case-insensitive
+# owner/repository treatment, with the host still bound to the target.
+fresh
+FORGE_HOST=ghe.example.com
+jq -n '{body:"Example",url:"https://ghe.example.com/Acme/Origin/issues/17#issuecomment-123"}' > "$TMP/comment.json"
+check 'gh enterprise comment readback accepts canonical repository casing' test "$(forge_issue_comment_read_json acme/origin 17 'https://ghe.example.com/Acme/Origin/issues/17#issuecomment-123')" = '{"url":"https://ghe.example.com/Acme/Origin/issues/17#issuecomment-123","body":"Example"}'
+check 'gh enterprise comment readback rejects a github.com URL' comment_read_rejected acme/origin 17 'https://github.com/Acme/Origin/issues/17#issuecomment-123'
+
+# End-to-end through the primary governor: the create/comment adapters answer
+# with GitHub's canonical casing while FORGE_REPO keeps the configured casing.
+fresh
+STUB_URL_REPO='Acme/Origin'
+check 'governed filing succeeds with canonical-cased create response' run
+check 'canonical-cased success records the .url receipt' test "$(cat "$LOG_BASE/final/filed/test::cluster.url")" = 'https://github.com/Acme/Origin/issues/17'
+check 'canonical-cased success leaves no failure marker' test ! -e "$LOG_BASE/final/filed/test::cluster.failed"
+check 'canonical-cased success performs exactly one create POST' test "$(grep -c '^issue create$' "$TMP/calls")" = 1
+check 'canonical-cased success reaches exact readback' test "$(grep -c '^issue view$' "$TMP/calls")" = 1
+# A resumed run re-attests the stored canonical-cased receipt through the same
+# case-folded parsing instead of quarantining it as a verification failure.
+check 'canonical-cased receipt re-attests on resume' run
+check 'resume keeps the canonical-cased .url receipt' test "$(cat "$LOG_BASE/final/filed/test::cluster.url")" = 'https://github.com/Acme/Origin/issues/17'
+check 'resume does not quarantine the canonical-cased receipt' test ! -e "$LOG_BASE/final/filed/test::cluster.unverified-url"
+check 'resume performs no replacement create POST' test "$(grep -c '^issue create$' "$TMP/calls")" = 1
+
+fresh
+STUB_URL_REPO='Acme/Origin'
+CROSS_LINK_MODE=comment
+jq '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:"Fresh evidence."}]' "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+_filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+check 'cross-link comment succeeds with canonical-cased comment URL' test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
+check 'canonical-cased comment performs exactly one comment POST' test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
 echo "Results: $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
