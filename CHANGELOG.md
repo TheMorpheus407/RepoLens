@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - Correct contributor instructions to distinguish the frozen agent inventory from the live lens registry and update test-suite size and runtime estimates (#414).
+- Accept canonical GitHub repository casing when verifying created issues and cross-link comments, while keeping repository and issue identity checks (#411).
 
 - Grouped polish issue acceptance criteria now honor the configured task-hours budget, including resumed runs (#413).
 
