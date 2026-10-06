@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Grouped polish issue acceptance criteria now honor the configured task-hours budget, including resumed runs (#413).
+
 - Keep remote branch-review drafts separate from verified issue counts, enforce creation limits in the filing governor (including uncertain attempts and reopen suggestions), and reconcile counts and deferred work on resume.
 
 - Resolve remote branch-review refs and revision expressions through local aliases in the temporary clone, retaining both resolved commits before checkout so `HEAD`-relative refs keep their original meaning. Qualified branch refs, tags, and commit SHAs use Git's normal resolution rules.
