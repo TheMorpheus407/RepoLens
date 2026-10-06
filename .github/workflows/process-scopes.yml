@@ -20,7 +20,10 @@ jobs:
       - name: Build the minimum supported Bash
         if: matrix.bash == '4.0'
         run: |
-          curl --fail --location --retry 3 https://ftp.gnu.org/gnu/bash/bash-4.0.tar.gz -o /tmp/bash-4.0.tar.gz
+          curl --fail --location --connect-timeout 10 --max-time 60 \
+            https://ftp.fau.de/gnu/bash/bash-4.0.tar.gz -o /tmp/bash-4.0.tar.gz ||
+          curl --fail --location --connect-timeout 10 --max-time 60 \
+            https://mirrors.ocf.berkeley.edu/gnu/bash/bash-4.0.tar.gz -o /tmp/bash-4.0.tar.gz
           echo '9793d394f640a95030c77d5ac989724afe196921956db741bcaf141801c50518  /tmp/bash-4.0.tar.gz' | sha256sum --check
           tar -xzf /tmp/bash-4.0.tar.gz -C /tmp
           cd /tmp/bash-4.0
