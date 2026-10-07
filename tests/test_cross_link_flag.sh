@@ -312,6 +312,9 @@ forge_issue_create_once() {
 }
 
 forge_filing_capable() { return 0; }
+# No pre-existing open issues: the reopen-candidate dedup lookup (issue #412)
+# never hits, so these scenarios keep exercising the one-shot create path.
+forge_issue_list_json() { printf '[]\n'; }
 forge_issue_number_from_url() { printf '900\n'; }
 forge_issue_read_json() {
   if [[ "$2" == 900 ]]; then cat "$TMPDIR/create-readback.json";
