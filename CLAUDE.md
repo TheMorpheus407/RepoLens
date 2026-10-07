@@ -4,12 +4,14 @@
 
 RepoLens is a standalone multi-lens code audit tool. It runs 335 expert analysis agents (209 code analysis + 18 tool gate + 21 runtime log + 14 product discovery + 43 deployment and Android audit + 13 open-source readiness + 17 content quality) against any git repository, live server, or Android APK and creates GitHub issues for real findings. Think of it as automated code review, agent-driven pentesting, tool-driven static/dynamic analysis, infrastructure auditing, and Android auditing with deep specialization.
 
+That breakdown is a frozen inventory checked by `tests/test_claude_project_instructions.sh`. The live registry `config/domains.json` (counted 2026-09-25) holds 354 lenses across 37 domains. The default `audit` mode (and `feature`, `bugfix`, `bugreport`, `custom`, `branch-review`) runs the 248 audit-visible lenses of the 27 domains without a `mode` field; the rest are mode-specific (discover, deploy, opensource, content, greenfield, spec-change, and 16 polish lenses).
+
 ## Architecture
 
 - **Entry point:** `repolens.sh` — CLI that orchestrates everything
 - **Libraries:** `lib/` — Modular bash libraries (core, logging, streak detection, template engine, summary, parallel execution)
 - **Config:** `config/domains.json` (lens registry), `config/label-colors.json` (GitHub label colors)
-- **Prompts:** `prompts/_base/` (mode wrappers: audit/feature/bugfix/discover/deploy), `prompts/lenses/<domain>/<lens>.md` (335 expert prompts)
+- **Prompts:** `prompts/_base/` (mode wrappers: audit/feature/bugfix/discover/deploy), `prompts/lenses/<domain>/<lens>.md` (335 expert prompts) in the frozen inventory above; 354 lens files on 2026-09-25
 - **Logs:** `logs/<run-id>/` (runtime only, gitignored)
 
 ## Adding a New Lens
@@ -39,7 +41,7 @@ RepoLens is a standalone multi-lens code audit tool. It runs 335 expert analysis
 
 - **No real models in tests.** Tests MUST NEVER invoke real AI models (claude, codex, opencode, etc.). No exceptions. Tests that call `repolens.sh --agent <model>` without `--dry-run` burn API credits, hang for minutes per invocation, leak orphan processes, and wedge AutoDev's quality gate. If a test needs to exercise repolens.sh behavior, use `--dry-run` or mock the agent call.
 - Test suite runs via `bash tests/run-all.sh` or `make check`. Both share a recursion guard (`REPOLENS_MAKE_CHECK` env var) to prevent infinite nesting when tests validate the Makefile target.
-- All tests must complete in seconds, not minutes. The full suite (32 files) runs in ~7 seconds. If a new test takes more than 10 seconds, something is wrong.
+- Each test file must complete in seconds, not minutes. If a new test takes more than 10 seconds, something is wrong. The full suite has 336 `tests/test_*.sh` files (2026-09-25) and takes minutes (256 suites took ~8 min in AutoDev's gate sandbox in August 2026).
 
 ## Do NOT
 

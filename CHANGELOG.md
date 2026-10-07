@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Correct contributor instructions to distinguish the frozen agent inventory from the live lens registry and update test-suite size and runtime estimates (#414).
 - Bare `file:line` citations containing `+` (e.g. SvelteKit's `src/routes/+page.svelte:1`) are now extracted with their complete path instead of being truncated to the suffix after `+`, and bare tokens carrying any other unsupported character are rejected whole rather than validated as a suffix citation — branch-scope and citation verification can no longer accept a finding against a different file than the one named ([#410](https://github.com/TheMorpheus407/RepoLens/issues/410)).
 
 - Reopen suggestions now run a fresh, complete exact-title dedup check against the repository's open issues before reserving new-issue budget or posting, so a `suggest-reopen` run no longer files a second `[reopen-candidate] consider re-opening #N` issue when one from a prior run already exists. A hit suppresses the create without charging `MAX_ISSUES` or claiming the existing issue as newly created, lookup failures or malformed/truncated results fail closed, and the one-shot create with exact readback (never retrying an ambiguous POST) is unchanged when no candidate exists ([#412](https://github.com/TheMorpheus407/RepoLens/issues/412)).
