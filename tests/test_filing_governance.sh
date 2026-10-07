@@ -331,6 +331,39 @@ check 'gh comment readback rejects a foreign host' comment_read_rejected acme/or
 check 'gh comment readback rejects a near-miss repository name' comment_read_rejected acme/origin 17 'https://github.com/acme/originevil/issues/17#issuecomment-123'
 check 'gh comment readback keeps the issue number bound' comment_read_rejected acme/origin 18 'https://github.com/Acme/Origin/issues/17#issuecomment-123'
 
+# Issue #422: fold destination casing, but preserve URL path/fragment literals.
+fresh
+check 'gh issue URL accepts scheme and host casing' test "$(forge_issue_number_from_url acme/origin HTTPS://GITHUB.COM/Acme/Origin/issues/17)" = 17
+check 'gh issue URL accepts host-only casing' test "$(forge_issue_number_from_url acme/origin https://GITHUB.COM/Acme/Origin/issues/17)" = 17
+check 'gh issue URL rejects folded path literal' issue_url_rejected acme/origin https://github.com/Acme/Origin/ISSUES/17
+comment_case_check() {
+  local url="$1"
+  jq -n --arg url "$url" '{body:"Example",url:$url}' > "$TMP/comment.json"
+  forge_issue_comment_read_json acme/origin 17 "$url" >/dev/null
+}
+check 'gh comment readback accepts scheme and host casing' comment_case_check 'HTTPS://GITHUB.COM/Acme/Origin/issues/17#issuecomment-123'
+comment_case_rejected() { ! comment_case_check "$1"; }
+check 'gh comment readback rejects folded path literal' comment_case_rejected 'https://github.com/Acme/Origin/ISSUES/17#issuecomment-123'
+check 'gh comment readback rejects folded fragment literal' comment_case_rejected 'https://github.com/Acme/Origin/issues/17#ISSUECOMMENT-123'
+
+# Exercise the locale that distinguishes ASCII I/i when installed; never install
+# system locales from a test. Both calls must preserve the caller's locale.
+turkish_locale="$(locale -a | sed -n '/^tr_TR\.[uU][tT][fF]\(-\)\{0,1\}8$/p' | head -n 1)"
+if [[ -n "$turkish_locale" ]]; then
+  locale_case_check() (
+    export LC_ALL="$turkish_locale"
+    local before="$LC_ALL" result
+    result="$(forge_issue_number_from_url ACME/ORIGIN https://github.com/acme/origin/issues/17)" || return 1
+    [[ "$result" == 17 && "$LC_ALL" == "$before" ]] || return 1
+    jq -n '{body:"Example",url:"https://github.com/acme/origin/issues/17#issuecomment-123"}' > "$TMP/comment.json"
+    forge_issue_comment_read_json ACME/ORIGIN 17 'https://github.com/acme/origin/issues/17#issuecomment-123' >/dev/null || return 1
+    [[ "$LC_ALL" == "$before" ]]
+  )
+  check 'gh ASCII repository casing is locale-independent' locale_case_check
+else
+  echo '  SKIP: Turkish UTF-8 locale is not installed'
+fi
+
 # A configured GitHub Enterprise host gets the same case-insensitive
 # owner/repository treatment, with the host still bound to the target.
 fresh

@@ -1819,12 +1819,15 @@ forge_issue_number_from_url() {
   prefix="https://$host/$repo/issues/"
   [[ "${FORGE_PROVIDER:-}" == glab ]] && prefix="https://$host/$repo/-/issues/"
   if [[ "${FORGE_PROVIDER:-}" == gh ]]; then
+    local LC_ALL=C destination="https://$host/$repo" remainder
     # GitHub owner and repository names are case-insensitive: accept the
-    # canonical casing returned in create/comment response URLs. The bound
-    # /issues/ segment and the numeric check below keep near-miss and
-    # truncated repositories failing closed.
-    [[ "${url,,}" == "${prefix,,}"* ]] || return 1
-    number="${url:${#prefix}}"
+    # canonical casing returned in create/comment response URLs, while
+    # preserving the exact spelling of the path structure.
+    remainder="${url:0:${#destination}}"
+    [[ "${remainder,,}" == "${destination,,}" ]] || return 1
+    remainder="${url:${#destination}}"
+    [[ "$remainder" == /issues/* ]] || return 1
+    number="${remainder#/issues/}"
   else
     [[ "$url" == "$prefix"* ]] || return 1
     number="${url#"$prefix"}"
@@ -1857,12 +1860,17 @@ forge_issue_comment_once() {
 
 # The caller supplies the create-response URL as an equality selector only.
 forge_issue_comment_read_json() {
-  local repo="$1" number="$2" url="$3" output prefix
+  local LC_ALL=C
+  local repo="$1" number="$2" url="$3" output prefix destination remainder
   [[ "${FORGE_PROVIDER:-}" == gh && "$number" =~ ^[1-9][0-9]*$ ]] || return 1
-  prefix="https://$(_forge_gh_filing_host)/$repo/issues/$number#issuecomment-"
+  destination="https://$(_forge_gh_filing_host)/$repo"
+  prefix="/issues/$number#issuecomment-"
   # GitHub owner and repository names are case-insensitive; the literal
   # /issues/<number>#issuecomment- structure stays bound to the target.
-  [[ "${url,,}" == "${prefix,,}"* ]] || return 1
+  remainder="${url:0:${#destination}}"
+  [[ "${remainder,,}" == "${destination,,}" ]] || return 1
+  remainder="${url:${#destination}}"
+  [[ "$remainder" == "$prefix"* ]] || return 1
   output="$(_forge_gh_filing issue view "$number" -R "$repo" --json comments)" || return 1
   jq -ce --arg url "$url" '[.comments[] | select(.url == $url)] | select(length == 1) | .[0] | {url,body}' <<< "$output"
 }
