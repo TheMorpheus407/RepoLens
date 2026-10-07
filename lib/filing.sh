@@ -556,6 +556,7 @@ _filing_cross_link_enact() {
 
   local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc
   local evidence reason target response readback title new_number reconcile_done body_json reserve_rc
+  local open_issues duplicate
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
     [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || continue
     [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || continue
@@ -633,6 +634,27 @@ _filing_cross_link_enact() {
       if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" \
           || ! reason="$(branch_scope_verify_body "$body")"; then
         printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$sentinel_failed"
+        continue
+      fi
+    fi
+    # A reopen suggestion files a new issue with a deterministic title, so only
+    # a fresh exact-title lookup against the live open-issue list deduplicates
+    # it across runs — the run-local sentinels cannot. The adapter fails closed
+    # (an error or truncated result never becomes an empty list), and the check
+    # runs before budget reservation so a suppressed action never charges
+    # MAX_ISSUES. A reconciled .done keeps its saved created-response instead:
+    # an ambiguous POST is never retried.
+    if [[ "$action_type" == reopen-suggestion ]] && (( ! reconcile_done )); then
+      title="[reopen-candidate] consider re-opening #$issue_number"
+      if ! open_issues="$(forge_issue_list_json "$forge_repo" open)"; then
+        printf 'VERIFICATION_FAILED: fresh reopen-candidate dedup query failed\n' > "$sentinel_failed"
+        continue
+      fi
+      duplicate="$(jq -r --arg title "$title" '
+        [.[] | select(.state == "open") | select(.title == $title)]
+        | .[0].number // empty' <<< "$open_issues")"
+      if [[ -n "$duplicate" ]]; then
+        printf 'DEDUP_HIT: #%s\n' "$duplicate" > "$sentinel_failed"
         continue
       fi
     fi
