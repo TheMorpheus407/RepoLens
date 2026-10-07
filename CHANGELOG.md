@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Bare `file:line` citations containing `+` (e.g. SvelteKit's `src/routes/+page.svelte:1`) are now extracted with their complete path instead of being truncated to the suffix after `+`, and bare tokens carrying any other unsupported character are rejected whole rather than validated as a suffix citation — branch-scope and citation verification can no longer accept a finding against a different file than the one named ([#410](https://github.com/TheMorpheus407/RepoLens/issues/410)).
 
+- Accept canonical GitHub repository casing when verifying created issues and cross-link comments, while keeping repository and issue identity checks (#411).
+
+- Grouped polish issue acceptance criteria now honor the configured task-hours budget, including resumed runs (#413).
+
 - Keep remote branch-review drafts separate from verified issue counts, enforce creation limits in the filing governor (including uncertain attempts and reopen suggestions), and reconcile counts and deferred work on resume.
 
 - Resolve remote branch-review refs and revision expressions through local aliases in the temporary clone, retaining both resolved commits before checkout so `HEAD`-relative refs keep their original meaning. Qualified branch refs, tags, and commit SHAs use Git's normal resolution rules.

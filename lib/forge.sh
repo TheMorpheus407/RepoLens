@@ -1818,8 +1818,17 @@ forge_issue_number_from_url() {
   esac
   prefix="https://$host/$repo/issues/"
   [[ "${FORGE_PROVIDER:-}" == glab ]] && prefix="https://$host/$repo/-/issues/"
-  [[ "$url" == "$prefix"* ]] || return 1
-  number="${url#"$prefix"}"
+  if [[ "${FORGE_PROVIDER:-}" == gh ]]; then
+    # GitHub owner and repository names are case-insensitive: accept the
+    # canonical casing returned in create/comment response URLs. The bound
+    # /issues/ segment and the numeric check below keep near-miss and
+    # truncated repositories failing closed.
+    [[ "${url,,}" == "${prefix,,}"* ]] || return 1
+    number="${url:${#prefix}}"
+  else
+    [[ "$url" == "$prefix"* ]] || return 1
+    number="${url#"$prefix"}"
+  fi
   [[ "$number" =~ ^[1-9][0-9]*$ ]] || return 1
   printf '%s\n' "$number"
 }
@@ -1848,9 +1857,12 @@ forge_issue_comment_once() {
 
 # The caller supplies the create-response URL as an equality selector only.
 forge_issue_comment_read_json() {
-  local repo="$1" number="$2" url="$3" output
+  local repo="$1" number="$2" url="$3" output prefix
   [[ "${FORGE_PROVIDER:-}" == gh && "$number" =~ ^[1-9][0-9]*$ ]] || return 1
-  [[ "$url" == "https://$(_forge_gh_filing_host)/$repo/issues/$number#issuecomment-"* ]] || return 1
+  prefix="https://$(_forge_gh_filing_host)/$repo/issues/$number#issuecomment-"
+  # GitHub owner and repository names are case-insensitive; the literal
+  # /issues/<number>#issuecomment- structure stays bound to the target.
+  [[ "${url,,}" == "${prefix,,}"* ]] || return 1
   output="$(_forge_gh_filing issue view "$number" -R "$repo" --json comments)" || return 1
   jq -ce --arg url "$url" '[.comments[] | select(.url == $url)] | select(length == 1) | .[0] | {url,body}' <<< "$output"
 }
