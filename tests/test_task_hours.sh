@@ -109,5 +109,28 @@ printf 'invalid\n' > "$SCRIPT_DIR/logs/$RUN_ID/task-hours"
 output="$(run_preview)"
 check test "$?" -ne 0
 check contains "$output" 'Persisted task hours must be a positive integer'
+# Issue #424: the renderer boundary must share the polish fallback policy —
+# unusable TASK_HOURS coerces to the one-hour default instead of failing.
+sample_text='Keep each task to 1 hour of work.'
+default_render="$(TASK_HOURS=1 _template_task_scope "$sample_text")"
+export TASK_HOURS=6
+check test "$(_template_task_scope "$sample_text")" = 'Keep each task to 6 hours of work.'
+for value in 06 0 -1 1.5 abc ''; do
+  export TASK_HOURS="$value"
+  output="$(_template_task_scope "$sample_text" 2>/dev/null)"
+  rc=$?
+  check test "$rc" -eq 0
+  check test "$output" = "$default_render"
+  check contains "$output" '1 hour'
+done
+unset TASK_HOURS
+# Cover the remaining replacement variants in _template_task_scope: the
+# capitalized "1 Hour", compact "~1h", and hyphenated "one-hour" forms.
+export TASK_HOURS=4
+variant_text='Spend 1 Hour per task, roughly ~1h, as a one-hour unit.'
+check test "$(_template_task_scope "$variant_text")" = 'Spend 4 Hours per task, roughly ~4h, as a 4-hour unit.'
+export TASK_HOURS=0
+check test "$(_template_task_scope "$variant_text")" = "$variant_text"
+unset TASK_HOURS
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))
