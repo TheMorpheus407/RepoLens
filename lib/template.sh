@@ -215,7 +215,8 @@ compose_prompt() {
   local -a pairs=()
   local -A prompt_vars=()
 
-  base_content="$(_template_task_scope "$(cat "$base_file")")" || return 1
+  base_content="$(cat "$base_file")" || return 1
+  base_content="$(_template_task_scope "$base_content")" || return 1
   lens_body="$(read_body "$lens_file")"
   sentinel_seed="${BASHPID:-$$}_${RANDOM}_${RANDOM}"
   prior_round_digest_sentinel="__REPOLENS_PRIOR_ROUND_DIGEST_${sentinel_seed}__"

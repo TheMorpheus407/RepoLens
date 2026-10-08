@@ -109,5 +109,52 @@ printf 'invalid\n' > "$SCRIPT_DIR/logs/$RUN_ID/task-hours"
 output="$(run_preview)"
 check test "$?" -ne 0
 check contains "$output" 'Persisted task hours must be a positive integer'
+# #428: a failed base-template read must fail the caller, even with valid hours.
+export TASK_HOURS=6
+output="$(
+  # Simulate a command that emits partial data and then fails. Keep the stub
+  # confined to this subshell and this one base-template path.
+  cat() {
+    if [[ "$#" -eq 1 && "$1" == "$SCRIPT_DIR/prompts/_base/polish.md" ]]; then
+      printf 'Partially read base template.'
+      return 42
+    fi
+    command cat "$@"
+  }
+  compose_prompt "$SCRIPT_DIR/prompts/_base/polish.md" "$TEST_DIR/lens.md" '' '' polish
+)"
+read_rc=$?
+check test "$read_rc" -ne 0
+check test -z "$output"
+
+# #428: exercise adversarial hours at the renderer boundary, independently of
+# CLI validation. The current renderer rejects invalid values without output.
+output="$(
+  cd "$TEST_DIR" || exit 1
+  export TASK_HOURS='1;touch unsafe'
+  compose_prompt "$SCRIPT_DIR/prompts/_base/polish.md" "$TEST_DIR/lens.md" '' '' polish \
+    '' '' false true "$TEST_DIR/output" 2>"$TEST_DIR/invalid-hours-error"
+)"
+renderer_rc=$?
+check test "$renderer_rc" -ne 0
+check test -z "$output"
+check test ! -e "$TEST_DIR/unsafe"
+
+# Polish body rendering has an existing fallback rather than rejection.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/polish.sh"
+injection_group='{"domain":"effort-signal","lens_id":"loading-transparency","items":[{"title":"Clarify progress","body":"Keep progress concise.","voice_fit":"strong","polish_rank_x1000":1000}]}'
+(
+  cd "$TEST_DIR" || exit 1
+  export TASK_HOURS='1;touch unsafe'
+  _polish_render_issue_body "$injection_group" "$TEST_DIR/injection-body.md" "test-hours" "ranked.json"
+)
+polish_rc=$?
+check test "$polish_rc" -eq 0
+output="$(cat "$TEST_DIR/injection-body.md")"
+check contains "$output" '- Each accepted polish item remains scoped to approximately one hour.'
+check test "$(printf '%s' "$output" | grep -cF '1;touch unsafe')" -eq 0
+check test ! -e "$TEST_DIR/unsafe"
+
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))
