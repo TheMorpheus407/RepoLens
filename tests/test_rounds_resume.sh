@@ -236,6 +236,8 @@ init_run_layout "$RUN_ID" 3 "${#FIXTURE_LENSES[@]}" "${FIXTURE_LENSES[@]}"
 finalize_round "$RUN_ID" 1
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${FIXTURE_LENSES[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
+# A cleanly completed non-final round includes its successful handoff.
+printf 'LENS: %s\n' "${FIXTURE_LENSES[@]##*/}" > "$LOG_BASE/rounds/round-1/dispatch.md"
 printf '%s\n%s\n' "${FIXTURE_LENSES[0]}" "${FIXTURE_LENSES[1]}" > "$LOG_BASE/.rounds/round-2.lenses.completed"
 RESUME_RUN_ID="$RUN_ID"
 
@@ -264,6 +266,7 @@ init_run_layout "$RUN_ID" 2 "${#LENSES2[@]}" "${LENSES2[@]}"
 finalize_round "$RUN_ID" 1
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${LENSES2[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
+printf 'LENS: %s\n' "${LENSES2[@]##*/}" > "$LOG_BASE/rounds/round-1/dispatch.md"
 RESUME_RUN_ID="$RUN_ID"
 
 run_rounds 2 LENSES2

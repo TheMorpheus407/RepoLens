@@ -2464,6 +2464,9 @@ run_rounds() {
       if [[ -n "${RESUME_RUN_ID:-}" ]] \
           && ! _rounds_all_lenses_completed "$round_completed_lenses_file" "${active_lens_list[@]}"; then
         log_info "[round $round/$rounds_total] Completed marker has pending lenses for current selection; resuming"
+      elif (( round < rounds_total )) && [[ ! -f "$current_round_dir/dispatch.md" ]]; then
+        # Older runs may have marked the round complete before meta succeeded.
+        log_info "[round $round/$rounds_total] Completed lenses have a pending meta handoff; resuming"
       else
         log_info "[round $round/$rounds_total] Skipping completed round"
         continue

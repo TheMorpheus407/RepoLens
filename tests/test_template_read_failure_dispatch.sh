@@ -144,6 +144,10 @@ check test "$(wc -l < "$AGENT_CALLS")" -eq 1
 check test ! -e "$LOG_BASE/rounds/round-2/.completed"
 check test -f "$LOG_BASE/.systemic-failure-abort"
 check _clean_is_incomplete "$LOG_BASE"
+# Runs created before the barrier repair can already have both premature
+# completion markers. Their absent dispatch must still trigger handoff recovery.
+printf 'legacy premature barrier\n' > "$LOG_BASE/rounds/round-1/.completed"
+printf 'legacy premature barrier\n' > "$LOG_BASE/.rounds/round-1.completed"
 unset FAIL_TEMPLATE
 env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
   REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \

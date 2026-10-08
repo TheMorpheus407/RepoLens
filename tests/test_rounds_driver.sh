@@ -640,6 +640,8 @@ echo ""
 echo "Test 9: completed rounds are skipped under resume"
 reset_case "resume-skip"
 ROUND_COMPLETED_BEFORE="1"
+mkdir -p "$LOG_BASE/rounds/round-1"
+printf '# Meta-Orchestrator Dispatch\n' > "$LOG_BASE/rounds/round-1/dispatch.md"
 run_rounds 2 LENSES
 rc=$?
 assert_eq "resume run exits successfully" "0" "$rc"
