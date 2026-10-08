@@ -346,15 +346,34 @@ comment_case_rejected() { ! comment_case_check "$1"; }
 check 'gh comment readback rejects folded path literal' comment_case_rejected 'https://github.com/Acme/Origin/ISSUES/17#issuecomment-123'
 check 'gh comment readback rejects folded fragment literal' comment_case_rejected 'https://github.com/Acme/Origin/issues/17#ISSUECOMMENT-123'
 
+# POSIX is always available and differs from the validators' C setting. Call
+# directly so command substitution cannot hide a leaked locale assignment.
+locale_restoration_check() {
+  local LC_ALL=POSIX validator="$1" url="$2" expected_status="$3" status=0
+  export LC_ALL
+  if [[ "$validator" == issue ]]; then
+    forge_issue_number_from_url acme/origin "$url" > "$TMP/locale-number" || status=$?
+    [[ "$expected_status" != 0 || "$(cat "$TMP/locale-number")" == 17 ]] || return 1
+  else
+    jq -n --arg url "$url" '{body:"Example",url:$url}' > "$TMP/comment.json"
+    forge_issue_comment_read_json acme/origin 17 "$url" >/dev/null || status=$?
+  fi
+  [[ "$status" == "$expected_status" && "$LC_ALL" == POSIX ]]
+}
+check 'issue parser preserves caller locale on success' locale_restoration_check issue 'https://github.com/Acme/Origin/issues/17' 0
+check 'issue parser preserves caller locale on rejection' locale_restoration_check issue 'https://github.com/Acme/Origin/ISSUES/17' 1
+check 'comment reader preserves caller locale on success' locale_restoration_check comment 'https://github.com/Acme/Origin/issues/17#issuecomment-123' 0
+check 'comment reader preserves caller locale on rejection' locale_restoration_check comment 'https://github.com/Acme/Origin/issues/17#ISSUECOMMENT-123' 1
+
 # Exercise the locale that distinguishes ASCII I/i when installed; never install
 # system locales from a test. Both calls must preserve the caller's locale.
 turkish_locale="$(locale -a | sed -n '/^tr_TR\.[uU][tT][fF]\(-\)\{0,1\}8$/p' | head -n 1)"
 if [[ -n "$turkish_locale" ]]; then
   locale_case_check() (
     export LC_ALL="$turkish_locale"
-    local before="$LC_ALL" result
-    result="$(forge_issue_number_from_url ACME/ORIGIN https://github.com/acme/origin/issues/17)" || return 1
-    [[ "$result" == 17 && "$LC_ALL" == "$before" ]] || return 1
+    local before="$LC_ALL"
+    forge_issue_number_from_url ACME/ORIGIN https://github.com/acme/origin/issues/17 > "$TMP/locale-number" || return 1
+    [[ "$(cat "$TMP/locale-number")" == 17 && "$LC_ALL" == "$before" ]] || return 1
     jq -n '{body:"Example",url:"https://github.com/acme/origin/issues/17#issuecomment-123"}' > "$TMP/comment.json"
     forge_issue_comment_read_json ACME/ORIGIN 17 'https://github.com/acme/origin/issues/17#issuecomment-123' >/dev/null || return 1
     [[ "$LC_ALL" == "$before" ]]
