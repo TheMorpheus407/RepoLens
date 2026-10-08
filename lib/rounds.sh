@@ -2559,6 +2559,10 @@ run_rounds() {
     if ${PARALLEL:-false}; then
       log_info "Running in parallel mode (max ${MAX_PARALLEL:-8} concurrent)"
       if ! init_parallel "$LOG_BASE/.semaphore" "${MAX_PARALLEL:-8}"; then
+        REPOLENS_ROUND_FAILURE_REASON="lens-execution-failed"
+        if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+          REPOLENS_FINAL_STATE="failed"
+        fi
         _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
         return 1
       fi
@@ -2602,6 +2606,10 @@ run_rounds() {
           else
             wait_all || true
           fi
+          REPOLENS_ROUND_FAILURE_REASON="lens-execution-failed"
+          if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+            REPOLENS_FINAL_STATE="failed"
+          fi
           _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
           return 1
         fi
@@ -2616,6 +2624,10 @@ run_rounds() {
           _cleanup_children || true
         fi
         set_stop_reason "$SUMMARY_FILE" "process-scope-cleanup-failed"
+        REPOLENS_ROUND_FAILURE_REASON="process-scope-cleanup-failed"
+        if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+          REPOLENS_FINAL_STATE="failed"
+        fi
         _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
         return 1
       fi

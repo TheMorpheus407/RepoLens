@@ -749,11 +749,22 @@ for failure in init spawn terminal; do
   run_rounds 2 LENSES
   rc=$?
   assert_eq "$failure lifecycle failure is terminal" 1 "$rc"
+  assert_eq "$failure lifecycle failure reports failed final state" failed "$REPOLENS_FINAL_STATE"
+  if [[ "$failure" == terminal ]]; then
+    expected_reason="process-scope-cleanup-failed"
+  else
+    expected_reason="lens-execution-failed"
+  fi
+  assert_eq "$failure lifecycle failure retains an attempt reason" "$expected_reason" "$REPOLENS_ROUND_FAILURE_REASON"
   assert_eq "$failure lifecycle failure does not mark a round complete" "" "$(join_by " " "${MARKED_ROUNDS[@]}")"
   assert_eq "$failure lifecycle failure restores original completion file" "$original_completion" "$completed_lenses_file"
   if [[ "$failure" != init ]]; then
     assert_eq "$failure starts bounded cleanup of remaining scopes" 1 "$CLEANUP_CALLS"
   fi
+  REPOLENS_FINAL_STATE=interrupted
+  run_rounds 2 LENSES
+  assert_nonzero "$failure lifecycle failure during interruption stays nonzero" "$?"
+  assert_eq "$failure lifecycle failure preserves interruption" interrupted "$REPOLENS_FINAL_STATE"
 done
 
 echo "Test 11: meta-orchestrator failure stops later rounds"
