@@ -68,7 +68,8 @@ while IFS= read -r -d '' f; do
     continue
   fi
 
-  output="$(bash "$f" 2>&1)"; rc=$?
+  # Child suites must not consume the discovery stream used by this loop.
+  output="$(bash "$f" </dev/null 2>&1)"; rc=$?
 
   # The per-suite "Results: P/T passed, F failed" line is printed by the suites
   # themselves. Grab the last one (some suites print multiple).

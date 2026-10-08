@@ -129,18 +129,19 @@ check test "$read_rc" -ne 0
 check test -z "$output"
 
 # #428: exercise adversarial hours at the renderer boundary, independently of
-# CLI validation. The current renderer rejects invalid values without output.
+# CLI validation. The renderer uses the one-hour fallback introduced by #424.
 output="$(
   cd "$TEST_DIR" || exit 1
   TASK_HOURS='1;touch unsafe' compose_prompt "$SCRIPT_DIR/prompts/_base/polish.md" "$TEST_DIR/lens.md" '' '' polish \
     '' '' false true "$TEST_DIR/output" 2>"$TEST_DIR/invalid-hours-error"
 )"
 renderer_rc=$?
-check test "$renderer_rc" -ne 0
-check test -z "$output"
+check test "$renderer_rc" -eq 0
+check contains "$output" 'approximately 1 hour'
+check test "$(printf '%s' "$output" | grep -cF '1;touch unsafe')" -eq 0
 check test ! -e "$TEST_DIR/unsafe"
 
-# Polish body rendering has an existing fallback rather than rejection.
+# Polish body rendering shares the same fallback.
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/polish.sh"
 injection_group='{"domain":"effort-signal","lens_id":"loading-transparency","items":[{"title":"Clarify progress","body":"Keep progress concise.","voice_fit":"strong","polish_rank_x1000":1000}]}'
@@ -155,5 +156,28 @@ check contains "$output" '- Each accepted polish item remains scoped to approxim
 check test "$(printf '%s' "$output" | grep -cF '1;touch unsafe')" -eq 0
 check test ! -e "$TEST_DIR/unsafe"
 
+# Issue #424: the renderer boundary must share the polish fallback policy —
+# unusable TASK_HOURS coerces to the one-hour default instead of failing.
+sample_text='Keep each task to 1 hour of work.'
+default_render="$(TASK_HOURS=1 _template_task_scope "$sample_text")"
+export TASK_HOURS=6
+check test "$(_template_task_scope "$sample_text")" = 'Keep each task to 6 hours of work.'
+for value in 06 0 -1 1.5 abc '' '1;touch unsafe'; do
+  export TASK_HOURS="$value"
+  output="$(_template_task_scope "$sample_text" 2>/dev/null)"
+  rc=$?
+  check test "$rc" -eq 0
+  check test "$output" = "$default_render"
+  check contains "$output" '1 hour'
+done
+unset TASK_HOURS
+# Cover the remaining replacement variants in _template_task_scope: the
+# capitalized "1 Hour", compact "~1h", and hyphenated "one-hour" forms.
+export TASK_HOURS=4
+variant_text='Spend 1 Hour per task, roughly ~1h, as a one-hour unit.'
+check test "$(_template_task_scope "$variant_text")" = 'Spend 4 Hours per task, roughly ~4h, as a 4-hour unit.'
+export TASK_HOURS=0
+check test "$(_template_task_scope "$variant_text")" = "$variant_text"
+unset TASK_HOURS
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

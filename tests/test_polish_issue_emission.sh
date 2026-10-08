@@ -555,6 +555,8 @@ echo "Test 11: polish scope criterion honors a persisted task-hours value restor
 reset_emission_run "task-hours-resume-run"
 printf '6\n' > "$LOG_BASE/task-hours"
 unset TASK_HOURS
+# This hand-restore mirrors the real --resume logic in repolens.sh:1096-1100;
+# the end-to-end restore path is covered by tests/test_task_hours.sh (issue #424).
 TASK_HOURS="$(cat "$LOG_BASE/task-hours")"
 export TASK_HOURS
 _polish_render_issue_body "$hours_group" "$TMPDIR/body-resume.md" "$RUN_ID" "ranked.json"
@@ -592,6 +594,17 @@ assert_contains "zero TASK_HOURS keeps the default one-hour criterion" \
   "- Each accepted polish item remains scoped to approximately one hour." "$zero_hours_body"
 assert_not_contains "zero TASK_HOURS is not interpolated into the criterion" \
   "approximately 0 hours" "$zero_hours_body"
+
+TASK_HOURS=06
+export TASK_HOURS
+_polish_render_issue_body "$hours_group" "$TMPDIR/body-leading-zero-hours.md" "hours-repro" "ranked.json"
+leading_zero_hours_body="$(cat "$TMPDIR/body-leading-zero-hours.md")"
+assert_contains "leading-zero TASK_HOURS keeps the default one-hour criterion (issue #424)" \
+  "- Each accepted polish item remains scoped to approximately one hour." "$leading_zero_hours_body"
+assert_not_contains "leading-zero TASK_HOURS is not interpolated into the criterion" \
+  "approximately 06 hours" "$leading_zero_hours_body"
+assert_not_contains "leading-zero TASK_HOURS does not silently drop the zero" \
+  "approximately 6 hours" "$leading_zero_hours_body"
 
 echo ""
 echo "Test 13: multi-digit task-hours budget renders in the polish scope criterion (issue #413)"

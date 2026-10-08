@@ -164,10 +164,10 @@ _template_resolve_file_backed_value() {
 # backlog, or other untrusted material. Default rendering stays byte-identical.
 _template_task_scope() {
   local text="$1" hours="${TASK_HOURS:-1}"
-  [[ "$hours" =~ ^[1-9][0-9]*$ ]] || {
-    printf '%s\n' 'Task hours must be a positive integer.' >&2
-    return 1
-  }
+  # Match lib/polish.sh's fallback policy: unusable TASK_HOURS coerces to the
+  # one-hour default. The CLI validates TASK_HOURS at parse time, so this
+  # boundary stays defensive rather than authoritative.
+  [[ "$hours" =~ ^[1-9][0-9]*$ ]] || hours=1
   if [[ "$hours" != 1 ]]; then
     text="${text//1 hour/${hours} hours}"
     text="${text//1 Hour/${hours} Hours}"
@@ -216,7 +216,7 @@ compose_prompt() {
   local -A prompt_vars=()
 
   base_content="$(cat "$base_file")" || return 1
-  base_content="$(_template_task_scope "$base_content")" || return 1
+  base_content="$(_template_task_scope "$base_content")"
   lens_body="$(read_body "$lens_file")"
   sentinel_seed="${BASHPID:-$$}_${RANDOM}_${RANDOM}"
   prior_round_digest_sentinel="__REPOLENS_PRIOR_ROUND_DIGEST_${sentinel_seed}__"
@@ -692,7 +692,7 @@ Before writing a new finding, check if a file with a similar title already exist
     fi
   fi
 
-  local_mode_section="$(_template_task_scope "$local_mode_section")" || return 1
+  local_mode_section="$(_template_task_scope "$local_mode_section")"
   local_mode_section="${local_mode_section//$task_output_sentinel/$task_output_dir}"
   local_output_dir="$task_output_dir"
   prompt="${prompt//\{\{LOCAL_MODE_SECTION\}\}/$local_mode_section}"

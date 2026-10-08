@@ -41,13 +41,13 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-TMP_PARENT="$SCRIPT_DIR/logs/test-filing"
-mkdir -p "$TMP_PARENT"
-TMPDIR="$(mktemp -d "$TMP_PARENT/run.XXXXXX")"
+# Keep the runtime scratch path short: parallel.sh places its Unix socket
+# under TMPDIR, and a deep checkout path can exceed the AF_UNIX path limit.
+# An absolute template also avoids a long TMPDIR inherited from the caller.
+TMPDIR="$(mktemp -d /tmp/repolens-filing.XXXXXX)" || exit 1
 
 cleanup() {
   rm -rf "$TMPDIR"
-  rmdir "$TMP_PARENT" 2>/dev/null || true
 }
 trap cleanup EXIT
 
