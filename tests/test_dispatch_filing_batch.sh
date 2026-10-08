@@ -43,7 +43,8 @@ TOTAL=0
 
 # Keep the runtime scratch path short: parallel.sh places its Unix socket
 # under TMPDIR, and a deep checkout path can exceed the AF_UNIX path limit.
-TMPDIR="$(mktemp -d)"
+# An absolute template also avoids a long TMPDIR inherited from the caller.
+TMPDIR="$(mktemp -d /tmp/repolens-filing.XXXXXX)" || exit 1
 
 cleanup() {
   rm -rf "$TMPDIR"
