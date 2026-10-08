@@ -43,10 +43,11 @@ TOTAL=0
 
 TMP_PARENT="$SCRIPT_DIR/logs/test-filing"
 mkdir -p "$TMP_PARENT"
-TMPDIR="$(mktemp -d "$TMP_PARENT/run.XXXXXX")"
+# Keep fixture storage separate from TMPDIR, which the real scope launcher uses.
+FILING_FIXTURE="$(mktemp -d "$TMP_PARENT/run.XXXXXX")"
 
 cleanup() {
-  rm -rf "$TMPDIR"
+  rm -rf "$FILING_FIXTURE"
   rmdir "$TMP_PARENT" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -193,7 +194,7 @@ test_stub_filing_callback() {
 
 echo "=== Case 1: idempotent skip — 5 clusters, 3 pre-filed ==="
 
-RUN_LOG="$TMPDIR/idempotent"
+RUN_LOG="$FILING_FIXTURE/idempotent"
 mkdir -p "$RUN_LOG/final/filed"
 export LOG_BASE="$RUN_LOG"
 
@@ -204,11 +205,11 @@ echo "https://example.invalid/issues/cluster-1" > "$RUN_LOG/final/filed/cluster-
 echo "https://example.invalid/issues/cluster-2" > "$RUN_LOG/final/filed/cluster-2.url"
 echo "https://example.invalid/issues/cluster-3" > "$RUN_LOG/final/filed/cluster-3.url"
 
-CALLBACK_LOG="$TMPDIR/idempotent-callback.log"
+CALLBACK_LOG="$FILING_FIXTURE/idempotent-callback.log"
 : > "$CALLBACK_LOG"
 
 export _FILING_AGENT_CALLBACK="test_stub_filing_callback"
-output="$(dispatch_filing_batch "idempotent" 2>"$TMPDIR/idempotent.err")"
+output="$(dispatch_filing_batch "idempotent" 2>"$FILING_FIXTURE/idempotent.err")"
 status=$?
 
 assert_success "dispatcher exits 0 on idempotent run" "$status"
@@ -245,7 +246,7 @@ unset LOG_BASE
 echo ""
 echo "=== Case 2: stale-lock retry ==="
 
-RUN_LOG="$TMPDIR/stale-lock"
+RUN_LOG="$FILING_FIXTURE/stale-lock"
 mkdir -p "$RUN_LOG/final/filed"
 export LOG_BASE="$RUN_LOG"
 
@@ -259,12 +260,12 @@ write_manifest_n "$RUN_LOG/final/manifest.json" 1
 touch -d "1 hour ago" "$RUN_LOG/final/filed/cluster-1.lock" 2>/dev/null \
   || touch -t 202001010000 "$RUN_LOG/final/filed/cluster-1.lock"
 
-CALLBACK_LOG="$TMPDIR/stale-callback.log"
+CALLBACK_LOG="$FILING_FIXTURE/stale-callback.log"
 : > "$CALLBACK_LOG"
 export _FILING_AGENT_CALLBACK="test_stub_filing_callback"
 export STALE_LOCK_TIMEOUT=1
 
-output="$(dispatch_filing_batch "stale-lock" 2>"$TMPDIR/stale.err")"
+output="$(dispatch_filing_batch "stale-lock" 2>"$FILING_FIXTURE/stale.err")"
 status=$?
 
 assert_success "dispatcher exits 0 with stale lock retake" "$status"
@@ -281,7 +282,7 @@ unset LOG_BASE
 echo ""
 echo "=== Case 2b: fresh lock blocks dispatch ==="
 
-RUN_LOG="$TMPDIR/fresh-lock"
+RUN_LOG="$FILING_FIXTURE/fresh-lock"
 mkdir -p "$RUN_LOG/final/filed"
 export LOG_BASE="$RUN_LOG"
 
@@ -290,12 +291,12 @@ write_manifest_n "$RUN_LOG/final/manifest.json" 1
 # Recently-touched lock is owned by another (still-running) worker.
 : > "$RUN_LOG/final/filed/cluster-1.lock"
 
-CALLBACK_LOG="$TMPDIR/fresh-callback.log"
+CALLBACK_LOG="$FILING_FIXTURE/fresh-callback.log"
 : > "$CALLBACK_LOG"
 export _FILING_AGENT_CALLBACK="test_stub_filing_callback"
 # Default STALE_LOCK_TIMEOUT (3600) is well above the brand-new lock age.
 
-output="$(dispatch_filing_batch "fresh-lock" 2>"$TMPDIR/fresh.err")"
+output="$(dispatch_filing_batch "fresh-lock" 2>"$FILING_FIXTURE/fresh.err")"
 status=$?
 
 assert_success "dispatcher exits 0 when fresh lock blocks" "$status"
@@ -312,16 +313,16 @@ unset LOG_BASE
 echo ""
 echo "=== Case 3: missing manifest -> non-zero, no writes to filed/ ==="
 
-RUN_LOG="$TMPDIR/missing-manifest"
+RUN_LOG="$FILING_FIXTURE/missing-manifest"
 mkdir -p "$RUN_LOG/final"
 export LOG_BASE="$RUN_LOG"
 # Intentionally do NOT create manifest.json.
 
-CALLBACK_LOG="$TMPDIR/missing-callback.log"
+CALLBACK_LOG="$FILING_FIXTURE/missing-callback.log"
 : > "$CALLBACK_LOG"
 export _FILING_AGENT_CALLBACK="test_stub_filing_callback"
 
-output="$(dispatch_filing_batch "missing-manifest" 2>"$TMPDIR/missing.err")"
+output="$(dispatch_filing_batch "missing-manifest" 2>"$FILING_FIXTURE/missing.err")"
 status=$?
 
 assert_failure "dispatcher exits non-zero for missing manifest" "$status"
@@ -343,7 +344,7 @@ else
   fi
 fi
 
-err_text="$(cat "$TMPDIR/missing.err")"
+err_text="$(cat "$FILING_FIXTURE/missing.err")"
 assert_contains "stderr mentions missing manifest" "manifest" "$err_text"
 
 unset LOG_BASE
@@ -351,16 +352,16 @@ unset LOG_BASE
 echo ""
 echo "=== Case 4: empty manifest ([]) -> 0,0,0 success ==="
 
-RUN_LOG="$TMPDIR/empty-manifest"
+RUN_LOG="$FILING_FIXTURE/empty-manifest"
 mkdir -p "$RUN_LOG/final"
 export LOG_BASE="$RUN_LOG"
 echo '[]' > "$RUN_LOG/final/manifest.json"
 
-CALLBACK_LOG="$TMPDIR/empty-callback.log"
+CALLBACK_LOG="$FILING_FIXTURE/empty-callback.log"
 : > "$CALLBACK_LOG"
 export _FILING_AGENT_CALLBACK="test_stub_filing_callback"
 
-output="$(dispatch_filing_batch "empty-manifest" 2>"$TMPDIR/empty.err")"
+output="$(dispatch_filing_batch "empty-manifest" 2>"$FILING_FIXTURE/empty.err")"
 status=$?
 
 assert_success "dispatcher returns 0 on empty manifest" "$status"
@@ -375,18 +376,18 @@ unset LOG_BASE
 echo ""
 echo "=== Case 5: pre-existing .failed treated as terminal ==="
 
-RUN_LOG="$TMPDIR/pre-failed"
+RUN_LOG="$FILING_FIXTURE/pre-failed"
 mkdir -p "$RUN_LOG/final/filed"
 export LOG_BASE="$RUN_LOG"
 
 write_manifest_n "$RUN_LOG/final/manifest.json" 1
 echo "VERIFICATION_FAILED: dummy" > "$RUN_LOG/final/filed/cluster-1.failed"
 
-CALLBACK_LOG="$TMPDIR/pre-failed-callback.log"
+CALLBACK_LOG="$FILING_FIXTURE/pre-failed-callback.log"
 : > "$CALLBACK_LOG"
 export _FILING_AGENT_CALLBACK="test_stub_filing_callback"
 
-output="$(dispatch_filing_batch "pre-failed" 2>"$TMPDIR/pre-failed.err")"
+output="$(dispatch_filing_batch "pre-failed" 2>"$FILING_FIXTURE/pre-failed.err")"
 status=$?
 
 assert_success "dispatcher exits 0 when only cluster is .failed" "$status"
@@ -398,11 +399,11 @@ assert_eq "no callback invocation for pre-existing .failed" "0" "$callback_count
 
 echo "=== Lifecycle integration: sequential defaults and explicit fallback ==="
 for policy in default fallback; do
-  RUN_LOG="$TMPDIR/sequential-$policy"
+  RUN_LOG="$FILING_FIXTURE/sequential-$policy"
   mkdir -p "$RUN_LOG/final/filed"
   export LOG_BASE="$RUN_LOG"
   write_manifest_n "$RUN_LOG/final/manifest.json" 1
-  CALLBACK_LOG="$TMPDIR/sequential-$policy.log"
+  CALLBACK_LOG="$FILING_FIXTURE/sequential-$policy.log"
   : > "$CALLBACK_LOG"
   (
     uname() { echo Darwin; }
@@ -414,7 +415,7 @@ for policy in default fallback; do
       parallel_preflight || exit 1
     fi
     dispatch_filing_batch "sequential-$policy"
-  ) > "$TMPDIR/sequential-$policy.out" 2>&1
+  ) > "$FILING_FIXTURE/sequential-$policy.out" 2>&1
   status=$?
   assert_success "$policy filing succeeds with no platform backend" "$status"
   assert_eq "$policy callback executes exactly once" 1 "$(wc -l < "$CALLBACK_LOG" | tr -d ' ')"
@@ -422,11 +423,11 @@ done
 
 echo "=== Lifecycle integration: parallel infrastructure failures ==="
 for failure in init spawn wait terminal-after-url recorded-rejection; do
-  RUN_LOG="$TMPDIR/infrastructure-$failure"
+  RUN_LOG="$FILING_FIXTURE/infrastructure-$failure"
   mkdir -p "$RUN_LOG/final/filed"
   export LOG_BASE="$RUN_LOG"
   write_manifest_n "$RUN_LOG/final/manifest.json" 1
-  CALLBACK_LOG="$TMPDIR/infrastructure-$failure.log"
+  CALLBACK_LOG="$FILING_FIXTURE/infrastructure-$failure.log"
   : > "$CALLBACK_LOG"
   (
     export PARALLEL=true
@@ -448,11 +449,11 @@ for failure in init spawn wait terminal-after-url recorded-rejection; do
       return 1
     }
     dispatch_filing_batch "infrastructure-$failure"
-  ) > "$TMPDIR/infrastructure-$failure.out" 2>&1
+  ) > "$FILING_FIXTURE/infrastructure-$failure.out" 2>&1
   status=$?
   if [[ "$failure" == recorded-rejection ]]; then
     assert_success "governed rejection stays a recorded per-cluster result" "$status"
-    assert_contains "governed rejection counted in aggregate" "Verification-failed: 1" "$(cat "$TMPDIR/infrastructure-$failure.out")"
+    assert_contains "governed rejection counted in aggregate" "Verification-failed: 1" "$(cat "$FILING_FIXTURE/infrastructure-$failure.out")"
   else
     assert_failure "$failure propagates through captured dispatcher status" "$status"
     if [[ "$failure" == init || "$failure" == spawn ]]; then
@@ -466,11 +467,11 @@ done
 
 echo "=== Lifecycle integration: real parallel mixed governed outcomes ==="
 if python3 "$_REPOLENS_SCOPE_HELPER" probe 2>/dev/null; then
-  RUN_LOG="$TMPDIR/real-parallel"
+  RUN_LOG="$FILING_FIXTURE/real-parallel"
   mkdir -p "$RUN_LOG/final/filed"
   export LOG_BASE="$RUN_LOG"
   write_manifest_n "$RUN_LOG/final/manifest.json" 2
-  CALLBACK_LOG="$TMPDIR/real-parallel.log"
+  CALLBACK_LOG="$FILING_FIXTURE/real-parallel.log"
   : > "$CALLBACK_LOG"
   (
     export PARALLEL=true
@@ -484,10 +485,10 @@ if python3 "$_REPOLENS_SCOPE_HELPER" probe 2>/dev/null; then
     }
     _FILING_AGENT_CALLBACK=real_parallel_callback
     dispatch_filing_batch real-parallel
-  ) > "$TMPDIR/real-parallel.out" 2>&1
+  ) > "$FILING_FIXTURE/real-parallel.out" 2>&1
   status=$?
   assert_success "real parallel callback rejection remains a governed result" "$status"
-  assert_contains "real parallel batch records both terminal outcomes" "Filed: 1, Verification-failed: 1" "$(cat "$TMPDIR/real-parallel.out")"
+  assert_contains "real parallel batch records both terminal outcomes" "Filed: 1, Verification-failed: 1" "$(cat "$FILING_FIXTURE/real-parallel.out")"
 else
   echo "  SKIP: real parallel filing requires delegated cgroup v2"
 fi

@@ -29,11 +29,11 @@
 # Makefile's own parse-time _SKIP_META guard.
 #
 # Behavioral contract this test pins:
-#   1. run-all.sh completes well under the 5-minute budget when invoked
-#      with stdin closed and a clean env (no REPOLENS_MAKE_CHECK pre-set)
+#   1. The real run-all.sh completes on isolated fixture suites with stdin
+#      closed and a clean env (no REPOLENS_MAKE_CHECK pre-set)
 #   2. No orphan test_issue6_test27_fix.sh (or child `make check`)
 #      processes remain after run-all.sh exits
-#   3. run-all.sh reports a "Results:" summary line (output contract)
+#   3. run-all.sh reports exact suite/failure counts and a nonzero failure exit
 #   4. run-all.sh exports REPOLENS_MAKE_CHECK=1 (source-level contract)
 #   5. run-all.sh sets _SKIP_META=1 unconditionally (source-level)
 #   6. test_issue6_test27_fix.sh's internal make-check sub-test passes
@@ -49,6 +49,9 @@ META_TEST="$SCRIPT_DIR/tests/test_issue6_test27_fix.sh"
 PASS=0
 FAIL=0
 TOTAL=0
+
+GUARD_FIXTURE="$(mktemp -d)"
+trap 'rm -rf -- "$GUARD_FIXTURE"' EXIT
 
 fail_with() {
   local desc="$1" detail="${2:-}"
@@ -111,21 +114,49 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# Behavioral assertion — actually run run-all.sh with a hard timeout.
-# Budget: 900s with --kill-after=30 to guarantee termination even when
-# inner bash ignores SIGTERM (e.g. while wait-blocked on grandchild
-# processes). Pre-fix run-all.sh wedged for many hours; 900s is well
-# above the suite's natural max (~700s with current test_local_mode
-# integration tests) but well below "human-noticed hang".
+# Behavioral assertion — execute the actual runner on isolated suites.
+# Re-running the product suite here duplicated the outer gate and timed out
+# after 900s, conflating suite duration with recursion. Tripwire meta-tests
+# exercise both skip patterns directly; ordinary suites pin guard export,
+# discovery, failure propagation and exact aggregate reporting.
 # ---------------------------------------------------------------------
 
 echo ""
-echo "Test 5: run-all.sh completes within 900s with clean env + stdin closed"
+mkdir -p "$GUARD_FIXTURE/tests"
+cp "$RUNNER" "$GUARD_FIXTURE/tests/run-all.sh"
+cat > "$GUARD_FIXTURE/tests/test_plain.sh" <<'PLAIN'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${REPOLENS_MAKE_CHECK:-}" == 1 ]]
+echo 'Results: 1/1 passed, 0 failed'
+PLAIN
+cat > "$GUARD_FIXTURE/tests/test_failure.sh" <<'FAILURE'
+#!/usr/bin/env bash
+echo '  FAIL: intentional fixture failure'
+echo 'Results: 0/1 passed, 1 failed'
+exit 1
+FAILURE
+cat > "$GUARD_FIXTURE/tests/test_make_meta.sh" <<'MAKE_META'
+#!/usr/bin/env bash
+touch make-meta-ran
+echo '  FAIL: recursive make meta-test executed'
+exit 1
+true && make check
+MAKE_META
+cat > "$GUARD_FIXTURE/tests/test_runner_meta.sh" <<'RUNNER_META'
+#!/usr/bin/env bash
+touch runner-meta-ran
+echo '  FAIL: recursive runner meta-test executed'
+exit 1
+bash tests/run-all.sh
+RUNNER_META
+
+echo "Test 5: run-all.sh completes within 5s with clean env + stdin closed"
 TOTAL=$((TOTAL + 1))
-runner_log="$(mktemp)"
+runner_log="$GUARD_FIXTURE/runner.log"
 # Snapshot pre-run process list so we can detect orphans that the run
 # itself spawned (vs. unrelated shells the user has open).
-before_snapshot="$(mktemp)"
+before_snapshot="$GUARD_FIXTURE/before.snapshot"
 pgrep -af 'tests/test_issue6_test27_fix\.sh' > "$before_snapshot" 2>/dev/null || true
 pgrep -af 'make[[:space:]]+check' >> "$before_snapshot" 2>/dev/null || true
 
@@ -133,8 +164,8 @@ pgrep -af 'make[[:space:]]+check' >> "$before_snapshot" 2>/dev/null || true
 # hits (not the recursive path that's always been guarded).
 # `exec </dev/null` mirrors how AutoDev spawns agents with no TTY.
 start_ts="$(date +%s)"
-if timeout --kill-after=30 900 env -u REPOLENS_MAKE_CHECK bash -c \
-     'exec </dev/null; bash "$0"' "$RUNNER" > "$runner_log" 2>&1; then
+if timeout --kill-after=1 5 env -u REPOLENS_MAKE_CHECK bash -c \
+     'exec </dev/null; bash "$0"' "$GUARD_FIXTURE/tests/run-all.sh" > "$runner_log" 2>&1; then
   runner_rc=0
 else
   runner_rc=$?
@@ -142,13 +173,12 @@ fi
 end_ts="$(date +%s)"
 elapsed=$((end_ts - start_ts))
 
-# rc==0: green run. rc==1: some suites failed (fine — pre-existing
-# failures are catalogued by the QG baseline). rc==124: timeout — the
-# regression we're guarding against. Any other rc is a real bug.
+# One intentionally failing fixture must produce rc=1. A missing guard trips
+# meta-test markers; a hang or a swallowed failure is independently rejected.
 if (( runner_rc == 124 )); then
   fail_with "run-all.sh timed out after ${elapsed}s (recursion guard broken)" \
             "log tail: $(tail -5 "$runner_log" | tr '\n' ' ')"
-elif (( runner_rc != 0 && runner_rc != 1 )); then
+elif (( runner_rc != 1 )); then
   fail_with "run-all.sh exited with unexpected rc=$runner_rc after ${elapsed}s" \
             "log tail: $(tail -5 "$runner_log" | tr '\n' ' ')"
 else
@@ -156,13 +186,24 @@ else
 fi
 
 echo ""
-echo "Test 6: run-all.sh emits the 'Results:' summary line"
+echo "Test 6: run-all.sh runs both ordinary suites and reports the exact failure"
 TOTAL=$((TOTAL + 1))
-if grep -qE '^Results: [0-9]+ suites run, [0-9]+ failed' "$runner_log"; then
-  pass_with "Results summary line is present"
+if grep -qFx 'Results: 2 suites run, 1 failed' "$runner_log" \
+  && grep -q '^PASSED: tests/test_plain.sh ' "$runner_log" \
+  && grep -q '^FAILED: tests/test_failure.sh ' "$runner_log" \
+  && grep -q 'FAIL: intentional fixture failure' "$runner_log"; then
+  pass_with "ordinary suites, failure detail and exact Results summary are present"
 else
   fail_with "run-all.sh did not emit the expected 'Results: N suites run, M failed' line" \
             "log tail: $(tail -3 "$runner_log" | tr '\n' ' ')"
+fi
+
+TOTAL=$((TOTAL + 1))
+if [[ ! -e "$GUARD_FIXTURE/make-meta-ran" && ! -e "$GUARD_FIXTURE/runner-meta-ran" ]] \
+  && ! grep -qE '^(PASSED|FAILED): tests/test_(make|runner)_meta.sh' "$runner_log"; then
+  pass_with "both recursive meta-test forms were skipped before execution"
+else
+  fail_with "runner executed a recursive meta-test" "$(cat "$runner_log")"
 fi
 
 echo ""
@@ -180,6 +221,10 @@ if [[ -n "$after_meta" ]]; then
   while IFS= read -r line; do
     pid="${line%% *}"
     [[ -z "$pid" ]] && continue
+    # Concurrent controller checks may start after our snapshot. Only the
+    # isolated runner's working directory can identify its own descendants.
+    candidate_cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+    [[ "$candidate_cwd" == "$GUARD_FIXTURE" || "$candidate_cwd" == "$GUARD_FIXTURE/"* ]] || continue
     if ! grep -qE "^${pid}[[:space:]]" "$before_snapshot" 2>/dev/null; then
       unexpected_meta+="$line"$'\n'
     fi
@@ -190,6 +235,8 @@ if [[ -n "$after_make" ]]; then
   while IFS= read -r line; do
     pid="${line%% *}"
     [[ -z "$pid" ]] && continue
+    candidate_cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+    [[ "$candidate_cwd" == "$GUARD_FIXTURE" || "$candidate_cwd" == "$GUARD_FIXTURE/"* ]] || continue
     if ! grep -qE "^${pid}[[:space:]]" "$before_snapshot" 2>/dev/null; then
       unexpected_make+="$line"$'\n'
     fi
@@ -213,9 +260,9 @@ fi
 echo ""
 echo "Test 8: test_issue6_test27_fix.sh exits successfully when invoked with the recursion-guard env var"
 TOTAL=$((TOTAL + 1))
-meta_log="$(mktemp)"
+meta_log="$GUARD_FIXTURE/meta.log"
 start_ts="$(date +%s)"
-if timeout --kill-after=30 900 env REPOLENS_MAKE_CHECK=1 bash -c \
+if timeout --kill-after=1 30 env REPOLENS_MAKE_CHECK=1 bash -c \
      'exec </dev/null; bash "$0"' "$META_TEST" > "$meta_log" 2>&1; then
   meta_rc=0
 else
@@ -228,10 +275,8 @@ if (( meta_rc == 124 )); then
   fail_with "test_issue6_test27_fix.sh hung with REPOLENS_MAKE_CHECK=1 (guard broken)" \
             "elapsed: ${meta_elapsed}s; log tail: $(tail -5 "$meta_log" | tr '\n' ' ')"
 elif (( meta_rc != 0 )); then
-  # meta test has some pre-existing failures (tests 15-17 depend on the
-  # Makefile being able to run without any regression, which can fail
-  # for unrelated reasons). We only regress here if it hung.
-  pass_with "test_issue6_test27_fix.sh finished in ${meta_elapsed}s with rc=$meta_rc (non-hang — guard works)"
+  fail_with "test_issue6_test27_fix.sh failed with REPOLENS_MAKE_CHECK=1" \
+            "elapsed: ${meta_elapsed}s; log tail: $(tail -5 "$meta_log" | tr '\n' ' ')"
 else
   pass_with "test_issue6_test27_fix.sh passed in ${meta_elapsed}s"
 fi
