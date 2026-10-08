@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Reuse one fresh open-issue snapshot per reopen-suggestion enact pass, including lookup failures, while preserving comment actions, exact-title deduplication, creation budgets, and receipt verification (#423).
 - Use a short, dedicated scratch path for parallel filing test fixtures, and exercise recursion guards with isolated suites that verify skipped meta-tests, failure reporting, and exit status (#426).
 
-- Keep test-runner child stdin separate from its suite-discovery stream, preventing skipped suites and missed failures. Use isolated runner fixtures and short parallel-filing scratch paths so validation remains reliable in deep checkouts.
+- Keep test-runner child stdin separate from its suite-discovery stream, preventing skipped suites and missed failures.
 
 - Direct template rendering now uses the one-hour default for invalid `TASK_HOURS` values, matching the polish renderer. CLI arguments and saved resume values still require positive integers (#424).
 - Correct contributor instructions to distinguish the frozen agent inventory from the live lens registry and update test-suite size and runtime estimates (#414).
