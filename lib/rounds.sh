@@ -404,6 +404,8 @@ run_meta_orchestrator() {
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
     _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
+    # Resume clears this marker together with the persisted stop reason.
+    printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
     if [[ -f "${SUMMARY_FILE:-}" ]]; then
       set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
     fi

@@ -98,6 +98,49 @@ for mode in audit greenfield; do
   done
 done
 
+# A meta render failure must use the normal abort recovery path on CLI resume.
+# The first round completes before meta rendering fails; continuation finishes
+# the second round and must stop qualifying as an automatic resume candidate.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/clean.sh"
+is_complete() { ! _clean_is_incomplete "$@"; }
+LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-template-meta-resume.XXXXXX")" || exit 1
+CASE_DIRS+=("$LOG_BASE")
+RUN_ID="${LOG_BASE##*/}"
+export FAIL_TEMPLATE="$SCRIPT_DIR/prompts/_base/meta_orchestrator.md"
+export AGENT_CALLS="$LOG_BASE/agent-calls"
+args=(--mode bugreport --bug-report 'Check the audit output.' --no-triage --strategy fanout
+  --local --focus injection --resume "$RUN_ID" --rounds 2 --depth 1)
+env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
+  REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \
+  REPOLENS_LENS_HEARTBEAT_INTERVAL=0 REPOLENS_STATUS_INTERVAL=1 \
+  bash "$SCRIPT_DIR/repolens.sh" --project "$SCRIPT_DIR" --agent codex --yes \
+    "${args[@]}" > "$LOG_BASE/cli.out" 2>&1
+cli_rc=$?
+check test "$cli_rc" -ne 0
+check json_matches '.state == "failed"' "$LOG_BASE/status.json"
+check json_matches '.stopped_reason == "prompt-render-failed"' "$LOG_BASE/summary.json"
+check test -f "$LOG_BASE/rounds/round-1/.completed"
+check test ! -e "$LOG_BASE/rounds/round-2/.completed"
+check test -f "$LOG_BASE/.systemic-failure-abort"
+check _clean_is_incomplete "$LOG_BASE"
+unset FAIL_TEMPLATE
+env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
+  REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \
+  REPOLENS_LENS_HEARTBEAT_INTERVAL=0 REPOLENS_STATUS_INTERVAL=1 \
+  bash "$SCRIPT_DIR/repolens.sh" --project "$SCRIPT_DIR" --agent codex --yes \
+    "${args[@]}" > "$LOG_BASE/resume.out" 2>&1
+resume_rc=$?
+check test "$resume_rc" -eq 0
+check test ! -e "$LOG_BASE/.systemic-failure-abort"
+check test -f "$LOG_BASE/rounds/round-2/.completed"
+check json_matches '.state == "finished-empty"' "$LOG_BASE/status.json"
+check json_matches '.stopped_reason == null' "$LOG_BASE/summary.json"
+check json_matches '.[-1].status == "finished-empty" and .[-1].why_stopped == ""' "$LOG_BASE/attempts.json"
+check test "$(wc -l < "$AGENT_CALLS")" -eq 2
+check test ! -e "$LOG_BASE/rounds/round-1/meta-orchestrator-prompt.md"
+check is_complete "$LOG_BASE"
+
 # The between-round meta caller must also stop before writing or dispatching.
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/template.sh"
@@ -124,7 +167,7 @@ check test ! -e "$AGENT_CALLS"
 check test ! -e "$TEST_DIR/meta/round-1/meta-orchestrator-prompt.md"
 check test "$REPOLENS_FINAL_STATE" = failed
 check json_matches '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE"
-printf 'prompt-render-failed\n' > "$LOG_BASE/.systemic-failure-abort"
+check test -f "$LOG_BASE/.systemic-failure-abort"
 check test "$(_rounds_agent_abort_reason)" = prompt-render-failed
 
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
