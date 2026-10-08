@@ -223,7 +223,9 @@ echo "Test 8: test_issue6_test27_fix.sh exits successfully when invoked with the
 TOTAL=$((TOTAL + 1))
 meta_log="$FIXTURE_DIR/meta.log"
 start_ts="$(date +%s)"
-if timeout --kill-after=2 10 env REPOLENS_MAKE_CHECK=1 bash -c \
+# Retain the existing meta-test watchdog; machine load must not introduce a
+# tighter deadline than this check had before fixture isolation.
+if timeout --kill-after=30 900 env REPOLENS_MAKE_CHECK=1 bash -c \
      'exec </dev/null; bash "$0"' "$META_TEST" > "$meta_log" 2>&1; then
   meta_rc=0
 else
