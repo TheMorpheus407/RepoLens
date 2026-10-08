@@ -237,6 +237,12 @@ reset_case() {
   WAIT_ALL_SCOPE_FAILURE=false
   CLEANUP_CALLS=0
   WAIT_ALL_RC=0
+  _REPOLENS_WAIT_RC=0
+  REAP_FAILURE_ON_SPAWN=false
+  REPOLENS_FINAL_STATE=finished
+  REPOLENS_ROUND_FAILURE_REASON=""
+  RUN_LENS_RC=0
+  FAIL_ON_LENS=""
   WAIT_ALL_TOUCH_RATE_LIMIT=false
   REMOTE_TARGET=""
   REMOTE_FAIL_ON_CALL=0
@@ -271,9 +277,11 @@ run_lens() {
   if [[ "$lens_entry" == "$RATE_LIMIT_ON_LENS" ]]; then
     : > "$LOG_BASE/.rate-limit-abort"
   fi
+  if [[ "$lens_entry" == "$FAIL_ON_LENS" ]]; then return "$RUN_LENS_RC"; fi
   if $RUN_LENS_MARK_COMPLETED; then
     mark_lens_completed "$lens_entry"
   fi
+  return 0
 }
 
 run_meta_orchestrator() {
@@ -292,6 +300,10 @@ spawn_lens() {
   local lens_entry="$1" callback="$2" callback_arg="$3"
   ACTIONS+=("spawn:$lens_entry")
   SPAWN_CALLS+=("$lens_entry:$callback:$callback_arg")
+  if $REAP_FAILURE_ON_SPAWN && [[ "$lens_entry" == quality/dead-code ]]; then
+    _REPOLENS_WAIT_RC=1
+    return 1
+  fi
   if [[ "$lens_entry" == "$RATE_LIMIT_ON_SPAWN" ]]; then
     : > "$LOG_BASE/.rate-limit-abort"
   fi
@@ -654,15 +666,74 @@ assert_eq "resume skip marks only the newly completed round" \
           "$(join_by " " "${MARKED_ROUNDS[@]}")"
 
 echo ""
-echo "Test 10: wait_all failure warns but does not fail the round without a rate-limit marker"
+echo "Test 10: wait_all failure stops the round without persisted abort state"
 reset_case "wait-all-warning"
 PARALLEL=true
 WAIT_ALL_RC=42
 run_rounds 1 LENSES
 rc=$?
-assert_eq "wait_all non-zero preserves current non-fatal behavior" "0" "$rc"
+assert_nonzero "wait_all non-zero fails the round" "$rc"
 assert_contains "wait_all non-zero logs a warning" "Some lenses exited with errors." "$(join_by " " "${LOG_LINES[@]}")"
-assert_eq "wait_all non-zero still marks the round complete" "1" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+assert_eq "wait_all non-zero leaves the round incomplete" "" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+assert_eq "wait_all failure sets failed final state" failed "$REPOLENS_FINAL_STATE"
+assert_eq "wait_all failure keeps an in-memory reason" lens-execution-failed "${REPOLENS_ROUND_FAILURE_REASON:-}"
+
+echo "Test 10a: callback failure before or after successful work prevents handoff"
+for failed_lens in security/injection quality/dead-code; do
+  reset_case "callback-$failed_lens"
+  FAIL_ON_LENS="$failed_lens"
+  RUN_LENS_RC=42
+  original_completion="$completed_lenses_file"
+  run_rounds 2 LENSES
+  rc=$?
+  assert_nonzero "$failed_lens callback error propagates" "$rc"
+  assert_eq "$failed_lens failure leaves barrier absent" "" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+  assert_eq "$failed_lens failure prevents meta" "" "$(join_by " " "${META_CALLS[@]}")"
+  assert_eq "$failed_lens failure restores completion path" "$original_completion" "$completed_lenses_file"
+  assert_eq "$failed_lens failure has failed final state" failed "$REPOLENS_FINAL_STATE"
+  if [[ "$failed_lens" == security/injection ]]; then
+    assert_eq "first failure stops next callback" security/injection "$(join_by " " "${RUN_LENS_CALLS[@]}")"
+  else
+    assert_eq "prior success is preserved before failure" 'security/injection quality/dead-code' "$(join_by " " "${RUN_LENS_CALLS[@]}")"
+  fi
+done
+
+reset_case "callback-retry"
+USE_REAL_LENS_COMPLETION=true
+RUN_LENS_MARK_COMPLETED=true
+RUN_LENS_RESUME_GUARD=true
+FAIL_ON_LENS=quality/dead-code
+RUN_LENS_RC=1
+run_rounds 2 LENSES
+assert_nonzero "successful lens before callback failure leaves retry pending" "$?"
+FAIL_ON_LENS=""
+RUN_LENS_CALLS=()
+run_rounds 2 LENSES
+assert_eq "callback retry succeeds" 0 "$?"
+assert_eq "callback retry skips the prior successful lens in round 1" security/injection "$(join_by ' ' "${RUN_LENS_SKIPS[@]}")"
+assert_eq "callback retry clears parent-only failure reason" '' "$REPOLENS_ROUND_FAILURE_REASON"
+
+echo "Test 10aa: a failed sibling reaped during capacity acquisition stops spawning"
+reset_case "early-reaped-error"
+PARALLEL=true
+REAP_FAILURE_ON_SPAWN=true
+WAIT_ALL_RC=1
+run_rounds 2 LENSES
+rc=$?
+assert_nonzero "early collected failure fails the round" "$rc"
+assert_eq "early failure drains launched scopes" wait "$(join_by ' ' "${WAIT_ALL_CALLS[@]}")"
+assert_eq "early failure leaves round incomplete" '' "$(join_by ' ' "${MARKED_ROUNDS[@]}")"
+assert_eq "early failure prevents meta" '' "$(join_by ' ' "${META_CALLS[@]}")"
+assert_eq "early failure has failed status" failed "$REPOLENS_FINAL_STATE"
+
+reset_case "callback-interrupted"
+REPOLENS_FINAL_STATE=interrupted
+FAIL_ON_LENS=security/injection
+RUN_LENS_RC=42
+run_rounds 1 LENSES
+assert_nonzero "callback error during interruption stays nonzero" "$?"
+assert_eq "callback error preserves interrupted final state" interrupted "$REPOLENS_FINAL_STATE"
+assert_eq "callback error does not replace interruption stop reason" '' "$(join_by ' ' "${STOP_REASONS[@]}")"
 
 echo ""
 echo "Test 10b: lifecycle infrastructure failures do not complete rounds"

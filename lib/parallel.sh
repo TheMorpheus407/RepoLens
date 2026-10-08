@@ -259,6 +259,11 @@ sem_acquire() {
   while true; do
     (( _REPOLENS_SCOPE_FAILED == 0 )) || return 1
     _parallel_poll_once || return 1
+    # Lens rounds stop on a reaped callback failure. Other consumers, including
+    # filing batches, may collect rejected items and continue their batch.
+    if [[ "${_REPOLENS_STOP_ON_CALLBACK_ERROR:-0}" == 1 ]]; then
+      (( ${_REPOLENS_WAIT_RC:-0} == 0 )) || return 1
+    fi
     if _parallel_agent_abort_pending; then
       return 1
     fi

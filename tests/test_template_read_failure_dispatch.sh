@@ -200,17 +200,37 @@ check json_matches '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE"
 check test -f "$LOG_BASE/.systemic-failure-abort"
 check test "$(_rounds_agent_abort_reason)" = prompt-render-failed
 
+# Marker persistence before a contended short summary write is also fatal.
+printf '{"stopped_reason":null}\n' > "$SUMMARY_FILE"
+REPOLENS_ROUND_FAILURE_REASON=""
+exec {held_lock}>>"$SUMMARY_FILE.lock"
+flock -n "$held_lock" || exit 1
+REPOLENS_SUMMARY_STOP_REASON_LOCK_TIMEOUT=0 run_meta_orchestrator \
+  "$TEST_DIR/meta/lock-failure-round-1" "$TEST_DIR/meta/lock-failure-round-2" \
+  > "$TEST_DIR/meta-lock-failure.out" 2>&1
+meta_lock_rc=$?
+flock -u "$held_lock"
+exec {held_lock}>&-
+check test "$meta_lock_rc" -ne 0
+check test "$REPOLENS_FINAL_STATE" = failed
+check test "$REPOLENS_ROUND_FAILURE_REASON" = prompt-render-failed
+check json_matches '.stopped_reason == null' "$SUMMARY_FILE"
+check test -f "$LOG_BASE/.systemic-failure-abort"
+check test ! -e "$AGENT_CALLS"
+
 # A failed sentinel write must not save a reason that resume cannot clear.
 # A directory at the sentinel path reproduces a write failure deterministically.
 rm -f "$LOG_BASE/.systemic-failure-abort"
 mkdir "$LOG_BASE/.systemic-failure-abort"
 printf '{"stopped_reason":null}\n' > "$SUMMARY_FILE"
 REPOLENS_FINAL_STATE=""
+REPOLENS_ROUND_FAILURE_REASON=""
 run_meta_orchestrator "$TEST_DIR/meta/marker-failure-round-1" "$TEST_DIR/meta/marker-failure-round-2" \
   > "$TEST_DIR/marker-failure.out" 2>&1
 marker_rc=$?
 check test "$marker_rc" -ne 0
 check test "$REPOLENS_FINAL_STATE" = failed
+check test "$REPOLENS_ROUND_FAILURE_REASON" = prompt-render-failed
 check test ! -e "$AGENT_CALLS"
 check json_matches '.stopped_reason == null' "$SUMMARY_FILE"
 check grep -qF 'Unable to persist systemic-abort marker' "$TEST_DIR/marker-failure.out"

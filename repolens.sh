@@ -1975,6 +1975,10 @@ resolve_why_stopped() {
     esac
     return 0
   fi
+  if [[ -n "${REPOLENS_ROUND_FAILURE_REASON:-}" ]]; then
+    printf '%s' "$REPOLENS_ROUND_FAILURE_REASON"
+    return 0
+  fi
   printf ''
 }
 
@@ -2628,10 +2632,10 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
   rm -f "$LOG_BASE/.systemic-failure-abort"
   clear_stop_reason "$SUMMARY_FILE"
 fi
-# A lens can persist its prompt failure in the summary when the marker write
+# A callback can persist its failure in the summary when the marker write
 # fails. Clear that fallback on retry even when no regular marker exists.
 if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
-    && jq -e '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE" >/dev/null 2>&1; then
+    && jq -e '.stopped_reason == "prompt-render-failed" or .stopped_reason == "lens-execution-failed"' "$SUMMARY_FILE" >/dev/null 2>&1; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
@@ -5058,6 +5062,9 @@ run_lens() {
   fi
 
   log_info "[$domain/$lens_id] Finished after $iteration iteration(s), $lens_issues issue(s)"
+  # Greenfield composes inside the loop. Recording and cleanup must not erase
+  # that failure before the sequential caller or parallel collector sees it.
+  [[ "$exit_status" != "prompt-render-failed" ]]
 }
 
 # --- Phase execution state ---

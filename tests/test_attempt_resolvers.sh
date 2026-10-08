@@ -136,6 +136,7 @@ reset_state() {
   RUN_ROUNDS_RC="0"
   RUN_HEALTH="ok"
   REPOLENS_ALLOW_DEGENERATE="false"
+  REPOLENS_ROUND_FAILURE_REASON=""
 }
 
 # write_summary_reason <reason> — valid summary.json carrying a stopped_reason.
@@ -329,6 +330,29 @@ echo "resolve_why_stopped: clean run yields an empty why_stopped"
 reset_state
 assert_eq "no stopped_reason, no sentinel, not interrupted -> empty string" \
   "" "$(resolve_why_stopped)"
+
+echo ""
+echo "callback failure reporting survives absent persistence"
+reset_state
+RUN_ROUNDS_RC=1
+REPOLENS_ROUND_FAILURE_REASON=lens-execution-failed
+assert_eq "callback failure exit is nonzero without stored markers or reason" 1 "$(resolve_run_exit_code)"
+assert_eq "callback reason falls back to parent memory" lens-execution-failed "$(resolve_why_stopped)"
+write_summary_reason prompt-render-failed
+assert_eq "saved detail wins over generic callback reason" prompt-render-failed "$(resolve_why_stopped)"
+reset_state
+RUN_ROUNDS_RC=1
+REPOLENS_ROUND_FAILURE_REASON=lens-execution-failed
+: > "$LOG_BASE/.rate-limit-abort"
+assert_eq "rate-limit exit retains precedence over callback error" 3 "$(resolve_run_exit_code)"
+assert_eq "rate-limit reason retains precedence over callback error" rate-limit "$(resolve_why_stopped)"
+reset_state
+RUN_ROUNDS_RC=1
+REPOLENS_ROUND_FAILURE_REASON=lens-execution-failed
+REPOLENS_FINAL_STATE=interrupted
+REPOLENS_INTERRUPT_EXIT_CODE=143
+assert_eq "interruption exit retains precedence over callback error" 143 "$(resolve_run_exit_code)"
+assert_eq "interruption reason retains precedence over callback error" interrupted-sigterm "$(resolve_why_stopped)"
 
 echo ""
 echo "Results: $PASS/$TOTAL passed, $FAIL failed"

@@ -404,6 +404,8 @@ run_meta_orchestrator() {
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
     _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
+    # shellcheck disable=SC2034 # The parent attempt resolver reads this even if writes fail.
+    REPOLENS_ROUND_FAILURE_REASON="prompt-render-failed"
     # Resume clears this marker together with the persisted stop reason.
     if ! printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"; then
       _rounds_meta_warn "Unable to persist systemic-abort marker"
@@ -2393,7 +2395,14 @@ run_rounds() {
   local round_completed_lenses_file round_completed_lenses_dir round_rc
   local current_round_dir prior_digest_path previous_hypotheses_path current_hypotheses_path
   local dispatch_path dispatched_lenses_output dispatched_custom_output dispatched_generic_output
-  local round_custom_lenses_dir dispatch_has_entries abort_reason
+  local round_custom_lenses_dir dispatch_has_entries abort_reason execution_rc
+  # Dynamically scoped to this driver; filing batches use the same scheduler
+  # with per-item rejection semantics and retain its default collection policy.
+  # shellcheck disable=SC2034 # sem_acquire in lib/parallel.sh reads this.
+  local _REPOLENS_STOP_ON_CALLBACK_ERROR=1
+  # Kept in the parent for attempt reporting when summary persistence fails.
+  # shellcheck disable=SC2034 # resolve_why_stopped in repolens.sh reads this.
+  REPOLENS_ROUND_FAILURE_REASON=""
 
   if [[ ! "$rounds_total" =~ ^[1-9][0-9]*$ ]]; then
     log_warn "Invalid rounds_total: $rounds_total"
@@ -2546,6 +2555,7 @@ run_rounds() {
       completed_lenses_file="$round_completed_lenses_file"
     fi
 
+    execution_rc=0
     if ${PARALLEL:-false}; then
       log_info "Running in parallel mode (max ${MAX_PARALLEL:-8} concurrent)"
       if ! init_parallel "$LOG_BASE/.semaphore" "${MAX_PARALLEL:-8}"; then
@@ -2574,6 +2584,13 @@ run_rounds() {
         fi
         parallel_count=$((parallel_count + 1))
         if ! spawn_lens "$lens_entry" run_lens "$lens_entry"; then
+          if [[ "${_REPOLENS_WAIT_RC:-0}" -ne 0 && "${_REPOLENS_SCOPE_FAILED:-0}" == 0 ]]; then
+            # Capacity acquisition may already have reaped a failed sibling.
+            # Leave wait_all to drain the other scopes before propagating it.
+            execution_rc="$_REPOLENS_WAIT_RC"
+            _rounds_record_skipped_lenses "${active_lens_list[@]:$((parallel_count - 1))}"
+            break
+          fi
           if abort_reason="$(_rounds_agent_abort_reason)"; then
             log_warn "Agent abort detected ($abort_reason). Skipping remaining lenses."
             _rounds_record_skipped_lenses "${active_lens_list[@]:$((parallel_count - 1))}"
@@ -2590,7 +2607,8 @@ run_rounds() {
         fi
       done
 
-      if ! wait_all; then
+      wait_all || execution_rc=$?
+      if (( execution_rc != 0 )); then
         log_warn "Some lenses exited with errors."
       fi
       if [[ "${_REPOLENS_SCOPE_FAILED:-0}" == 1 ]]; then
@@ -2637,7 +2655,11 @@ run_rounds() {
 
         local_count=$((local_count + 1))
         log_info "--- Lens $local_count/$lens_total ---"
-        run_lens "$lens_entry"
+        run_lens "$lens_entry" || execution_rc=$?
+        if (( execution_rc != 0 )); then
+          _rounds_record_skipped_lenses "${active_lens_list[@]:$local_count}"
+          break
+        fi
       done
     fi
 
@@ -2649,6 +2671,21 @@ run_rounds() {
       fi
       _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
       return 1
+    fi
+
+    # Callback status is authoritative even when neither abort persistence
+    # channel succeeds. wait_all has already drained every launched scope.
+    if (( execution_rc != 0 )); then
+      # shellcheck disable=SC2034 # repolens.sh reads final state and reason.
+      REPOLENS_ROUND_FAILURE_REASON="lens-execution-failed"
+      if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+        # shellcheck disable=SC2034 # repolens.sh reads final state after rounds.
+        REPOLENS_FINAL_STATE="failed"
+        set_stop_reason "$SUMMARY_FILE" "$REPOLENS_ROUND_FAILURE_REASON" || \
+          log_warn "Unable to persist lens execution stop reason; retaining failed callback status."
+      fi
+      _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+      return "$execution_rc"
     fi
 
     build_round_digest "$current_round_dir"
