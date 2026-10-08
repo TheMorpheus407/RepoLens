@@ -328,7 +328,12 @@ forge_issue_read_json() {
 FORGE_PROVIDER=gh FORGE_HOST=github.com
 gh() {
   [[ "$*" == "issue view "*" -R example/repo --json comments" ]] || return 99
-  jq '{comments:[.]}' "$TMPDIR/comment-readback.json"
+  case "${FORGE_STUB_READBACK:-single}" in
+    empty) printf '{"comments":[]}\n' ;;
+    duplicate) jq '{comments:[.,.]}' "$TMPDIR/comment-readback.json" ;;
+    mismatched-url) jq '{comments:[. | .url |= ascii_downcase]}' "$TMPDIR/comment-readback.json" ;;
+    *) jq '{comments:[.]}' "$TMPDIR/comment-readback.json" ;;
+  esac
 }
 PROJECT_PATH="$TMPDIR/evidence"
 mkdir -p "$PROJECT_PATH"
@@ -533,6 +538,29 @@ assert_success "dispatcher continues after malformed comment URL" "$status"
 assert_file_exists "malformed comment URL records failure" "$RUN_LOG/final/filed/cross-link/comment-7.failed"
 assert_file_missing "malformed comment URL cannot record success" "$RUN_LOG/final/filed/cross-link/comment-7.done"
 unset FORGE_STUB_COMMENT_PATH
+
+# A successful POST cannot be attested by absent, ambiguous, or differently
+# spelled readback URLs. The independent filing still completes in each case.
+for FORGE_STUB_READBACK in empty duplicate mismatched-url; do
+  export FORGE_STUB_READBACK
+  RUN_LOG="$TMPDIR/cross-link-$FORGE_STUB_READBACK"
+  mkdir -p "$RUN_LOG/final/filed"
+  cp "$LOG_BASE/final/manifest.json" "$RUN_LOG/final/manifest.json"
+  export LOG_BASE="$RUN_LOG"
+  : > "$forge_comment_log"
+  output="$(dispatch_filing_batch "cross-link-$FORGE_STUB_READBACK" 2>"$TMPDIR/$FORGE_STUB_READBACK.err")"
+  status=$?
+  assert_success "dispatcher continues after $FORGE_STUB_READBACK readback" "$status"
+  assert_eq "$FORGE_STUB_READBACK readback leaves independent filing counts intact" \
+    "Filed: 1, Verification-failed: 0, Skipped-existing: 0" "$output"
+  assert_file_exists "$FORGE_STUB_READBACK readback records failure" "$RUN_LOG/final/filed/cross-link/comment-7.failed"
+  assert_file_missing "$FORGE_STUB_READBACK readback cannot record success" "$RUN_LOG/final/filed/cross-link/comment-7.done"
+  assert_eq "$FORGE_STUB_READBACK readback performs exactly one POST" "1" "$(wc -l < "$forge_comment_log" | tr -d ' ')"
+  output="$(dispatch_filing_batch "cross-link-$FORGE_STUB_READBACK" 2>>"$TMPDIR/$FORGE_STUB_READBACK.err")"
+  assert_success "$FORGE_STUB_READBACK readback resume completes" "$?"
+  assert_eq "$FORGE_STUB_READBACK readback resume does not retry POST" "1" "$(wc -l < "$forge_comment_log" | tr -d ' ')"
+done
+unset FORGE_STUB_READBACK
 
 unset LOG_BASE
 unset FORGE_REPO

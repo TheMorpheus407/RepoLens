@@ -74,8 +74,14 @@ gh() {
       jq -r '.url' "$TMP/comment.json" ;;
     'issue view')
       if [[ "$*" == *'--json comments'* ]]; then
-        if [[ "$FAULT" == wrong-comment ]]; then jq '{comments:[. + {body:"changed"}]}' "$TMP/comment.json";
-        else jq '{comments:[.]}' "$TMP/comment.json"; fi
+        case "$FAULT" in
+          wrong-comment) jq '{comments:[. + {body:"changed"}]}' "$TMP/comment.json" ;;
+          empty-comments) printf '{"comments":[]}\n' ;;
+          duplicate-comments) jq '{comments:[.,.]}' "$TMP/comment.json" ;;
+          mismatched-comment-url) jq '{comments:[. | .url |= ascii_downcase]}' "$TMP/comment.json" ;;
+          unrelated-comments) jq '{comments:[. + {url:(.url + "0")},.,. + {url:(.url + "0")}]}' "$TMP/comment.json" ;;
+          *) jq '{comments:[.]}' "$TMP/comment.json" ;;
+        esac
         return 0
       fi
       if [[ "$1" == 9 ]]; then printf '{"number":9,"title":"existing","body":"prior","state":"OPEN","labels":[],"url":"https://github.com/acme/origin/issues/9"}\n'; return 0; fi
@@ -330,6 +336,19 @@ check 'gh comment readback accepts canonical repository casing' test "$(forge_is
 check 'gh comment readback rejects a foreign host' comment_read_rejected acme/origin 17 'https://evil.invalid/acme/origin/issues/17#issuecomment-123'
 check 'gh comment readback rejects a near-miss repository name' comment_read_rejected acme/origin 17 'https://github.com/acme/originevil/issues/17#issuecomment-123'
 check 'gh comment readback keeps the issue number bound' comment_read_rejected acme/origin 18 'https://github.com/Acme/Origin/issues/17#issuecomment-123'
+
+# Readback must contain exactly one match for the original response spelling.
+comment_selection_rejected() {
+  local output status=0
+  output="$(forge_issue_comment_read_json acme/origin 17 'https://github.com/Acme/Origin/issues/17#issuecomment-123')" || status=$?
+  [[ "$status" != 0 && -z "$output" ]]
+}
+for FAULT in empty-comments duplicate-comments mismatched-comment-url; do
+  check "gh comment readback rejects $FAULT without success output" comment_selection_rejected
+done
+FAULT=unrelated-comments
+check 'gh comment readback selects one exact match among unrelated duplicates' test "$(forge_issue_comment_read_json acme/origin 17 'https://github.com/Acme/Origin/issues/17#issuecomment-123')" = '{"url":"https://github.com/Acme/Origin/issues/17#issuecomment-123","body":"Example"}'
+FAULT=''
 
 # Issue #422: fold destination casing, but preserve URL path/fragment literals.
 fresh
