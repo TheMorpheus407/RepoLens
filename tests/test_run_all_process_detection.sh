@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$SCRIPT_DIR" <<'PY'
 from pathlib import Path
 import subprocess
+import shlex
 import sys
 import tempfile
 import time
@@ -32,14 +33,19 @@ with tempfile.TemporaryDirectory(prefix='repolens-process-detection.') as tempor
     tests.mkdir()
     guard = tests / 'test_run_all_recursion_guard.sh'
     guard.symlink_to(root / 'tests/test_run_all_recursion_guard.sh')
-    (tests / 'run-all.sh').write_text('''#!/usr/bin/env bash
-export REPOLENS_MAKE_CHECK=1
-_SKIP_META=1
-# _SKIP_META == 1; META_COMMAND
-touch runner-started
-while [[ ! -e runner-release ]]; do sleep 0.02; done
-echo 'Results: 0 suites run, 0 failed'
-'''.replace('META_COMMAND', '&& ' + 'make check'))
+    # The guard copies this runner into its own corpus. Keep real discovery,
+    # recursion checks and exit reporting, adding only a launch barrier so
+    # candidate processes appear after the guard's initial snapshot.
+    runner_source = (root / 'tests/run-all.sh').read_text()
+    barrier = '''
+pwd -P > {working_directory}
+touch {started}
+while [[ ! -e {release} ]]; do sleep 0.02; done
+'''.format(working_directory=shlex.quote(str(fixture / 'runner-working-directory')),
+           started=shlex.quote(str(fixture / 'runner-started')),
+           release=shlex.quote(str(fixture / 'runner-release')))
+    (tests / 'run-all.sh').write_text(runner_source.replace(
+        'cd "$SCRIPT_DIR" || exit 1\n', 'cd "$SCRIPT_DIR" || exit 1\n' + barrier, 1))
     meta = tests / 'test_issue6_test27_fix.sh'
     meta.write_text('''#!/usr/bin/env bash
 if [[ "${1:-}" == linger ]]; then read -r ignored; fi
@@ -51,7 +57,7 @@ exit 0
     (other_checkout / 'check').write_text('import time; time.sleep(30)\n')
     cases = [
         ('prompt mentioning runner commands', [sys.executable, '-c', 'import time; time.sleep(30)', 'make check', str(meta)], None, fixture, 0),
-        ('actual make check orphan', ['make', 'check'], sys.executable, fixture, 1),
+        ('make check in the isolated runner corpus', ['make', 'check'], sys.executable, None, 1),
         ('actual meta-test orphan with shell flags', ['bash', '-x', str(meta), 'linger'], None, fixture, 1),
         ('make check in another checkout', ['make', 'check'], sys.executable, other_checkout, 0),
     ]
@@ -67,6 +73,9 @@ exit 0
                 assert runner.poll() is None, 'guard exited before runner started'
                 assert time.monotonic() < deadline, 'runner fixture did not start'
                 time.sleep(0.02)
+            if candidate_cwd is None:
+                candidate_cwd = Path((fixture / 'runner-working-directory').read_text().strip())
+                (candidate_cwd / 'check').write_text('import time; time.sleep(30)\n')
             candidate = subprocess.Popen(argv, executable=executable, cwd=candidate_cwd,
                                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL)
