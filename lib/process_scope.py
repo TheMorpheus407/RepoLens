@@ -20,6 +20,7 @@ TERM uses pidfds opened and membership-checked while recursively frozen;
 cgroup.kill provides the atomic recursive escalation. This is lifecycle
 containment, not protection against deliberate same-UID cgroup migration.
 """
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -77,6 +78,18 @@ def identity(fd):
 
 def open_dir(path, dir_fd=None):
     return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+
+
+@contextmanager
+def control_address(runtime):
+    """Keep the private filesystem socket usable under long TMPDIR paths."""
+    fd = open_dir(str(runtime))
+    try:
+        # AF_UNIX limits the address string, not the resolved filesystem path.
+        # The retained directory FD keeps bind/connect anchored to runtime.
+        yield '/proc/self/fd/{}/control'.format(fd)
+    finally:
+        os.close(fd)
 
 
 def read_at(fd, name):
@@ -332,7 +345,8 @@ def serve(runtime, nonce, caller):
     scope = Scope(nonce, caller)
     parent_fd = os.pidfd_open(caller)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(runtime / 'control'))
+    with control_address(runtime) as address:
+        server.bind(address)
     server.listen(1)
     server.settimeout(0.2)
     atomic_json(runtime / 'manifest.json', scope.manifest)
@@ -408,7 +422,8 @@ def serve(runtime, nonce, caller):
 def call(runtime, nonce, command, args):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(BOUND * 4 + (float(args[0]) if command == 'terminate' else 0))
-        client.connect(str(runtime / 'control'))
+        with control_address(runtime) as address:
+            client.connect(address)
         client.sendall(json.dumps(dict(nonce=nonce, command=command, args=args)).encode() + b'\n')
         response = json.loads(client.makefile('rb').readline(4096))
     if not response['ok']:

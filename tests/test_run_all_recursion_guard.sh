@@ -31,7 +31,8 @@
 # Behavioral contract this test pins:
 #   1. run-all.sh completes within seconds against isolated fixture suites
 #      with stdin closed and a clean env (no REPOLENS_MAKE_CHECK pre-set)
-#   2. Meta-tests cannot run, and child suites inherit the recursion guard
+#   2. Meta-tests cannot run, child suites inherit the recursion guard,
+#      and no new test/make processes remain in this checkout
 #   3. run-all.sh reports a "Results:" summary line (output contract)
 #   4. run-all.sh exports REPOLENS_MAKE_CHECK=1 (source-level contract)
 #   5. run-all.sh sets _SKIP_META=1 unconditionally (source-level)
@@ -41,7 +42,7 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 RUNNER="$SCRIPT_DIR/tests/run-all.sh"
 META_TEST="$SCRIPT_DIR/tests/test_issue6_test27_fix.sh"
 
@@ -50,6 +51,7 @@ FAIL=0
 TOTAL=0
 
 FIXTURE_DIR="$(mktemp -d)"
+FIXTURE_DIR="$(cd "$FIXTURE_DIR" && pwd -P)"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
 fail_with() {
@@ -65,6 +67,20 @@ pass_with() {
   local desc="$1"
   PASS=$((PASS + 1))
   echo "  PASS: $desc"
+}
+
+runner_process_snapshot() {
+  local line pid working_dir
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    # Concurrent gates in other checkouts belong to their own runners.
+    # Linux exposes cwd even after an orphan has been reparented.
+    if [[ -d /proc ]]; then
+      working_dir="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue
+      [[ "$working_dir" == "$SCRIPT_DIR" || "$working_dir" == "$FIXTURE_DIR" ]] || continue
+    fi
+    printf '%s\n' "$line"
+  done < <(pgrep -af "$1" 2>/dev/null || true)
 }
 
 echo "=== Test Suite: run-all.sh recursion guard ==="
@@ -144,6 +160,16 @@ echo ""
 echo "Test 5: run-all.sh completes within 10s with clean env + stdin closed"
 TOTAL=$((TOTAL + 1))
 runner_log="$FIXTURE_DIR/runner.log"
+# Snapshot pre-run process list so we can detect orphans that the run
+# itself spawned (vs. unrelated shells the user has open).
+# Match command positions, rather than arbitrary arguments: an agent prompt
+# mentioning make check must not be reported as a running make process.
+meta_pattern='^([^[:space:]]*/)?(bash|sh)([[:space:]]+-[^[:space:]]+)*[[:space:]]+([^[:space:]]*/)?tests/test_issue6_test27_fix\.sh([[:space:]]|$)'
+make_pattern='^([^[:space:]]*/)?g?make[[:space:]]+check([[:space:]]|$)'
+before_snapshot="$FIXTURE_DIR/before-processes"
+runner_process_snapshot "$meta_pattern" > "$before_snapshot"
+runner_process_snapshot "$make_pattern" >> "$before_snapshot"
+
 start_ts="$(date +%s)"
 if timeout --kill-after=2 10 env -u REPOLENS_MAKE_CHECK bash -c \
      'exec </dev/null; bash "$0"' "$FIXTURE_DIR/tests/run-all.sh" > "$runner_log" 2>&1; then
@@ -178,6 +204,43 @@ if [[ "$(grep -c '^PASSED:' "$runner_log")" == "$expected_suites" ]] \
   pass_with "all $expected_suites runnable fixtures inherited the guard and closed stdin"
 else
   fail_with "runner did not execute exactly the non-recursive corpus"
+fi
+
+echo ""
+echo "Orphan check: no new meta-test or make check processes remain"
+TOTAL=$((TOTAL + 1))
+# Give the OS a moment to reap zombies that were in flight when timeout
+# fired. Keep this short — if a process is still running 2s after
+# run-all.sh exits, it's orphaned, not slow.
+sleep 2
+after_meta="$(runner_process_snapshot "$meta_pattern")"
+after_make="$(runner_process_snapshot "$make_pattern")"
+# Strip any PIDs that pre-dated our run (unrelated user work).
+unexpected_meta=""
+if [[ -n "$after_meta" ]]; then
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    [[ -z "$pid" ]] && continue
+    if ! grep -qE "^${pid}[[:space:]]" "$before_snapshot" 2>/dev/null; then
+      unexpected_meta+="$line"$'\n'
+    fi
+  done <<< "$after_meta"
+fi
+unexpected_make=""
+if [[ -n "$after_make" ]]; then
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    [[ -z "$pid" ]] && continue
+    if ! grep -qE "^${pid}[[:space:]]" "$before_snapshot" 2>/dev/null; then
+      unexpected_make+="$line"$'\n'
+    fi
+  done <<< "$after_make"
+fi
+if [[ -z "$unexpected_meta" && -z "$unexpected_make" ]]; then
+  pass_with "no orphan meta-test or make check processes left behind"
+else
+  detail="meta orphans:${unexpected_meta:-none}; make orphans:${unexpected_make:-none}"
+  fail_with "run-all.sh left orphan processes running" "$detail"
 fi
 
 # A deliberately failing fixture verifies exit propagation and diagnostics;

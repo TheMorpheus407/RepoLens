@@ -74,8 +74,14 @@ gh() {
       jq -r '.url' "$TMP/comment.json" ;;
     'issue view')
       if [[ "$*" == *'--json comments'* ]]; then
-        if [[ "$FAULT" == wrong-comment ]]; then jq '{comments:[. + {body:"changed"}]}' "$TMP/comment.json";
-        else jq '{comments:[.]}' "$TMP/comment.json"; fi
+        case "$FAULT" in
+          wrong-comment) jq '{comments:[. + {body:"changed"}]}' "$TMP/comment.json" ;;
+          empty-comments) printf '{"comments":[]}\n' ;;
+          duplicate-comments) jq '{comments:[.,.]}' "$TMP/comment.json" ;;
+          mismatched-comment-url) jq '{comments:[. | .url |= ascii_downcase]}' "$TMP/comment.json" ;;
+          unrelated-comments) jq '{comments:[. + {url:(.url + "0")},.,. + {url:(.url + "0")}]}' "$TMP/comment.json" ;;
+          *) jq '{comments:[.]}' "$TMP/comment.json" ;;
+        esac
         return 0
       fi
       if [[ "$1" == 9 ]]; then printf '{"number":9,"title":"existing","body":"prior","state":"OPEN","labels":[],"url":"https://github.com/acme/origin/issues/9"}\n'; return 0; fi
@@ -330,6 +336,71 @@ check 'gh comment readback accepts canonical repository casing' test "$(forge_is
 check 'gh comment readback rejects a foreign host' comment_read_rejected acme/origin 17 'https://evil.invalid/acme/origin/issues/17#issuecomment-123'
 check 'gh comment readback rejects a near-miss repository name' comment_read_rejected acme/origin 17 'https://github.com/acme/originevil/issues/17#issuecomment-123'
 check 'gh comment readback keeps the issue number bound' comment_read_rejected acme/origin 18 'https://github.com/Acme/Origin/issues/17#issuecomment-123'
+
+# Readback must contain exactly one match for the original response spelling.
+comment_selection_rejected() {
+  local output status=0
+  output="$(forge_issue_comment_read_json acme/origin 17 'https://github.com/Acme/Origin/issues/17#issuecomment-123')" || status=$?
+  [[ "$status" != 0 && -z "$output" ]]
+}
+for FAULT in empty-comments duplicate-comments mismatched-comment-url; do
+  check "gh comment readback rejects $FAULT without success output" comment_selection_rejected
+done
+FAULT=unrelated-comments
+check 'gh comment readback selects one exact match among unrelated duplicates' test "$(forge_issue_comment_read_json acme/origin 17 'https://github.com/Acme/Origin/issues/17#issuecomment-123')" = '{"url":"https://github.com/Acme/Origin/issues/17#issuecomment-123","body":"Example"}'
+FAULT=''
+
+# Issue #422: fold destination casing, but preserve URL path/fragment literals.
+fresh
+check 'gh issue URL accepts scheme and host casing' test "$(forge_issue_number_from_url acme/origin HTTPS://GITHUB.COM/Acme/Origin/issues/17)" = 17
+check 'gh issue URL accepts host-only casing' test "$(forge_issue_number_from_url acme/origin https://GITHUB.COM/Acme/Origin/issues/17)" = 17
+check 'gh issue URL rejects folded path literal' issue_url_rejected acme/origin https://github.com/Acme/Origin/ISSUES/17
+comment_case_check() {
+  local url="$1"
+  jq -n --arg url "$url" '{body:"Example",url:$url}' > "$TMP/comment.json"
+  forge_issue_comment_read_json acme/origin 17 "$url" >/dev/null
+}
+check 'gh comment readback accepts scheme and host casing' comment_case_check 'HTTPS://GITHUB.COM/Acme/Origin/issues/17#issuecomment-123'
+comment_case_rejected() { ! comment_case_check "$1"; }
+check 'gh comment readback rejects folded path literal' comment_case_rejected 'https://github.com/Acme/Origin/ISSUES/17#issuecomment-123'
+check 'gh comment readback rejects folded fragment literal' comment_case_rejected 'https://github.com/Acme/Origin/issues/17#ISSUECOMMENT-123'
+
+# POSIX is always available and differs from the validators' C setting. Call
+# directly so command substitution cannot hide a leaked locale assignment.
+locale_restoration_check() {
+  local LC_ALL=POSIX validator="$1" url="$2" expected_status="$3" status=0
+  export LC_ALL
+  if [[ "$validator" == issue ]]; then
+    forge_issue_number_from_url acme/origin "$url" > "$TMP/locale-number" || status=$?
+    [[ "$expected_status" != 0 || "$(cat "$TMP/locale-number")" == 17 ]] || return 1
+  else
+    jq -n --arg url "$url" '{body:"Example",url:$url}' > "$TMP/comment.json"
+    forge_issue_comment_read_json acme/origin 17 "$url" >/dev/null || status=$?
+  fi
+  [[ "$status" == "$expected_status" && "$LC_ALL" == POSIX ]]
+}
+check 'issue parser preserves caller locale on success' locale_restoration_check issue 'https://github.com/Acme/Origin/issues/17' 0
+check 'issue parser preserves caller locale on rejection' locale_restoration_check issue 'https://github.com/Acme/Origin/ISSUES/17' 1
+check 'comment reader preserves caller locale on success' locale_restoration_check comment 'https://github.com/Acme/Origin/issues/17#issuecomment-123' 0
+check 'comment reader preserves caller locale on rejection' locale_restoration_check comment 'https://github.com/Acme/Origin/issues/17#ISSUECOMMENT-123' 1
+
+# Exercise the locale that distinguishes ASCII I/i when installed; never install
+# system locales from a test. Both calls must preserve the caller's locale.
+turkish_locale="$(locale -a | sed -n '/^tr_TR\.[uU][tT][fF]\(-\)\{0,1\}8$/p' | head -n 1)"
+if [[ -n "$turkish_locale" ]]; then
+  locale_case_check() (
+    export LC_ALL="$turkish_locale"
+    local before="$LC_ALL"
+    forge_issue_number_from_url ACME/ORIGIN https://github.com/acme/origin/issues/17 > "$TMP/locale-number" || return 1
+    [[ "$(cat "$TMP/locale-number")" == 17 && "$LC_ALL" == "$before" ]] || return 1
+    jq -n '{body:"Example",url:"https://github.com/acme/origin/issues/17#issuecomment-123"}' > "$TMP/comment.json"
+    forge_issue_comment_read_json ACME/ORIGIN 17 'https://github.com/acme/origin/issues/17#issuecomment-123' >/dev/null || return 1
+    [[ "$LC_ALL" == "$before" ]]
+  )
+  check 'gh ASCII repository casing is locale-independent' locale_case_check
+else
+  echo '  SKIP: Turkish UTF-8 locale is not installed'
+fi
 
 # A configured GitHub Enterprise host gets the same case-insensitive
 # owner/repository treatment, with the host still bound to the target.
