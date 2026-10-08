@@ -41,14 +41,14 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-TMP_PARENT="$SCRIPT_DIR/logs/test-filing"
-mkdir -p "$TMP_PARENT"
-# Keep fixture storage separate from TMPDIR, which the real scope launcher uses.
-FILING_FIXTURE="$(mktemp -d "$TMP_PARENT/run.XXXXXX")"
+# Keep fixture storage distinct from the runtime's temporary-directory setting.
+# Both use an absolute short path so inherited TMPDIR and deep checkout paths
+# cannot exceed the parallel scope launcher's AF_UNIX socket limit.
+FILING_FIXTURE="$(mktemp -d /tmp/repolens-filing.XXXXXX)" || exit 1
+export TMPDIR="$FILING_FIXTURE"
 
 cleanup() {
-  rm -rf "$FILING_FIXTURE"
-  rmdir "$TMP_PARENT" 2>/dev/null || true
+  rm -rf -- "$FILING_FIXTURE"
 }
 trap cleanup EXIT
 

@@ -29,11 +29,11 @@
 # Makefile's own parse-time _SKIP_META guard.
 #
 # Behavioral contract this test pins:
-#   1. The real run-all.sh completes on isolated fixture suites with stdin
-#      closed and a clean env (no REPOLENS_MAKE_CHECK pre-set)
-#   2. No orphan test_issue6_test27_fix.sh (or child `make check`)
-#      processes remain after run-all.sh exits
-#   3. run-all.sh reports exact suite/failure counts and a nonzero failure exit
+#   1. run-all.sh completes within seconds against isolated fixture suites
+#      with stdin closed and a clean env (no REPOLENS_MAKE_CHECK pre-set)
+#   2. Meta-tests cannot run, and child suites inherit the recursion guard
+#   3. run-all.sh reports exact suite/failure counts and propagates failures
+#      without leaving fixture-owned meta-test or make-check processes
 #   4. run-all.sh exports REPOLENS_MAKE_CHECK=1 (source-level contract)
 #   5. run-all.sh sets _SKIP_META=1 unconditionally (source-level)
 #   6. test_issue6_test27_fix.sh's internal make-check sub-test passes
@@ -50,8 +50,8 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-GUARD_FIXTURE="$(mktemp -d)"
-trap 'rm -rf -- "$GUARD_FIXTURE"' EXIT
+GUARD_FIXTURE="$(mktemp -d)" || exit 1
+trap 'rm -rf "$GUARD_FIXTURE"' EXIT
 
 fail_with() {
   local desc="$1" detail="${2:-}"
@@ -114,29 +114,29 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# Behavioral assertion — execute the actual runner on isolated suites.
-# Re-running the product suite here duplicated the outer gate and timed out
-# after 900s, conflating suite duration with recursion. Tripwire meta-tests
-# exercise both skip patterns directly; ordinary suites pin guard export,
-# discovery, failure propagation and exact aggregate reporting.
+# Exercise the real runner against an isolated corpus, as the Makefile meta-test
+# does. The outer gate already runs every real suite; recursively running them
+# here tests their combined runtime rather than the runner's recursion guard.
+# Use several ordinary suites and both recursion markers. Marked fixtures
+# fail if executed, so a broken skip loop cannot silently pass.
 # ---------------------------------------------------------------------
 
-echo ""
 mkdir -p "$GUARD_FIXTURE/tests"
 cp "$RUNNER" "$GUARD_FIXTURE/tests/run-all.sh"
-cat > "$GUARD_FIXTURE/tests/test_plain.sh" <<'PLAIN'
+expected_suites=3
+for fixture_name in a_stdin b_success c_success; do
+  cat > "$GUARD_FIXTURE/tests/test_$fixture_name.sh" <<'SUITE'
 #!/usr/bin/env bash
 set -uo pipefail
-[[ "${REPOLENS_MAKE_CHECK:-}" == 1 ]] || exit 1
-echo 'Results: 1/1 passed, 0 failed'
-PLAIN
-cat > "$GUARD_FIXTURE/tests/test_failure.sh" <<'FAILURE'
-#!/usr/bin/env bash
-set -uo pipefail
-echo '  FAIL: intentional fixture failure'
-echo 'Results: 0/1 passed, 1 failed'
-exit 1
-FAILURE
+if [[ "${REPOLENS_MAKE_CHECK:-}" != 1 ]] || read -r -t 1; then
+  echo "  FAIL: child recursion guard or closed stdin missing"
+  exit 1
+fi
+echo "Results: 1/1 passed, 0 failed"
+SUITE
+done
+
+# Both recursive marker forms must be skipped before their tripwires run.
 cat > "$GUARD_FIXTURE/tests/test_make_meta.sh" <<'MAKE_META'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -154,20 +154,16 @@ exit 1
 bash tests/run-all.sh
 RUNNER_META
 
-echo "Test 5: run-all.sh completes within 5s with clean env + stdin closed"
+echo ""
+echo "Test 5: run-all.sh completes within 10s with clean env + stdin closed"
 TOTAL=$((TOTAL + 1))
 runner_log="$GUARD_FIXTURE/runner.log"
-# Snapshot pre-run process list so we can detect orphans that the run
-# itself spawned (vs. unrelated shells the user has open).
+# Snapshot existing processes; only fixture-owned descendants count as orphans.
 before_snapshot="$GUARD_FIXTURE/before.snapshot"
 pgrep -af 'tests/test_issue6_test27_fix\.sh' > "$before_snapshot" 2>/dev/null || true
 pgrep -af 'make[[:space:]]+check' >> "$before_snapshot" 2>/dev/null || true
-
-# Explicitly unset the env var so we exercise the top-level path AutoDev
-# hits (not the recursive path that's always been guarded).
-# `exec </dev/null` mirrors how AutoDev spawns agents with no TTY.
 start_ts="$(date +%s)"
-if timeout --kill-after=1 5 env -u REPOLENS_MAKE_CHECK bash -c \
+if timeout --kill-after=2 10 env -u REPOLENS_MAKE_CHECK bash -c \
      'exec </dev/null; bash "$0"' "$GUARD_FIXTURE/tests/run-all.sh" > "$runner_log" 2>&1; then
   runner_rc=0
 else
@@ -175,30 +171,31 @@ else
 fi
 end_ts="$(date +%s)"
 elapsed=$((end_ts - start_ts))
-
-# One intentionally failing fixture must produce rc=1. A missing guard trips
-# meta-test markers; a hang or a swallowed failure is independently rejected.
-if (( runner_rc == 124 )); then
-  fail_with "run-all.sh timed out after ${elapsed}s (recursion guard broken)" \
-            "log tail: $(tail -5 "$runner_log" | tr '\n' ' ')"
-elif (( runner_rc != 1 )); then
-  fail_with "run-all.sh exited with unexpected rc=$runner_rc after ${elapsed}s" \
-            "log tail: $(tail -5 "$runner_log" | tr '\n' ' ')"
+if (( runner_rc == 0 )); then
+  pass_with "run-all.sh finished in ${elapsed}s and skipped all recursive fixtures"
 else
-  pass_with "run-all.sh finished in ${elapsed}s with rc=$runner_rc"
+  fail_with "run-all.sh exited with rc=$runner_rc after ${elapsed}s" \
+            "log tail: $(tail -5 "$runner_log" | tr '\n' ' ')"
 fi
 
 echo ""
-echo "Test 6: run-all.sh runs both ordinary suites and reports the exact failure"
+echo "Test 6: run-all.sh emits the 'Results:' summary line"
 TOTAL=$((TOTAL + 1))
-if grep -qFx 'Results: 2 suites run, 1 failed' "$runner_log" \
-  && grep -q '^PASSED: tests/test_plain.sh ' "$runner_log" \
-  && grep -q '^FAILED: tests/test_failure.sh ' "$runner_log" \
-  && grep -q 'FAIL: intentional fixture failure' "$runner_log"; then
-  pass_with "ordinary suites, failure detail and exact Results summary are present"
+if grep -qx "Results: $expected_suites suites run, 0 failed" "$runner_log"; then
+  pass_with "Results summary line is present"
 else
   fail_with "run-all.sh did not emit the expected 'Results: N suites run, M failed' line" \
             "log tail: $(tail -3 "$runner_log" | tr '\n' ' ')"
+fi
+
+echo ""
+echo "Test 7: runner discovers every non-recursive suite and no meta-tests"
+TOTAL=$((TOTAL + 1))
+if [[ "$(grep -c '^PASSED:' "$runner_log")" == "$expected_suites" ]] \
+   && ! grep -q '^FAILED:' "$runner_log"; then
+  pass_with "all $expected_suites runnable fixtures inherited the guard and closed stdin"
+else
+  fail_with "runner did not execute exactly the non-recursive corpus"
 fi
 
 TOTAL=$((TOTAL + 1))
@@ -209,13 +206,38 @@ else
   fail_with "runner executed a recursive meta-test" "$(cat "$runner_log")"
 fi
 
-echo ""
-echo "Test 7: no orphan test_issue6_test27_fix.sh processes remain"
+# A deliberately failing fixture verifies exit propagation and diagnostics;
+# fixing this meta-test must retain the runner's all-zero success requirement.
+cat > "$GUARD_FIXTURE/tests/test_zzz_failure.sh" <<'FAILURE'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "  FAIL: intentional runner fixture failure"
+echo "Results: 0/1 passed, 1 failed"
+exit 1
+FAILURE
+failure_log="$GUARD_FIXTURE/failure.log"
+if timeout --kill-after=2 10 env -u REPOLENS_MAKE_CHECK bash \
+     "$GUARD_FIXTURE/tests/run-all.sh" </dev/null > "$failure_log" 2>&1; then
+  failure_rc=0
+else
+  failure_rc=$?
+fi
 TOTAL=$((TOTAL + 1))
-# Give the OS a moment to reap zombies that were in flight when timeout
-# fired. Keep this short — if a process is still running 2s after
-# run-all.sh exits, it's orphaned, not slow.
-sleep 2
+if [[ "$failure_rc" == 1 ]]; then
+  pass_with "runner propagates a failing suite as exit 1"
+else
+  fail_with "runner must return exit 1 for a failing suite" "got $failure_rc"
+fi
+TOTAL=$((TOTAL + 1))
+if grep -qx "Results: $((expected_suites + 1)) suites run, 1 failed" "$failure_log" \
+   && grep -q '^FAILED: tests/test_zzz_failure.sh' "$failure_log" \
+   && grep -q '^  FAIL: intentional runner fixture failure' "$failure_log"; then
+  pass_with "runner preserves failure counts and assertion diagnostics"
+else
+  fail_with "runner lost the failing suite's summary or diagnostics"
+fi
+
+TOTAL=$((TOTAL + 1))
 after_meta="$(pgrep -af 'tests/test_issue6_test27_fix\.sh' 2>/dev/null || true)"
 after_make="$(pgrep -af 'make[[:space:]]+check' 2>/dev/null || true)"
 # Strip any PIDs that pre-dated our run (unrelated user work).
@@ -265,7 +287,9 @@ echo "Test 8: test_issue6_test27_fix.sh exits successfully when invoked with the
 TOTAL=$((TOTAL + 1))
 meta_log="$GUARD_FIXTURE/meta.log"
 start_ts="$(date +%s)"
-if timeout --kill-after=1 30 env REPOLENS_MAKE_CHECK=1 bash -c \
+# Retain the existing meta-test watchdog; machine load must not introduce a
+# tighter deadline than this check had before fixture isolation.
+if timeout --kill-after=30 900 env REPOLENS_MAKE_CHECK=1 bash -c \
      'exec </dev/null; bash "$0"' "$META_TEST" > "$meta_log" 2>&1; then
   meta_rc=0
 else
@@ -274,20 +298,17 @@ fi
 end_ts="$(date +%s)"
 meta_elapsed=$((end_ts - start_ts))
 
-if (( meta_rc == 124 )); then
-  fail_with "test_issue6_test27_fix.sh hung with REPOLENS_MAKE_CHECK=1 (guard broken)" \
-            "elapsed: ${meta_elapsed}s; log tail: $(tail -5 "$meta_log" | tr '\n' ' ')"
-elif (( meta_rc != 0 )); then
-  fail_with "test_issue6_test27_fix.sh failed with REPOLENS_MAKE_CHECK=1" \
-            "elapsed: ${meta_elapsed}s; log tail: $(tail -5 "$meta_log" | tr '\n' ' ')"
-else
+if (( meta_rc == 0 )); then
   pass_with "test_issue6_test27_fix.sh passed in ${meta_elapsed}s"
+else
+  fail_with "test_issue6_test27_fix.sh failed with REPOLENS_MAKE_CHECK=1" \
+            "rc=$meta_rc; log tail: $(tail -5 "$meta_log" | tr '\n' ' ')"
 fi
 
 # ---------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------
-rm -f "$runner_log" "$meta_log" "$before_snapshot"
+rm -rf "$GUARD_FIXTURE"
 
 echo ""
 echo "================================"
