@@ -42,7 +42,7 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 RUNNER="$SCRIPT_DIR/tests/run-all.sh"
 META_TEST="$SCRIPT_DIR/tests/test_issue6_test27_fix.sh"
 
@@ -51,6 +51,7 @@ FAIL=0
 TOTAL=0
 
 GUARD_FIXTURE="$(mktemp -d)" || exit 1
+GUARD_FIXTURE="$(cd "$GUARD_FIXTURE" && pwd -P)" || exit 1
 trap 'rm -rf "$GUARD_FIXTURE"' EXIT
 
 fail_with() {
@@ -66,6 +67,20 @@ pass_with() {
   local desc="$1"
   PASS=$((PASS + 1))
   echo "  PASS: $desc"
+}
+
+runner_process_snapshot() {
+  local line pid working_dir
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    # Concurrent gates in other checkouts belong to their own runners.
+    # Linux exposes cwd even after an orphan has been reparented.
+    if [[ -d /proc ]]; then
+      working_dir="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue
+      [[ "$working_dir" == "$SCRIPT_DIR" || "$working_dir" == "$GUARD_FIXTURE" || "$working_dir" == "$GUARD_FIXTURE/"* ]] || continue
+    fi
+    printf '%s\n' "$line"
+  done < <(pgrep -af "$1" 2>/dev/null || true)
 }
 
 echo "=== Test Suite: run-all.sh recursion guard ==="
@@ -158,10 +173,16 @@ echo ""
 echo "Test 5: run-all.sh completes within 10s with clean env + stdin closed"
 TOTAL=$((TOTAL + 1))
 runner_log="$GUARD_FIXTURE/runner.log"
-# Snapshot existing processes; only fixture-owned descendants count as orphans.
-before_snapshot="$GUARD_FIXTURE/before.snapshot"
-pgrep -af 'tests/test_issue6_test27_fix\.sh' > "$before_snapshot" 2>/dev/null || true
-pgrep -af 'make[[:space:]]+check' >> "$before_snapshot" 2>/dev/null || true
+# Snapshot pre-run process list so we can detect orphans that the run
+# itself spawned (vs. unrelated shells the user has open).
+# Match command positions, rather than arbitrary arguments: an agent prompt
+# mentioning make check must not be reported as a running make process.
+meta_pattern='^([^[:space:]]*/)?(bash|sh)([[:space:]]+-[^[:space:]]+)*[[:space:]]+([^[:space:]]*/)?tests/test_issue6_test27_fix\.sh([[:space:]]|$)'
+make_pattern='^([^[:space:]]*/)?g?make[[:space:]]+check([[:space:]]|$)'
+before_snapshot="$GUARD_FIXTURE/before-processes"
+runner_process_snapshot "$meta_pattern" > "$before_snapshot"
+runner_process_snapshot "$make_pattern" >> "$before_snapshot"
+
 start_ts="$(date +%s)"
 if timeout --kill-after=2 10 env -u REPOLENS_MAKE_CHECK bash -c \
      'exec </dev/null; bash "$0"' "$GUARD_FIXTURE/tests/run-all.sh" > "$runner_log" 2>&1; then
@@ -237,23 +258,21 @@ else
   fail_with "runner lost the failing suite's summary or diagnostics"
 fi
 
-# This orphan check requires Linux /proc with readable /proc/<pid>/cwd links.
-# Missing or unreadable links skip candidates, so the assertion can pass without
-# checking them. Ownership follows cwd; descendants that leave GUARD_FIXTURE
-# are also outside this check. The current recursive fixtures keep that cwd.
+# Linux ownership filtering uses readable /proc/<pid>/cwd links. Missing or
+# unreadable links skip candidates; processes outside this checkout and its
+# fixture tree are excluded. Without /proc the command scan has no cwd filter.
+# The recursive fixtures keep their cwd inside GUARD_FIXTURE.
 TOTAL=$((TOTAL + 1))
-after_meta="$(pgrep -af 'tests/test_issue6_test27_fix\.sh' 2>/dev/null || true)"
-after_make="$(pgrep -af 'make[[:space:]]+check' 2>/dev/null || true)"
+# Allow exiting children to be reaped before checking for remaining processes.
+sleep 2
+after_meta="$(runner_process_snapshot "$meta_pattern")"
+after_make="$(runner_process_snapshot "$make_pattern")"
 # Strip any PIDs that pre-dated our run (unrelated user work).
 unexpected_meta=""
 if [[ -n "$after_meta" ]]; then
   while IFS= read -r line; do
     pid="${line%% *}"
     [[ -z "$pid" ]] && continue
-    # Concurrent controller checks may start after our snapshot. Only the
-    # isolated runner's working directory can identify its own descendants.
-    candidate_cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
-    [[ "$candidate_cwd" == "$GUARD_FIXTURE" || "$candidate_cwd" == "$GUARD_FIXTURE/"* ]] || continue
     if ! grep -qE "^${pid}[[:space:]]" "$before_snapshot" 2>/dev/null; then
       unexpected_meta+="$line"$'\n'
     fi
@@ -264,8 +283,6 @@ if [[ -n "$after_make" ]]; then
   while IFS= read -r line; do
     pid="${line%% *}"
     [[ -z "$pid" ]] && continue
-    candidate_cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
-    [[ "$candidate_cwd" == "$GUARD_FIXTURE" || "$candidate_cwd" == "$GUARD_FIXTURE/"* ]] || continue
     if ! grep -qE "^${pid}[[:space:]]" "$before_snapshot" 2>/dev/null; then
       unexpected_make+="$line"$'\n'
     fi

@@ -214,6 +214,21 @@ def parent_death(scope):
     assert not scope.path.exists(), 'parent-death cleanup left a populated scope'
 
 
+def long_runtime(scope):
+    # Exercise both CLI socket endpoints with a pathname beyond sun_path's
+    # limit, while keeping the filesystem-backed private control socket.
+    assert len(os.fsencode(scope.runtime / 'control')) > 108
+    assert (scope.runtime / 'control').is_socket()
+    for command, expected in [('state', 'empty'), ('destroy', 'ok')]:
+        result = subprocess.run(
+            [sys.executable, HELPER, 'call', str(scope.runtime), scope.nonce, command],
+            capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+    assert scope.server.wait(timeout=5) == 0
+    assert not scope.path.exists(), 'long runtime left a cgroup behind'
+
+
 passed = failed = 0
 with tempfile.TemporaryDirectory(prefix='repolens-scope-rpc-test.') as temporary:
     cases = [
@@ -223,6 +238,7 @@ with tempfile.TemporaryDirectory(prefix='repolens-scope-rpc-test.') as temporary
         ('terminate-disconnect', terminate_disconnect, {}),
         ('destroy-disconnect', destroy_disconnect, dict(populated=False)),
         ('parent-death-after-disconnect', parent_death, dict(separate_parent=True)),
+        ('long-runtime-' + 'x' * 108, long_runtime, dict(populated=False)),
     ]
     for name, test, options in cases:
         scope = None
