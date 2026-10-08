@@ -347,7 +347,7 @@ run_meta_orchestrator() {
   local run_id="${RUN_ID:-}" repo_root prev_round_dir next_round_dir
   local round next_round digest_path dispatch_path hypotheses_path
   local prompt_path output_path template_name template_file project_path prompt vars
-  local agent_rc=0
+  local agent_rc=0 accepted_path fingerprint
 
   META_ORCH_SATURATED=0
 
@@ -376,6 +376,7 @@ run_meta_orchestrator() {
   hypotheses_path="$prev_round_dir/hypotheses.md"
   prompt_path="$prev_round_dir/meta-orchestrator-prompt.md"
   output_path="$prev_round_dir/meta-orchestrator-output.txt"
+  accepted_path="$output_path.accepted"
   template_name="$(_rounds_meta_template_name_for_mode "${MODE:-}")"
   template_file="${BASE_PROMPTS_DIR:-$repo_root/prompts/_base}/$template_name"
   project_path="${PROJECT_PATH:-$repo_root}"
@@ -384,6 +385,9 @@ run_meta_orchestrator() {
     _rounds_meta_warn "Unable to create round directory for meta-orchestrator handoff"
     return 1
   fi
+  # A fresh invocation invalidates previous success evidence and envelopes.
+  # Codex and malformed provider responses may not write an envelope at all.
+  rm -f "$accepted_path" "$output_path.envelope.json" || return 1
   if [[ ! -f "$template_file" ]]; then
     _rounds_meta_warn "Meta-orchestrator template missing: $template_file"
     return 1
@@ -409,15 +413,19 @@ run_meta_orchestrator() {
     # Resume clears this marker together with the persisted stop reason.
     if ! printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"; then
       _rounds_meta_warn "Unable to persist systemic-abort marker"
-      # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
-      REPOLENS_FINAL_STATE="failed"
+      if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+        # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
+        REPOLENS_FINAL_STATE="failed"
+      fi
       return 1
     fi
     if [[ -f "${SUMMARY_FILE:-}" ]]; then
       set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
     fi
-    # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
-    REPOLENS_FINAL_STATE="failed"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+      # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
+      REPOLENS_FINAL_STATE="failed"
+    fi
     return 1
   fi
   printf '%s\n' "$prompt" > "$prompt_path" || return 1
@@ -440,6 +448,12 @@ run_meta_orchestrator() {
     return "$agent_rc"
   fi
 
+  # Certify the exact checked output before derived artifacts are installed.
+  # Resume can then repair partial persistence without repeating the model.
+  fingerprint="$(_rounds_meta_result_fingerprint "$output_path")" || return 1
+  printf '%s\n' "$fingerprint" > "$accepted_path.tmp.$$" \
+    && mv "$accepted_path.tmp.$$" "$accepted_path" || return 1
+
   if _rounds_meta_no_fresh_angles "$output_path"; then
     _rounds_meta_write_no_fresh_dispatch "$dispatch_path" "$hypotheses_path" || return $?
     META_ORCH_SATURATED=1
@@ -450,6 +464,55 @@ run_meta_orchestrator() {
   _rounds_meta_parse_output "$output_path" "$dispatch_path" "$hypotheses_path" || return $?
   log_info "[round $round] Meta-orchestrator dispatch written to $dispatch_path"
   return 0
+}
+
+# Bind success evidence to both raw output and its optional provider envelope.
+_rounds_meta_result_fingerprint() {
+  local output_path="$1"
+  [[ -f "$output_path" ]] || return 1
+  {
+    sha256sum "$output_path" || return 1
+    if [[ -e "$output_path.envelope.json" ]]; then
+      sha256sum "$output_path.envelope.json" || return 1
+    else
+      printf 'no-envelope\n'
+    fi
+  } | sha256sum | cut -d ' ' -f 1
+}
+
+# Returns 2 when no verified saved invocation exists, so the caller retries
+# meta. Artifact persistence errors remain nonzero and leave the round pending.
+_rounds_meta_restore_handoff() {
+  local dir="$1" output_path="$1/meta-orchestrator-output.txt" fingerprint saved recovery_dir artifact saturated=0 recovery_rc=0
+  [[ -f "$output_path.accepted" ]] || return 2
+  saved="$(cat "$output_path.accepted")" || return 2
+  fingerprint="$(_rounds_meta_result_fingerprint "$output_path")" || return 2
+  [[ "$saved" == "$fingerprint" ]] || return 2
+  if declare -F handle_agent_failure_in_phase >/dev/null 2>&1; then
+    handle_agent_failure_in_phase meta "$output_path" 0 "$output_path.envelope.json" "Saved meta-orchestrator" >/dev/null || return 2
+  fi
+  recovery_dir="$(mktemp -d "$dir/.meta-handoff.XXXXXX")" || return 1
+  if _rounds_meta_no_fresh_angles "$output_path"; then
+    saturated=1
+    _rounds_meta_write_no_fresh_dispatch "$recovery_dir/dispatch.md" "$recovery_dir/hypotheses.md" || recovery_rc=$?
+  else
+    _rounds_meta_parse_output "$output_path" "$recovery_dir/dispatch.md" "$recovery_dir/hypotheses.md" || recovery_rc=$?
+  fi
+  if (( recovery_rc != 0 )); then
+    rm -rf -- "$recovery_dir"
+    return 1
+  fi
+  for artifact in dispatch.md hypotheses.md; do
+    if ! cmp -s "$recovery_dir/$artifact" "$dir/$artifact"; then
+      if ! mv "$recovery_dir/$artifact" "$dir/$artifact"; then
+        rm -rf -- "$recovery_dir"
+        return 1
+      fi
+    fi
+  done
+  rm -rf -- "$recovery_dir" || return 1
+  META_ORCH_SATURATED="$saturated"
+  log_info "Reused verified meta-orchestrator handoff from $dir"
 }
 
 _rounds_meta_template_name_for_mode() {
@@ -2395,7 +2458,7 @@ run_rounds() {
   local round_completed_lenses_file round_completed_lenses_dir round_rc
   local current_round_dir prior_digest_path previous_hypotheses_path current_hypotheses_path
   local dispatch_path dispatched_lenses_output dispatched_custom_output dispatched_generic_output
-  local round_custom_lenses_dir dispatch_has_entries abort_reason execution_rc
+  local round_custom_lenses_dir dispatch_has_entries abort_reason execution_rc reuse_handoff
   # Dynamically scoped to this driver; filing batches use the same scheduler
   # with per-item rejection semantics and retain its default collection policy.
   # shellcheck disable=SC2034 # sem_acquire in lib/parallel.sh reads this.
@@ -2476,6 +2539,11 @@ run_rounds() {
       fi
     fi
     lens_total="${#active_lens_list[@]}"
+    reuse_handoff=false
+    if [[ -n "${RESUME_RUN_ID:-}" ]] && (( round < rounds_total )) \
+        && _rounds_all_lenses_completed "$(_rounds_lens_completion_path "$round")" "${active_lens_list[@]}"; then
+      reuse_handoff=true
+    fi
 
     if is_round_completed "$round"; then
       round_completed_lenses_file="${completed_lenses_file:-}"
@@ -2677,7 +2745,8 @@ run_rounds() {
 
     if abort_reason="$(_rounds_agent_abort_reason)"; then
       set_stop_reason "$SUMMARY_FILE" "$abort_reason"
-      if [[ "$abort_reason" == "prompt-render-failed" ]]; then
+      if [[ "$abort_reason" == "prompt-render-failed" \
+          && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
         # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
         REPOLENS_FINAL_STATE="failed"
       fi
@@ -2711,8 +2780,15 @@ run_rounds() {
 
     if (( round < rounds_total )); then
       META_ORCH_SATURATED=0
-      run_meta_orchestrator "$round" "$((round + 1))"
-      round_rc=$?
+      round_rc=2
+      if $reuse_handoff; then
+        _rounds_meta_restore_handoff "$current_round_dir"
+        round_rc=$?
+      fi
+      if (( round_rc == 2 )); then
+        run_meta_orchestrator "$round" "$((round + 1))"
+        round_rc=$?
+      fi
       if (( round_rc != 0 )); then
         return "$round_rc"
       fi

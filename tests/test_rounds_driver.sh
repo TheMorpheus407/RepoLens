@@ -857,4 +857,70 @@ assert_eq "multi-round completed_lenses_file is restored to unset state" \
           "unset" \
           "$completed_lenses_state"
 
+echo "Test 15: prompt failure pending during signal cleanup preserves interruption"
+# Use production signal traps and exit resolution, with deterministic scheduler
+# stubs. No worker or model is launched; TERM/INT arrive inside wait_all.
+# shellcheck disable=SC2030,SC2329 # Isolate globals and indirect scheduler stubs deliberately.
+(
+  # shellcheck source=lib/parallel.sh
+  source "$SCRIPT_DIR/lib/parallel.sh"
+  eval "$(sed -n '/^resolve_run_exit_code() {/,/^}/p' "$SCRIPT_DIR/repolens.sh")"
+  parallel_preflight() { _REPOLENS_SCOPE_READY=1; }
+  spawn_lens() { return 0; }
+  _cleanup_children() { CLEANUP_CALLS=$((CLEANUP_CALLS + 1)); }
+  wait_all() {
+    if [[ "$failure_storage" == marker ]]; then
+      printf 'prompt-render-failed\n' > "$LOG_BASE/.systemic-failure-abort"
+    else
+      printf '{"stopped_reason":"prompt-render-failed","lenses":[]}\n' > "$SUMMARY_FILE"
+    fi
+    kill -s "$signal" "$BASHPID"
+    return 42
+  }
+  for signal in INT TERM; do
+    for failure_storage in marker summary; do
+      reset_case "prompt-interrupted-$signal-$failure_storage"
+      PARALLEL=true
+      original_completion="$completed_lenses_file"
+      run_rounds 2 LENSES
+      RUN_ROUNDS_RC=$?
+      expected_exit=130
+      if [[ "$signal" == TERM ]]; then expected_exit=143; fi
+      assert_nonzero "$signal/$failure_storage failure remains nonzero" "$RUN_ROUNDS_RC"
+      assert_eq "$signal/$failure_storage preserves interrupted state" interrupted "$REPOLENS_FINAL_STATE"
+      assert_eq "$signal/$failure_storage preserves signal exit" "$expected_exit" "$(resolve_run_exit_code)"
+      assert_eq "$signal/$failure_storage runs cleanup" 1 "$CLEANUP_CALLS"
+      assert_eq "$signal/$failure_storage leaves round incomplete" '' "$(join_by ' ' "${MARKED_ROUNDS[@]}")"
+      assert_eq "$signal/$failure_storage prevents handoff" '' "$(join_by ' ' "${META_CALLS[@]}")"
+      assert_eq "$signal/$failure_storage restores completion path" "$original_completion" "$completed_lenses_file"
+    done
+  done
+  # Parallel traps remain installed for the between-round handoff as well.
+  # shellcheck source=lib/rounds.sh
+  source "$ROUNDS_LIB"
+  compose_prompt() { kill -s "$signal" "$signal_parent"; return 42; }
+  for signal in INT TERM; do
+    for failure_storage in marker blocked-marker; do
+      reset_case "meta-interrupted-$signal-$failure_storage"
+      signal_parent="$BASHPID"
+      if [[ "$failure_storage" == blocked-marker ]]; then
+        mkdir "$LOG_BASE/.systemic-failure-abort"
+      fi
+      run_meta_orchestrator 1 2
+      RUN_ROUNDS_RC=$?
+      expected_exit=130
+      if [[ "$signal" == TERM ]]; then expected_exit=143; fi
+      assert_nonzero "$signal/$failure_storage meta failure remains nonzero" "$RUN_ROUNDS_RC"
+      assert_eq "$signal/$failure_storage meta preserves interrupted state" interrupted "$REPOLENS_FINAL_STATE"
+      assert_eq "$signal/$failure_storage meta preserves signal exit" "$expected_exit" "$(resolve_run_exit_code)"
+      assert_eq "$signal/$failure_storage meta runs cleanup" 1 "$CLEANUP_CALLS"
+      assert_eq "$signal/$failure_storage meta leaves dispatch absent" missing \
+        "$(test -e "$LOG_BASE/rounds/round-1/dispatch.md" && echo present || echo missing)"
+    done
+  done
+  (( FAIL == 0 ))
+)
+signal_probe_rc=$?
+assert_eq "production signal cleanup probe succeeds" 0 "$signal_probe_rc"
+
 finish

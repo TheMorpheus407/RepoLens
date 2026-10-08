@@ -14,8 +14,9 @@
 # limitations under the License.
 
 # #428: a blocked lens abort marker must still fail the round and allow retry.
-# Pass --parallel inside a delegated process scope to also exercise real workers.
-# Optional lock outcome: normal, once, stop (all short writes), or all writes.
+# Default matrix exercises each lock outcome across audit/greenfield and sinks.
+# Pass --parallel inside a delegated process scope to exercise real workers.
+# An explicit second argument pins normal, once, stop, or all for every case.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$SCRIPT_DIR/logs"
@@ -74,10 +75,22 @@ json_matches() { jq -e "$@" >/dev/null; }
 source "$SCRIPT_DIR/lib/clean.sh"
 is_complete() { ! _clean_is_incomplete "$@"; }
 printf 'Plan a small command-line audit tool.\n' > "$TEST_DIR/spec.md"
-export LOCK_OUTCOME="${2:-normal}"
+lock_selection="${2:-matrix}"
+export LOCK_OUTCOME
 
 for mode in audit greenfield; do
   for sink in local forge; do
+    LOCK_OUTCOME="$lock_selection"
+    if [[ "$lock_selection" == matrix ]]; then
+      # Four small fixtures cover every persistence outcome in routine runs;
+      # all-write failure uses greenfield/local so it also verifies clean retry.
+      case "$mode/$sink" in
+        audit/local) LOCK_OUTCOME=normal ;;
+        audit/forge) LOCK_OUTCOME=once ;;
+        greenfield/local) LOCK_OUTCOME=all ;;
+        greenfield/forge) LOCK_OUTCOME=stop ;;
+      esac
+    fi
     LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-lens-marker-$mode-$sink.XXXXXX")" || exit 1
     CASE_DIRS+=("$LOG_BASE")
     RUN_ID="${LOG_BASE##*/}"
@@ -156,7 +169,7 @@ for mode in audit greenfield; do
   done
 done
 
-if [[ "$LOCK_OUTCOME" == normal && "${1:-}" != --parallel ]]; then
+if [[ "$lock_selection" == normal || "$lock_selection" == matrix ]] && [[ "${1:-}" != --parallel ]]; then
   # Prove the short-write/long-record ordering with a real contended lock.
   # The zero-second timeout makes the contention deterministic without sleeps.
   # shellcheck source=/dev/null
@@ -175,7 +188,7 @@ if [[ "$LOCK_OUTCOME" == normal && "${1:-}" != --parallel ]]; then
   check json_matches '.stopped_reason == null and any(.lenses[]; .status == "prompt-render-failed")' "$lock_summary"
 fi
 
-if [[ "$LOCK_OUTCOME" == normal && "${1:-}" == --parallel ]]; then
+if [[ "$lock_selection" == normal || "$lock_selection" == matrix ]] && [[ "${1:-}" == --parallel ]]; then
   # Exercise the real exit-status collector with both sibling finish orders,
   # and with a failure reaped before capacity is released to the next spawn.
   # shellcheck source=/dev/null

@@ -1008,6 +1008,8 @@ A failed lens callback or parallel collection leaves its round incomplete even i
 
 For multi-round investigations, each round before the final round is marked complete after its between-round handoff succeeds. If that handoff fails, resume preserves completed lens work and retries the handoff before selecting the next round's lenses.
 
+If meta has already passed the agent failure checks and all selected lenses are complete, resume reuses its verified saved result. It reconstructs dispatch and hypotheses from that result and preserves saturation, including after a round-completion write fails. Missing or changed success evidence, or pending selected lenses, causes meta to run again.
+
 ```bash
 # Resume a run but only re-run the injection lens; results merge into <run-id>
 ./repolens.sh --project ~/app --agent claude --resume <run-id> --focus injection
