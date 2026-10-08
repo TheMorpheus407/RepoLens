@@ -126,18 +126,20 @@ mkdir -p "$GUARD_FIXTURE/tests"
 cp "$RUNNER" "$GUARD_FIXTURE/tests/run-all.sh"
 cat > "$GUARD_FIXTURE/tests/test_plain.sh" <<'PLAIN'
 #!/usr/bin/env bash
-set -euo pipefail
-[[ "${REPOLENS_MAKE_CHECK:-}" == 1 ]]
+set -uo pipefail
+[[ "${REPOLENS_MAKE_CHECK:-}" == 1 ]] || exit 1
 echo 'Results: 1/1 passed, 0 failed'
 PLAIN
 cat > "$GUARD_FIXTURE/tests/test_failure.sh" <<'FAILURE'
 #!/usr/bin/env bash
+set -uo pipefail
 echo '  FAIL: intentional fixture failure'
 echo 'Results: 0/1 passed, 1 failed'
 exit 1
 FAILURE
 cat > "$GUARD_FIXTURE/tests/test_make_meta.sh" <<'MAKE_META'
 #!/usr/bin/env bash
+set -uo pipefail
 touch make-meta-ran
 echo '  FAIL: recursive make meta-test executed'
 exit 1
@@ -145,6 +147,7 @@ true && make check
 MAKE_META
 cat > "$GUARD_FIXTURE/tests/test_runner_meta.sh" <<'RUNNER_META'
 #!/usr/bin/env bash
+set -uo pipefail
 touch runner-meta-ran
 echo '  FAIL: recursive runner meta-test executed'
 exit 1
