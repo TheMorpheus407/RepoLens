@@ -168,8 +168,11 @@ open_candidate_count() {
   jq --arg title "$REOPEN_TITLE" '[.[] | select(.title == $title and .state == "OPEN")] | length' "$STUB_ISSUES"
 }
 
-creates_for() { grep -c "issue create .*$1" "$STUB_CALLS" || true; }
+# Count literal title fragments only in create traces; an absent match prints zero.
+creates_for() { grep '^issue create ' "$STUB_CALLS" | grep -Fc -- "$1" || true; }
+# Count all creation attempts, including those with an ambiguous response.
 total_creates() { grep -c 'issue create ' "$STUB_CALLS" || true; }
+# Require both a saved marker and its expected literal diagnostic.
 file_contains() { [[ -f "$1" ]] && grep -qF -- "$2" "$1"; }
 
 # The dedup lookup must be fresh and run inside the cross-link phase: the last
@@ -181,23 +184,59 @@ fresh_lookup_after_target_read() {
   [[ -n "$last_list" && -n "$first_view" ]] && (( last_list > first_view ))
 }
 
+# A parent-phase listing cannot serve as the cross-link snapshot, even if
+# it was fetched moments earlier in the same run.
+fresh_lookup_after_parent_phase() {
+  local first_list parent_list
+  parent_list="$(head -n "$PARENT_TRACE_END" "$STUB_CALLS" | grep -n '^issue list ' | head -1 | cut -d: -f1 || true)"
+  first_list="$(awk -v boundary="$PARENT_TRACE_END" 'NR > boundary && /^issue list / { print NR; exit }' "$STUB_CALLS")"
+  [[ -n "$parent_list" && -n "$first_list" ]] && (( first_list > PARENT_TRACE_END ))
+}
+
+# Add a distinct closed target to the same enact pass. The issue registry
+# remains shared with the real typed adapters and create/readback path.
+add_second_reopen_action() {
+  jq '.[0].cross_link_actions += [{type:"reopen-suggestion",issue_number:10,
+       body:"The second closed issue also warrants reconsideration."}]' \
+    "$RUN_LOG/final/manifest.json" > "$RUN_LOG/final/manifest.tmp"
+  mv "$RUN_LOG/final/manifest.tmp" "$RUN_LOG/final/manifest.json"
+  jq '. + [{number:10,title:"Second old issue",body:"old",labels:[],
+       url:"https://github.com/acme/origin/issues/10",state:"CLOSED"}]' \
+    "$STUB_ISSUES" > "$STUB_ISSUES.tmp"
+  mv "$STUB_ISSUES.tmp" "$STUB_ISSUES"
+}
+
 # The dedup lookup's request is part of the contract: it must bind to the
 # configured repository and scope to open issues, not just return any list.
 last_lookup_binds_configured_repo() {
   grep '^issue list ' "$STUB_CALLS" | tail -1 | grep -q -- '-R acme/origin '
 }
 
+# A successful stub response alone cannot prove that the request scoped to open issues.
 last_lookup_scopes_open_issues() {
   grep '^issue list ' "$STUB_CALLS" | tail -1 | grep -q -- '--state open '
 }
+
+echo '=== create counting treats bracketed titles literally ==='
+
+STUB_CALLS="$FIXTURE/literal-count.calls"
+printf '%s\n' "issue create -R acme/origin --title $REOPEN_TITLE --body-file body.md" > "$STUB_CALLS"
+check 'create counter finds the full bracketed title' test "$(creates_for "$REOPEN_TITLE")" = 1
+printf '%s\n' \
+  'issue create -R acme/origin --title r consider re-opening #9 --body-file body.md' \
+  "issue view 17 --title $REOPEN_TITLE" > "$STUB_CALLS"
+check 'create counter excludes regex near-matches and non-create lines' test "$(creates_for "$REOPEN_TITLE")" = 0
+check 'create counter returns zero for an absent literal title' test "$(creates_for '[missing]')" = 0
 
 echo '=== existing open candidate: fresh exact-title dedup suppresses the POST ==='
 
 new_run run-existing 'A distinct newly found regression'
 seed_closed_9
-add_open_candidate_17
 _filing_real_agent run-existing cluster > "$RUN_LOG/primary.log" 2>&1
 primary_rc=$?
+PARENT_TRACE_END="$(wc -l < "$STUB_CALLS")"
+# Another actor files the candidate after the parent governor's own lookup.
+add_open_candidate_17
 _filing_cross_link_enact run-existing > "$RUN_LOG/cross-link.log" 2>&1
 xl_rc=$?
 check 'primary governor files the independently titled parent' test "$primary_rc" -eq 0
@@ -212,6 +251,8 @@ check 'no created-response appropriates the existing issue' test ! -e "$XL_KEY.c
 check 'suppressed action never reserves new-issue budget' test ! -e "$XL_KEY.attempted"
 check 'verified count excludes the pre-existing candidate' test "$(filing_verified_issue_count run-existing)" = 1
 check 'fresh issue lookup runs after the target read' fresh_lookup_after_target_read
+check 'cross-link lookup runs after the parent phase finishes' fresh_lookup_after_parent_phase
+check 'parent and cross-link phases each perform their own lookup' test "$(grep -c '^issue list ' "$STUB_CALLS" || true)" = 2
 check 'fresh issue lookup binds the configured repository' last_lookup_binds_configured_repo
 check 'fresh issue lookup scopes to open issues' last_lookup_scopes_open_issues
 
@@ -253,6 +294,38 @@ check 'run B dedup happens before any budget deferral' test ! -e "$XL_KEY.deferr
 check 'run B dedup reserves no new-issue budget' test ! -e "$XL_KEY.attempted"
 check 'run B claims no creation for the existing candidate' test ! -e "$XL_KEY.done"
 unset MAX_ISSUES
+
+echo ''
+echo '=== multiple reopen actions share one listing within an enact pass ==='
+
+for scenario in empty mixed; do
+  new_run "run-cache-$scenario" "snapshot $scenario regression"
+  seed_closed_9
+  add_second_reopen_action
+  if [[ "$scenario" == mixed ]]; then
+    add_open_candidate_17
+  fi
+  # Empty and populated successful snapshots both permit independent actions.
+  MAX_ISSUES=2
+  _filing_cross_link_enact "run-cache-$scenario" > "$RUN_LOG/cross-link.log" 2>&1
+  check "$scenario snapshot enact succeeds" test $? -eq 0
+  check "$scenario snapshot needs only one forge listing" test "$(grep -c '^issue list ' "$STUB_CALLS" || true)" = 1
+  check "$scenario snapshot follows the first eligible target read" fresh_lookup_after_target_read
+  second_key="$RUN_LOG/final/filed/cross-link/reopen-suggestion-10"
+  check "$scenario second target has an independent success receipt" test -f "$second_key.done"
+  check "$scenario second target reserves its own create budget" test -f "$second_key.attempted"
+  if [[ "$scenario" == empty ]]; then
+    check 'empty snapshot creates both candidates' test "$(total_creates)" = 2
+    check 'empty snapshot first action succeeds independently' test -f "$XL_KEY.done"
+    check 'empty snapshot verified count includes both creates' test "$(filing_verified_issue_count run-cache-empty)" = 2
+  else
+    check 'mixed snapshot creates only the unmatched candidate' test "$(total_creates)" = 1
+    check 'mixed snapshot records the existing first candidate' file_contains "$XL_KEY.failed" 'DEDUP_HIT: #17'
+    check 'mixed snapshot dedup reserves no budget' test ! -e "$XL_KEY.attempted"
+    check 'mixed snapshot verified count excludes the existing candidate' test "$(filing_verified_issue_count run-cache-mixed)" = 1
+  fi
+  unset MAX_ISSUES
+done
 
 echo ''
 echo '=== dedup lookup failure fails closed ==='
@@ -441,15 +514,38 @@ jq -n '[{cluster_id:"cluster",title:"comment gate regression",body:"src/a.sh:1",
 jq -n '[{number:8,title:"Open issue",body:"open",labels:[],
           url:"https://github.com/acme/origin/issues/8",state:"OPEN"},
         {number:9,title:"Old issue",body:"old",labels:[],
-          url:"https://github.com/acme/origin/issues/9",state:"CLOSED"}]' > "$STUB_ISSUES"
+          url:"https://github.com/acme/origin/issues/9",state:"CLOSED"},
+        {number:11,title:"Later open issue",body:"open",labels:[],
+          url:"https://github.com/acme/origin/issues/11",state:"OPEN"}]' > "$STUB_ISSUES"
+add_second_reopen_action
+# Keep the original comment before the failure and exercise another after both
+# reopen actions, when the unsuccessful listing is already cached.
+jq '.[0].cross_link_actions += [{type:"comment",issue_number:11,
+     body:"Fresh evidence after the cached lookup failure."}]' \
+  "$RUN_LOG/final/manifest.json" > "$RUN_LOG/final/manifest.tmp"
+mv "$RUN_LOG/final/manifest.tmp" "$RUN_LOG/final/manifest.json"
 STUB_LIST_RC=1
 _filing_cross_link_enact run-comment-gate > "$RUN_LOG/cross-link.log" 2>&1
 check 'comment gate keeps the enact best-effort' test $? -eq 0
 check 'comment action succeeds despite the lookup failure' test -f "$RUN_LOG/final/filed/cross-link/comment-8.done"
 check 'comment action records no failure' test ! -e "$RUN_LOG/final/filed/cross-link/comment-8.failed"
-check 'comment posts exactly once' test "$(grep -c '^issue comment ' "$STUB_CALLS" || true)" = 1
-check 'only the reopen action consults the issue list' test "$(grep -c '^issue list ' "$STUB_CALLS" || true)" = 1
+check 'comments before and after the failure each post once' test "$(grep -c '^issue comment ' "$STUB_CALLS" || true)" = 2
+check 'later comment succeeds after the cached lookup failure' test -f "$RUN_LOG/final/filed/cross-link/comment-11.done"
+check 'later comment records no failure' test ! -e "$RUN_LOG/final/filed/cross-link/comment-11.failed"
+check 'later comment readback preserves its exact body' test "$(jq -r '.body' "$RUN_LOG/final/filed/cross-link/comment-11.readback.json")" = 'Fresh evidence after the cached lookup failure.'
+lookup_line="$(grep -n '^issue list ' "$STUB_CALLS" | cut -d: -f1)"
+second_target_line="$(grep -n '^issue view 10 ' "$STUB_CALLS" | cut -d: -f1)"
+later_comment_line="$(grep -n '^issue comment 11 ' "$STUB_CALLS" | cut -d: -f1)"
+check 'later comment follows the failed lookup and second reopen target' \
+  test "${later_comment_line:-0}" -gt "${second_target_line:-0}"
+check 'second reopen target follows the failed lookup' test "${second_target_line:-0}" -gt "${lookup_line:-0}"
+check 'failed lookup is shared by both reopen actions' test "$(grep -c '^issue list ' "$STUB_CALLS" || true)" = 1
 check 'reopen action still fails closed on the lookup failure' file_contains "$XL_KEY.failed" 'VERIFICATION_FAILED: fresh reopen-candidate dedup query failed'
+second_key="$RUN_LOG/final/filed/cross-link/reopen-suggestion-10"
+check 'second reopen action also records the lookup failure' file_contains "$second_key.failed" 'VERIFICATION_FAILED: fresh reopen-candidate dedup query failed'
+check 'first failed lookup reserves no budget' test ! -e "$XL_KEY.attempted"
+check 'second failed lookup reserves no budget' test ! -e "$second_key.attempted"
+check 'second failed lookup claims no creation' test ! -e "$second_key.done"
 check 'comment gate makes no create request' test "$(total_creates)" = 0
 STUB_LIST_RC=0
 

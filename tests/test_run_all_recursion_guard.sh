@@ -31,9 +31,9 @@
 # Behavioral contract this test pins:
 #   1. run-all.sh completes within seconds against isolated fixture suites
 #      with stdin closed and a clean env (no REPOLENS_MAKE_CHECK pre-set)
-#   2. Meta-tests cannot run, child suites inherit the recursion guard,
-#      and no new test/make processes remain in this checkout
-#   3. run-all.sh reports a "Results:" summary line (output contract)
+#   2. Meta-tests cannot run, and child suites inherit the recursion guard
+#   3. run-all.sh reports exact suite/failure counts and propagates failures
+#      without leaving fixture-owned meta-test or make-check processes
 #   4. run-all.sh exports REPOLENS_MAKE_CHECK=1 (source-level contract)
 #   5. run-all.sh sets _SKIP_META=1 unconditionally (source-level)
 #   6. test_issue6_test27_fix.sh's internal make-check sub-test passes
@@ -50,9 +50,9 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-FIXTURE_DIR="$(mktemp -d)"
-FIXTURE_DIR="$(cd "$FIXTURE_DIR" && pwd -P)"
-trap 'rm -rf "$FIXTURE_DIR"' EXIT
+GUARD_FIXTURE="$(mktemp -d)" || exit 1
+GUARD_FIXTURE="$(cd "$GUARD_FIXTURE" && pwd -P)" || exit 1
+trap 'rm -rf "$GUARD_FIXTURE"' EXIT
 
 fail_with() {
   local desc="$1" detail="${2:-}"
@@ -77,7 +77,7 @@ runner_process_snapshot() {
     # Linux exposes cwd even after an orphan has been reparented.
     if [[ -d /proc ]]; then
       working_dir="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue
-      [[ "$working_dir" == "$SCRIPT_DIR" || "$working_dir" == "$FIXTURE_DIR" ]] || continue
+      [[ "$working_dir" == "$SCRIPT_DIR" || "$working_dir" == "$GUARD_FIXTURE" || "$working_dir" == "$GUARD_FIXTURE/"* ]] || continue
     fi
     printf '%s\n' "$line"
   done < <(pgrep -af "$1" 2>/dev/null || true)
@@ -136,11 +136,11 @@ fi
 # fail if executed, so a broken skip loop cannot silently pass.
 # ---------------------------------------------------------------------
 
-mkdir -p "$FIXTURE_DIR/tests"
-cp "$RUNNER" "$FIXTURE_DIR/tests/run-all.sh"
+mkdir -p "$GUARD_FIXTURE/tests"
+cp "$RUNNER" "$GUARD_FIXTURE/tests/run-all.sh"
 expected_suites=3
 for fixture_name in a_stdin b_success c_success; do
-  cat > "$FIXTURE_DIR/tests/test_$fixture_name.sh" <<'SUITE'
+  cat > "$GUARD_FIXTURE/tests/test_$fixture_name.sh" <<'SUITE'
 #!/usr/bin/env bash
 set -uo pipefail
 if [[ "${REPOLENS_MAKE_CHECK:-}" != 1 ]] || read -r -t 1; then
@@ -151,28 +151,41 @@ echo "Results: 1/1 passed, 0 failed"
 SUITE
 done
 
-# Pin both marker forms even if the repository later removes one kind.
-for marker in '&& make check' 'tests/run-all.sh'; do
-  printf '# %s\nexit 99\n' "$marker" > "$FIXTURE_DIR/tests/test_meta_${#marker}.sh"
-done
+# Both recursive marker forms must be skipped before their tripwires run.
+cat > "$GUARD_FIXTURE/tests/test_make_meta.sh" <<'MAKE_META'
+#!/usr/bin/env bash
+set -uo pipefail
+touch make-meta-ran
+echo '  FAIL: recursive make meta-test executed'
+exit 1
+true && make check
+MAKE_META
+cat > "$GUARD_FIXTURE/tests/test_runner_meta.sh" <<'RUNNER_META'
+#!/usr/bin/env bash
+set -uo pipefail
+touch runner-meta-ran
+echo '  FAIL: recursive runner meta-test executed'
+exit 1
+bash tests/run-all.sh
+RUNNER_META
 
 echo ""
 echo "Test 5: run-all.sh completes within 10s with clean env + stdin closed"
 TOTAL=$((TOTAL + 1))
-runner_log="$FIXTURE_DIR/runner.log"
+runner_log="$GUARD_FIXTURE/runner.log"
 # Snapshot pre-run process list so we can detect orphans that the run
 # itself spawned (vs. unrelated shells the user has open).
 # Match command positions, rather than arbitrary arguments: an agent prompt
 # mentioning make check must not be reported as a running make process.
 meta_pattern='^([^[:space:]]*/)?(bash|sh)([[:space:]]+-[^[:space:]]+)*[[:space:]]+([^[:space:]]*/)?tests/test_issue6_test27_fix\.sh([[:space:]]|$)'
 make_pattern='^([^[:space:]]*/)?g?make[[:space:]]+check([[:space:]]|$)'
-before_snapshot="$FIXTURE_DIR/before-processes"
+before_snapshot="$GUARD_FIXTURE/before-processes"
 runner_process_snapshot "$meta_pattern" > "$before_snapshot"
 runner_process_snapshot "$make_pattern" >> "$before_snapshot"
 
 start_ts="$(date +%s)"
 if timeout --kill-after=2 10 env -u REPOLENS_MAKE_CHECK bash -c \
-     'exec </dev/null; bash "$0"' "$FIXTURE_DIR/tests/run-all.sh" > "$runner_log" 2>&1; then
+     'exec </dev/null; bash "$0"' "$GUARD_FIXTURE/tests/run-all.sh" > "$runner_log" 2>&1; then
   runner_rc=0
 else
   runner_rc=$?
@@ -206,12 +219,51 @@ else
   fail_with "runner did not execute exactly the non-recursive corpus"
 fi
 
-echo ""
-echo "Orphan check: no new meta-test or make check processes remain"
 TOTAL=$((TOTAL + 1))
-# Give the OS a moment to reap zombies that were in flight when timeout
-# fired. Keep this short — if a process is still running 2s after
-# run-all.sh exits, it's orphaned, not slow.
+if [[ ! -e "$GUARD_FIXTURE/make-meta-ran" && ! -e "$GUARD_FIXTURE/runner-meta-ran" ]] \
+  && ! grep -qE '^(PASSED|FAILED): tests/test_(make|runner)_meta.sh' "$runner_log"; then
+  pass_with "both recursive meta-test forms were skipped before execution"
+else
+  fail_with "runner executed a recursive meta-test" "$(cat "$runner_log")"
+fi
+
+# A deliberately failing fixture verifies exit propagation and diagnostics;
+# fixing this meta-test must retain the runner's all-zero success requirement.
+cat > "$GUARD_FIXTURE/tests/test_zzz_failure.sh" <<'FAILURE'
+#!/usr/bin/env bash
+set -uo pipefail
+echo "  FAIL: intentional runner fixture failure"
+echo "Results: 0/1 passed, 1 failed"
+exit 1
+FAILURE
+failure_log="$GUARD_FIXTURE/failure.log"
+if timeout --kill-after=2 10 env -u REPOLENS_MAKE_CHECK bash \
+     "$GUARD_FIXTURE/tests/run-all.sh" </dev/null > "$failure_log" 2>&1; then
+  failure_rc=0
+else
+  failure_rc=$?
+fi
+TOTAL=$((TOTAL + 1))
+if [[ "$failure_rc" == 1 ]]; then
+  pass_with "runner propagates a failing suite as exit 1"
+else
+  fail_with "runner must return exit 1 for a failing suite" "got $failure_rc"
+fi
+TOTAL=$((TOTAL + 1))
+if grep -qx "Results: $((expected_suites + 1)) suites run, 1 failed" "$failure_log" \
+   && grep -q '^FAILED: tests/test_zzz_failure.sh' "$failure_log" \
+   && grep -q '^  FAIL: intentional runner fixture failure' "$failure_log"; then
+  pass_with "runner preserves failure counts and assertion diagnostics"
+else
+  fail_with "runner lost the failing suite's summary or diagnostics"
+fi
+
+# Linux ownership filtering uses readable /proc/<pid>/cwd links. Missing or
+# unreadable links skip candidates; processes outside this checkout and its
+# fixture tree are excluded. Without /proc the command scan has no cwd filter.
+# The recursive fixtures keep their cwd inside GUARD_FIXTURE.
+TOTAL=$((TOTAL + 1))
+# Allow exiting children to be reaped before checking for remaining processes.
 sleep 2
 after_meta="$(runner_process_snapshot "$meta_pattern")"
 after_make="$(runner_process_snapshot "$make_pattern")"
@@ -243,36 +295,6 @@ else
   fail_with "run-all.sh left orphan processes running" "$detail"
 fi
 
-# A deliberately failing fixture verifies exit propagation and diagnostics;
-# fixing this meta-test must retain the runner's all-zero success requirement.
-cat > "$FIXTURE_DIR/tests/test_zzz_failure.sh" <<'FAILURE'
-#!/usr/bin/env bash
-echo "  FAIL: intentional runner fixture failure"
-echo "Results: 0/1 passed, 1 failed"
-exit 1
-FAILURE
-failure_log="$FIXTURE_DIR/failure.log"
-if timeout --kill-after=2 10 env -u REPOLENS_MAKE_CHECK bash \
-     "$FIXTURE_DIR/tests/run-all.sh" </dev/null > "$failure_log" 2>&1; then
-  failure_rc=0
-else
-  failure_rc=$?
-fi
-TOTAL=$((TOTAL + 1))
-if [[ "$failure_rc" == 1 ]]; then
-  pass_with "runner propagates a failing suite as exit 1"
-else
-  fail_with "runner must return exit 1 for a failing suite" "got $failure_rc"
-fi
-TOTAL=$((TOTAL + 1))
-if grep -qx "Results: $((expected_suites + 1)) suites run, 1 failed" "$failure_log" \
-   && grep -q '^FAILED: tests/test_zzz_failure.sh' "$failure_log" \
-   && grep -q '^  FAIL: intentional runner fixture failure' "$failure_log"; then
-  pass_with "runner preserves failure counts and assertion diagnostics"
-else
-  fail_with "runner lost the failing suite's summary or diagnostics"
-fi
-
 # ---------------------------------------------------------------------
 # Isolated check of the meta-test. This exercises the guarded path (env
 # var pre-set by the caller) — the one AutoDev/Makefile rely on. We do
@@ -284,7 +306,7 @@ fi
 echo ""
 echo "Test 8: test_issue6_test27_fix.sh exits successfully when invoked with the recursion-guard env var"
 TOTAL=$((TOTAL + 1))
-meta_log="$FIXTURE_DIR/meta.log"
+meta_log="$GUARD_FIXTURE/meta.log"
 start_ts="$(date +%s)"
 # Retain the existing meta-test watchdog; machine load must not introduce a
 # tighter deadline than this check had before fixture isolation.
@@ -307,7 +329,7 @@ fi
 # ---------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------
-rm -rf "$FIXTURE_DIR"
+rm -rf "$GUARD_FIXTURE"
 
 echo ""
 echo "================================"

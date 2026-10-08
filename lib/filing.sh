@@ -460,24 +460,28 @@ _filing_fail() {
 # _filing_cross_link_enact <run_id>
 #   Iterate every manifest entry's cross_link_actions[] and enact them via
 #   the forge layer. Idempotent: each (type, issue_number) pair is keyed by
-#   a content-hash sentinel under final/filed/cross-link/, so re-running the
-#   dispatcher does not re-enact already-completed actions.
+#   type-issue_number sentinel under final/filed/cross-link/, so re-running
+#   the dispatcher does not repeat a POST.
 #
 #   Per-action state machine for each cross-link entry:
-#     1. <key>.done present     -> SKIP
-#     2. <key>.failed present   -> SKIP (operator must rm to retry)
-#     3. otherwise              -> attempt; on success write .done; on
-#                                  failure write .failed (non-fatal)
+#     1. <key>.done present     -> quarantine and re-attest saved response
+#     2. .failed or .attempted  -> SKIP (requires operator reconciliation)
+#     3. otherwise             -> verify evidence, adapter, target and body;
+#                                dedup new reopen suggestions against one
+#                                fresh open-issue snapshot per enact pass;
+#                                reserve and attempt unmatched actions
+#   Lookup failures are cached for the pass and fail closed. Dedup precedes
+#   budget reservation. Verified readback writes .done; failure writes .failed.
 #
 #   Failures NEVER fail the overall run — cross-link actions are best-effort.
 #   They are logged to stderr and counted in the run's diagnostics only.
 #
-#   Required globals: AGENT, FORGE_REPO (or REPO_OWNER+REPO_NAME).
+#   Required globals: FORGE_REPO (or REPO_OWNER+REPO_NAME).
 #   Optional globals: REPOLENS_REOPEN_LABEL (defaults "repolens:reopen-candidate").
 #
 #   Cross-link actions on a cluster whose own filing failed
-#   (<cid>.failed present, no <cid>.url) are skipped to avoid posting a
-#   cross-link comment that references a non-existent new issue.
+#   (<cid>.failed present, no <cid>.url) are skipped; deferred parents without
+#   a .url defer their actions, avoiding references to a non-existent issue.
 _filing_cross_link_enact() {
   local run_id="${1:-}"
   local log_base manifest preserved_actions verification filed_dir cross_dir
@@ -556,7 +560,7 @@ _filing_cross_link_enact() {
 
   local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc
   local evidence reason target response readback title new_number reconcile_done body_json reserve_rc
-  local open_issues duplicate
+  local open_issues duplicate open_issues_status=unfetched
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
     [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || continue
     [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || continue
@@ -637,16 +641,30 @@ _filing_cross_link_enact() {
         continue
       fi
     fi
-    # A reopen suggestion files a new issue with a deterministic title, so only
-    # a fresh exact-title lookup against the live open-issue list deduplicates
-    # it across runs — the run-local sentinels cannot. The adapter fails closed
+    if [[ "$action_type" == reopen-suggestion ]]; then
+      title="[reopen-candidate] consider re-opening #$issue_number"
+    fi
+    # A reopen suggestion files a new issue with a deterministic title. Fetch
+    # a fresh open-issue snapshot at the first eligible new reopen action,
+    # independent of the parent governor's lookup, and reuse it for this pass.
+    # Exact-title matching suppresses candidates present in that snapshot;
+    # local sentinels cannot deduplicate across runs. Another writer's candidate
+    # created after the snapshot can be missed by a later action in this pass.
+    # This check/create path does not guarantee repository-wide uniqueness.
+    # Lookup failures are also cached. The adapter fails closed
     # (an error or truncated result never becomes an empty list), and the check
     # runs before budget reservation so a suppressed action never charges
     # MAX_ISSUES. A reconciled .done keeps its saved created-response instead:
     # an ambiguous POST is never retried.
     if [[ "$action_type" == reopen-suggestion ]] && (( ! reconcile_done )); then
-      title="[reopen-candidate] consider re-opening #$issue_number"
-      if ! open_issues="$(forge_issue_list_json "$forge_repo" open)"; then
+      if [[ "$open_issues_status" == unfetched ]]; then
+        if open_issues="$(forge_issue_list_json "$forge_repo" open)"; then
+          open_issues_status=ready
+        else
+          open_issues_status=failed
+        fi
+      fi
+      if [[ "$open_issues_status" == failed ]]; then
         printf 'VERIFICATION_FAILED: fresh reopen-candidate dedup query failed\n' > "$sentinel_failed"
         continue
       fi
@@ -708,7 +726,6 @@ _filing_cross_link_enact() {
           echo "_filing_cross_link_enact: FORGE_REPO unset; skipping reopen-suggestion for #$issue_number" >&2
           rc=1
         elif declare -F forge_issue_create_once >/dev/null 2>&1; then
-          title="[reopen-candidate] consider re-opening #$issue_number"
           # Prepend a banner so reviewers can see this is a RepoLens-emitted
           # reopen suggestion with the source closed issue called out
           # explicitly in the body.

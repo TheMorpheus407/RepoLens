@@ -8,9 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reuse one fresh open-issue snapshot per reopen-suggestion enact pass, including lookup failures, while preserving comment actions, exact-title deduplication, creation budgets, and receipt verification (#423).
+- Use a short, dedicated scratch path for parallel filing test fixtures, and exercise recursion guards with isolated suites that verify skipped meta-tests, failure reporting, and exit status (#426).
 - Keep parallel process-scope control sockets usable with long temporary-directory paths. Recursion-guard orphan checks now distinguish actual test/make processes from command arguments that mention them.
 - Make GitHub issue and comment URL comparisons locale-independent while preserving case-insensitive scheme, host and repository matching and exact `/issues/` and `#issuecomment-` literals. Cross-link tests now exercise the real comment validator (#422).
-- Keep test-runner child stdin separate from its suite-discovery stream, preventing skipped suites and missed failures. Use isolated runner fixtures and short parallel-filing scratch paths so validation remains reliable in deep checkouts.
+- Keep test-runner child stdin separate from its suite-discovery stream, preventing skipped suites and missed failures.
 
 - Direct template rendering now uses the one-hour default for invalid `TASK_HOURS` values, matching the polish renderer. CLI arguments and saved resume values still require positive integers (#424).
 - Correct contributor instructions to distinguish the frozen agent inventory from the live lens registry and update test-suite size and runtime estimates (#414).

@@ -201,7 +201,8 @@ entrypoint_result="$(
     PROJECT_PATH="$2"
     AGENT="stub-agent"
     eval "$3"
-    if export -p | grep -q "FORGE_REPO="; then
+    # Drain the export listing so pipefail cannot mistake SIGPIPE for no match.
+    if export -p | grep "FORGE_REPO=" > /dev/null; then
       exported=yes
     else
       exported=no
