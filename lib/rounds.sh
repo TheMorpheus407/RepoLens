@@ -405,7 +405,12 @@ run_meta_orchestrator() {
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
     _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
     # Resume clears this marker together with the persisted stop reason.
-    printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+    if ! printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"; then
+      _rounds_meta_warn "Unable to persist systemic-abort marker"
+      # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
+      REPOLENS_FINAL_STATE="failed"
+      return 1
+    fi
     if [[ -f "${SUMMARY_FILE:-}" ]]; then
       set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
     fi

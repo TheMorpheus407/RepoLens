@@ -200,5 +200,27 @@ check json_matches '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE"
 check test -f "$LOG_BASE/.systemic-failure-abort"
 check test "$(_rounds_agent_abort_reason)" = prompt-render-failed
 
+# A failed sentinel write must not save a reason that resume cannot clear.
+# A directory at the sentinel path reproduces a write failure deterministically.
+rm -f "$LOG_BASE/.systemic-failure-abort"
+mkdir "$LOG_BASE/.systemic-failure-abort"
+printf '{"stopped_reason":null}\n' > "$SUMMARY_FILE"
+REPOLENS_FINAL_STATE=""
+run_meta_orchestrator "$TEST_DIR/meta/marker-failure-round-1" "$TEST_DIR/meta/marker-failure-round-2" \
+  > "$TEST_DIR/marker-failure.out" 2>&1
+marker_rc=$?
+check test "$marker_rc" -ne 0
+check test "$REPOLENS_FINAL_STATE" = failed
+check test ! -e "$AGENT_CALLS"
+check json_matches '.stopped_reason == null' "$SUMMARY_FILE"
+check grep -qF 'Unable to persist systemic-abort marker' "$TEST_DIR/marker-failure.out"
+rmdir "$LOG_BASE/.systemic-failure-abort"
+unset FAIL_TEMPLATE
+run_meta_orchestrator "$TEST_DIR/meta/marker-failure-round-1" "$TEST_DIR/meta/marker-failure-round-2" \
+  > "$TEST_DIR/marker-retry.out" 2>&1
+check test "$?" -eq 0
+check test -s "$AGENT_CALLS"
+check json_matches '.stopped_reason == null' "$SUMMARY_FILE"
+
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))
