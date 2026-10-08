@@ -42,7 +42,7 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 RUNNER="$SCRIPT_DIR/tests/run-all.sh"
 META_TEST="$SCRIPT_DIR/tests/test_issue6_test27_fix.sh"
 
@@ -63,6 +63,20 @@ pass_with() {
   local desc="$1"
   PASS=$((PASS + 1))
   echo "  PASS: $desc"
+}
+
+runner_process_snapshot() {
+  local line pid working_dir
+  while IFS= read -r line; do
+    pid="${line%% *}"
+    # Concurrent gates in other checkouts belong to their own runners.
+    # Linux exposes cwd even after an orphan has been reparented.
+    if [[ -d /proc ]]; then
+      working_dir="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue
+      [[ "$working_dir" == "$SCRIPT_DIR" ]] || continue
+    fi
+    printf '%s\n' "$line"
+  done < <(pgrep -af "$1" 2>/dev/null || true)
 }
 
 echo "=== Test Suite: run-all.sh recursion guard ==="
@@ -125,9 +139,13 @@ TOTAL=$((TOTAL + 1))
 runner_log="$(mktemp)"
 # Snapshot pre-run process list so we can detect orphans that the run
 # itself spawned (vs. unrelated shells the user has open).
+# Match command positions, rather than arbitrary arguments: an agent prompt
+# mentioning make check must not be reported as a running make process.
+meta_pattern='^([^[:space:]]*/)?(bash|sh)([[:space:]]+-[^[:space:]]+)*[[:space:]]+([^[:space:]]*/)?tests/test_issue6_test27_fix\.sh([[:space:]]|$)'
+make_pattern='^([^[:space:]]*/)?g?make[[:space:]]+check([[:space:]]|$)'
 before_snapshot="$(mktemp)"
-pgrep -af 'tests/test_issue6_test27_fix\.sh' > "$before_snapshot" 2>/dev/null || true
-pgrep -af 'make[[:space:]]+check' >> "$before_snapshot" 2>/dev/null || true
+runner_process_snapshot "$meta_pattern" > "$before_snapshot"
+runner_process_snapshot "$make_pattern" >> "$before_snapshot"
 
 # Explicitly unset the env var so we exercise the top-level path AutoDev
 # hits (not the recursive path that's always been guarded).
@@ -172,8 +190,8 @@ TOTAL=$((TOTAL + 1))
 # fired. Keep this short — if a process is still running 2s after
 # run-all.sh exits, it's orphaned, not slow.
 sleep 2
-after_meta="$(pgrep -af 'tests/test_issue6_test27_fix\.sh' 2>/dev/null || true)"
-after_make="$(pgrep -af 'make[[:space:]]+check' 2>/dev/null || true)"
+after_meta="$(runner_process_snapshot "$meta_pattern")"
+after_make="$(runner_process_snapshot "$make_pattern")"
 # Strip any PIDs that pre-dated our run (unrelated user work).
 unexpected_meta=""
 if [[ -n "$after_meta" ]]; then

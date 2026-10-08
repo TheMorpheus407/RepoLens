@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Keep parallel process-scope control sockets usable with long temporary-directory paths. Recursion-guard orphan checks now distinguish actual test/make processes from command arguments that mention them.
 - Make GitHub issue and comment URL comparisons locale-independent while preserving case-insensitive scheme, host and repository matching and exact `/issues/` and `#issuecomment-` literals. Cross-link tests now exercise the real comment validator (#422).
 - Correct contributor instructions to distinguish the frozen agent inventory from the live lens registry and update test-suite size and runtime estimates (#414).
 - Bare `file:line` citations containing `+` (e.g. SvelteKit's `src/routes/+page.svelte:1`) are now extracted with their complete path instead of being truncated to the suffix after `+`, and bare tokens carrying any other unsupported character are rejected whole rather than validated as a suffix citation — branch-scope and citation verification can no longer accept a finding against a different file than the one named ([#410](https://github.com/TheMorpheus407/RepoLens/issues/410)).
