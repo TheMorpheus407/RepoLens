@@ -647,7 +647,10 @@ _filing_cross_link_enact() {
     # A reopen suggestion files a new issue with a deterministic title. Fetch
     # a fresh open-issue snapshot at the first eligible new reopen action,
     # independent of the parent governor's lookup, and reuse it for this pass.
-    # Exact-title matching deduplicates across runs; local sentinels cannot.
+    # Exact-title matching suppresses candidates present in that snapshot;
+    # local sentinels cannot deduplicate across runs. Another writer's candidate
+    # created after the snapshot can be missed by a later action in this pass.
+    # This check/create path does not guarantee repository-wide uniqueness.
     # Lookup failures are also cached. The adapter fails closed
     # (an error or truncated result never becomes an empty list), and the check
     # runs before budget reservation so a suppressed action never charges
