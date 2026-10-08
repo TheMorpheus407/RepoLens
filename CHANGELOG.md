@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reuse one fresh open-issue snapshot per reopen-suggestion enact pass, including lookup failures, while preserving comment actions, exact-title deduplication, creation budgets, and receipt verification (#423).
+
 - Correct contributor instructions to distinguish the frozen agent inventory from the live lens registry and update test-suite size and runtime estimates (#414).
 - Bare `file:line` citations containing `+` (e.g. SvelteKit's `src/routes/+page.svelte:1`) are now extracted with their complete path instead of being truncated to the suffix after `+`, and bare tokens carrying any other unsupported character are rejected whole rather than validated as a suffix citation — branch-scope and citation verification can no longer accept a finding against a different file than the one named ([#410](https://github.com/TheMorpheus407/RepoLens/issues/410)).
 

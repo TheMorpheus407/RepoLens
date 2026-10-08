@@ -168,8 +168,11 @@ open_candidate_count() {
   jq --arg title "$REOPEN_TITLE" '[.[] | select(.title == $title and .state == "OPEN")] | length' "$STUB_ISSUES"
 }
 
+# Count literal title fragments only in create traces; an absent match prints zero.
 creates_for() { grep '^issue create ' "$STUB_CALLS" | grep -Fc -- "$1" || true; }
+# Count all creation attempts, including those with an ambiguous response.
 total_creates() { grep -c 'issue create ' "$STUB_CALLS" || true; }
+# Require both a saved marker and its expected literal diagnostic.
 file_contains() { [[ -f "$1" ]] && grep -qF -- "$2" "$1"; }
 
 # The dedup lookup must be fresh and run inside the cross-link phase: the last
@@ -209,6 +212,7 @@ last_lookup_binds_configured_repo() {
   grep '^issue list ' "$STUB_CALLS" | tail -1 | grep -q -- '-R acme/origin '
 }
 
+# A successful stub response alone cannot prove that the request scoped to open issues.
 last_lookup_scopes_open_issues() {
   grep '^issue list ' "$STUB_CALLS" | tail -1 | grep -q -- '--state open '
 }
@@ -510,14 +514,31 @@ jq -n '[{cluster_id:"cluster",title:"comment gate regression",body:"src/a.sh:1",
 jq -n '[{number:8,title:"Open issue",body:"open",labels:[],
           url:"https://github.com/acme/origin/issues/8",state:"OPEN"},
         {number:9,title:"Old issue",body:"old",labels:[],
-          url:"https://github.com/acme/origin/issues/9",state:"CLOSED"}]' > "$STUB_ISSUES"
+          url:"https://github.com/acme/origin/issues/9",state:"CLOSED"},
+        {number:11,title:"Later open issue",body:"open",labels:[],
+          url:"https://github.com/acme/origin/issues/11",state:"OPEN"}]' > "$STUB_ISSUES"
 add_second_reopen_action
+# Keep the original comment before the failure and exercise another after both
+# reopen actions, when the unsuccessful listing is already cached.
+jq '.[0].cross_link_actions += [{type:"comment",issue_number:11,
+     body:"Fresh evidence after the cached lookup failure."}]' \
+  "$RUN_LOG/final/manifest.json" > "$RUN_LOG/final/manifest.tmp"
+mv "$RUN_LOG/final/manifest.tmp" "$RUN_LOG/final/manifest.json"
 STUB_LIST_RC=1
 _filing_cross_link_enact run-comment-gate > "$RUN_LOG/cross-link.log" 2>&1
 check 'comment gate keeps the enact best-effort' test $? -eq 0
 check 'comment action succeeds despite the lookup failure' test -f "$RUN_LOG/final/filed/cross-link/comment-8.done"
 check 'comment action records no failure' test ! -e "$RUN_LOG/final/filed/cross-link/comment-8.failed"
-check 'comment posts exactly once' test "$(grep -c '^issue comment ' "$STUB_CALLS" || true)" = 1
+check 'comments before and after the failure each post once' test "$(grep -c '^issue comment ' "$STUB_CALLS" || true)" = 2
+check 'later comment succeeds after the cached lookup failure' test -f "$RUN_LOG/final/filed/cross-link/comment-11.done"
+check 'later comment records no failure' test ! -e "$RUN_LOG/final/filed/cross-link/comment-11.failed"
+check 'later comment readback preserves its exact body' test "$(jq -r '.body' "$RUN_LOG/final/filed/cross-link/comment-11.readback.json")" = 'Fresh evidence after the cached lookup failure.'
+lookup_line="$(grep -n '^issue list ' "$STUB_CALLS" | cut -d: -f1)"
+second_target_line="$(grep -n '^issue view 10 ' "$STUB_CALLS" | cut -d: -f1)"
+later_comment_line="$(grep -n '^issue comment 11 ' "$STUB_CALLS" | cut -d: -f1)"
+check 'later comment follows the failed lookup and second reopen target' \
+  test "${later_comment_line:-0}" -gt "${second_target_line:-0}"
+check 'second reopen target follows the failed lookup' test "${second_target_line:-0}" -gt "${lookup_line:-0}"
 check 'failed lookup is shared by both reopen actions' test "$(grep -c '^issue list ' "$STUB_CALLS" || true)" = 1
 check 'reopen action still fails closed on the lookup failure' file_contains "$XL_KEY.failed" 'VERIFICATION_FAILED: fresh reopen-candidate dedup query failed'
 second_key="$RUN_LOG/final/filed/cross-link/reopen-suggestion-10"
