@@ -693,7 +693,9 @@ assert_eq "meta-orchestrator failure stops before round 2 dispatch" \
           "security/injection quality/dead-code" \
           "$(join_by " " "${RUN_LENS_CALLS[@]}")"
 assert_eq "meta-orchestrator is called once before failure" "1->2" "$(join_by " " "${META_CALLS[@]}")"
-assert_eq "meta-orchestrator failure still leaves completed round marked" "1" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+assert_eq "meta-orchestrator failure leaves the round pending for resume" "" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+assert_eq "meta-orchestrator failure restores run-level completed_lenses_file" \
+          "$LOG_BASE/.completed" "$completed_lenses_file"
 
 echo ""
 echo "Test 12: sequential max-issues skip records only incomplete remaining lenses"
@@ -726,8 +728,8 @@ assert_eq "mark_round_completed failure runs only the first round" \
 assert_eq "mark_round_completed failure attempts to mark the finished round" \
           "1" \
           "$(join_by " " "${MARKED_ROUNDS[@]}")"
-assert_eq "mark_round_completed failure does not call meta orchestrator" \
-          "" \
+assert_eq "mark_round_completed failure follows the successful handoff" \
+          "1->2" \
           "$(join_by " " "${META_CALLS[@]}")"
 assert_eq "mark_round_completed failure restores run-level completed_lenses_file" \
           "$LOG_BASE/.completed" \

@@ -1004,6 +1004,8 @@ Completed lenses are skipped; unfinished and rate-limited lenses are retried. Th
 
 Resume **reuses the same `logs/<run-id>/` directory** — it does not create a new sibling run. Lenses that already finished are recorded in `logs/<run-id>/.completed` and are skipped on resume; only unfinished and rate-limited lenses run again. You can **narrow a resume** by adding `--focus <lens-id>` or `--domain <domain-id>`: only those lenses run, and their results merge into the same run rather than starting a fresh directory.
 
+For multi-round investigations, each round before the final round is marked complete after its between-round handoff succeeds. If that handoff fails, resume preserves completed lens work and retries the handoff before selecting the next round's lenses.
+
 ```bash
 # Resume a run but only re-run the injection lens; results merge into <run-id>
 ./repolens.sh --project ~/app --agent claude --resume <run-id> --focus injection

@@ -2642,12 +2642,7 @@ run_rounds() {
       return "$round_rc"
     fi
 
-    mark_round_completed "$round"
-    round_rc=$?
     _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
-    if (( round_rc != 0 )); then
-      return "$round_rc"
-    fi
 
     if (( round < rounds_total )); then
       META_ORCH_SATURATED=0
@@ -2656,10 +2651,19 @@ run_rounds() {
       if (( round_rc != 0 )); then
         return "$round_rc"
       fi
-      if [[ "${META_ORCH_SATURATED:-0}" == "1" ]]; then
-        log_info "[round $round] Investigation saturated; skipping remaining rounds"
-        break
-      fi
+    fi
+
+    # The round barrier includes its handoff. On failure, resume skips completed
+    # lenses via their own markers and retries meta before advancing.
+    mark_round_completed "$round"
+    round_rc=$?
+    if (( round_rc != 0 )); then
+      return "$round_rc"
+    fi
+
+    if (( round < rounds_total )) && [[ "${META_ORCH_SATURATED:-0}" == "1" ]]; then
+      log_info "[round $round] Investigation saturated; skipping remaining rounds"
+      break
     fi
   done
 }
