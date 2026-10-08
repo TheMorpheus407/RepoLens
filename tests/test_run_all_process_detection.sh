@@ -19,6 +19,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$SCRIPT_DIR" <<'PY'
 from pathlib import Path
+import os
+import signal
 import subprocess
 import shlex
 import sys
@@ -27,6 +29,24 @@ import time
 
 root = Path(sys.argv[1])
 passed = failed = 0
+
+
+def cleanup_runner(process, release):
+    # GNU timeout gives the copied runner a separate process group. Release
+    # its barrier and let the guard reap it before removing the fixture.
+    release.touch()
+    try:
+        process.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        # The guard owns a private session; never signal the test's group.
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.communicate(timeout=5)
+
+
 with tempfile.TemporaryDirectory(prefix='repolens-process-detection.') as temporary:
     fixture = Path(temporary)
     tests = fixture / 'tests'
@@ -39,9 +59,11 @@ with tempfile.TemporaryDirectory(prefix='repolens-process-detection.') as tempor
     runner_source = (root / 'tests/run-all.sh').read_text()
     barrier = '''
 pwd -P > {working_directory}
+printf '%s\\n' "$$" > {runner_pid}
 touch {started}
 while [[ ! -e {release} ]]; do sleep 0.02; done
 '''.format(working_directory=shlex.quote(str(fixture / 'runner-working-directory')),
+           runner_pid=shlex.quote(str(fixture / 'runner-pid')),
            started=shlex.quote(str(fixture / 'runner-started')),
            release=shlex.quote(str(fixture / 'runner-release')))
     (tests / 'run-all.sh').write_text(runner_source.replace(
@@ -56,6 +78,7 @@ exit 0
     other_checkout.mkdir()
     (other_checkout / 'check').write_text('import time; time.sleep(30)\n')
     cases = [
+        ('cleanup after failure at the launch barrier', None, None, fixture, None),
         ('prompt mentioning runner commands', [sys.executable, '-c', 'import time; time.sleep(30)', 'make check', str(meta)], None, fixture, 0),
         ('make check in the isolated runner corpus', ['make', 'check'], sys.executable, None, 1),
         ('actual meta-test orphan with shell flags', ['bash', '-x', str(meta), 'linger'], None, fixture, 1),
@@ -67,12 +90,21 @@ exit 0
             for marker in ('runner-started', 'runner-release'):
                 (fixture / marker).unlink(missing_ok=True)
             runner = subprocess.Popen(['bash', str(guard)], cwd=fixture,
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, start_new_session=True)
             deadline = time.monotonic() + 10
             while not (fixture / 'runner-started').exists():
                 assert runner.poll() is None, 'guard exited before runner started'
                 assert time.monotonic() < deadline, 'runner fixture did not start'
                 time.sleep(0.02)
+            if expected is None:
+                child_pid = int((fixture / 'runner-pid').read_text())
+                cleanup_runner(runner, fixture / 'runner-release')
+                assert not Path('/proc/{}/stat'.format(child_pid)).exists(), \
+                    'runner child survived cleanup at the launch barrier'
+                passed += 1
+                print('PASS: ' + name)
+                continue
             if candidate_cwd is None:
                 candidate_cwd = Path((fixture / 'runner-working-directory').read_text().strip())
                 (candidate_cwd / 'check').write_text('import time; time.sleep(30)\n')
@@ -92,12 +124,15 @@ exit 0
             failed += 1
             print('FAIL: {}: {}'.format(name, error))
         finally:
+            # Release a failed fixture even when its cleanup assertion fails.
+            (fixture / 'runner-release').touch()
             # Popen retains each direct child's identity until wait reaps it.
-            for process in (candidate, runner):
-                if process is not None:
-                    if process.poll() is None:
-                        process.kill()
-                    process.wait(timeout=5)
+            if candidate is not None:
+                if candidate.poll() is None:
+                    candidate.kill()
+                candidate.wait(timeout=5)
+            if runner is not None:
+                cleanup_runner(runner, fixture / 'runner-release')
             if candidate is not None:
                 candidate.stdin.close()
 print('Results: {} passed, {} failed'.format(passed, failed))
