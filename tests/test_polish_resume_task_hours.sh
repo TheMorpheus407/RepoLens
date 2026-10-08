@@ -17,10 +17,11 @@
 # The only agent executable is a deterministic PATH shim; no model or forge runs.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUN_ID="test-polish-resume-hours-$$"
-LOG_BASE="$SCRIPT_DIR/logs/$RUN_ID"
-mkdir -p "$LOG_BASE/polish" "$LOG_BASE/bin"
+mkdir -p "$SCRIPT_DIR/logs"
+LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-polish-resume-hours.XXXXXX")" || exit 1
+RUN_ID="${LOG_BASE##*/}"
 trap 'rm -rf "$LOG_BASE"' EXIT
+mkdir -p "$LOG_BASE/polish" "$LOG_BASE/bin"
 
 passed=0
 failed=0

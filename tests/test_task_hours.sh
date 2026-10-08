@@ -114,6 +114,7 @@ export TASK_HOURS=6
 output="$(
   # Simulate a command that emits partial data and then fails. Keep the stub
   # confined to this subshell and this one base-template path.
+  # shellcheck disable=SC2329 # compose_prompt invokes this override indirectly.
   cat() {
     if [[ "$#" -eq 1 && "$1" == "$SCRIPT_DIR/prompts/_base/polish.md" ]]; then
       printf 'Partially read base template.'
@@ -131,8 +132,7 @@ check test -z "$output"
 # CLI validation. The current renderer rejects invalid values without output.
 output="$(
   cd "$TEST_DIR" || exit 1
-  export TASK_HOURS='1;touch unsafe'
-  compose_prompt "$SCRIPT_DIR/prompts/_base/polish.md" "$TEST_DIR/lens.md" '' '' polish \
+  TASK_HOURS='1;touch unsafe' compose_prompt "$SCRIPT_DIR/prompts/_base/polish.md" "$TEST_DIR/lens.md" '' '' polish \
     '' '' false true "$TEST_DIR/output" 2>"$TEST_DIR/invalid-hours-error"
 )"
 renderer_rc=$?
@@ -146,8 +146,7 @@ source "$SCRIPT_DIR/lib/polish.sh"
 injection_group='{"domain":"effort-signal","lens_id":"loading-transparency","items":[{"title":"Clarify progress","body":"Keep progress concise.","voice_fit":"strong","polish_rank_x1000":1000}]}'
 (
   cd "$TEST_DIR" || exit 1
-  export TASK_HOURS='1;touch unsafe'
-  _polish_render_issue_body "$injection_group" "$TEST_DIR/injection-body.md" "test-hours" "ranked.json"
+  TASK_HOURS='1;touch unsafe' _polish_render_issue_body "$injection_group" "$TEST_DIR/injection-body.md" "test-hours" "ranked.json"
 )
 polish_rc=$?
 check test "$polish_rc" -eq 0

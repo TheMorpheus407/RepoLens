@@ -4639,17 +4639,24 @@ run_lens() {
   fi
 
   # Compose prompt (pass local mode params)
-  local prompt="" lens_local_dir=""
+  local prompt="" lens_local_dir="" prompt_rc=0
   if $LOCAL_MODE; then
     lens_local_dir="${CURRENT_ROUND_OUTPUT_DIR:-$OUTPUT_DIR}/$domain/$lens_id"
     mkdir -p "$lens_local_dir"
     if [[ "$MODE" != "greenfield" ]]; then
-      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")"
+      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")" || prompt_rc=$?
     fi
   else
     if [[ "$MODE" != "greenfield" ]]; then
-      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
+      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")" || prompt_rc=$?
     fi
+  fi
+
+  if (( prompt_rc != 0 )); then
+    log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
+    printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+    record_lens "$SUMMARY_FILE" "$domain" "$lens_id" 0 "prompt-render-failed" 0 0
+    return 1
   fi
 
   # Create lens log directory
@@ -4752,9 +4759,15 @@ run_lens() {
       greenfield_write_current_backlog_snapshot "$current_backlog_file" "$lens_local_dir" "$FORGE_REPO_SLUG" || true
       iteration_vars="${vars}|CURRENT_BACKLOG=@${current_backlog_file}"
       if $LOCAL_MODE; then
-        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")"
+        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")" || prompt_rc=$?
       else
-        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
+        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")" || prompt_rc=$?
+      fi
+      if (( prompt_rc != 0 )); then
+        log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
+        printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+        exit_status="prompt-render-failed"
+        break
       fi
     fi
 
@@ -5012,7 +5025,8 @@ run_lens() {
   if [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
       && "$exit_status" != "auth-expired" && "$exit_status" != "model-unavailable" \
       && "$exit_status" != "budget-exhausted" && "$exit_status" != "agent-refused" \
-      && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" ]]; then
+      && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" \
+      && "$exit_status" != "prompt-render-failed" ]]; then
     mark_lens_completed "$lens_entry"
   fi
 
