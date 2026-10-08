@@ -237,6 +237,10 @@ else
   fail_with "runner lost the failing suite's summary or diagnostics"
 fi
 
+# This orphan check requires Linux /proc with readable /proc/<pid>/cwd links.
+# Missing or unreadable links skip candidates, so the assertion can pass without
+# checking them. Ownership follows cwd; descendants that leave GUARD_FIXTURE
+# are also outside this check. The current recursive fixtures keep that cwd.
 TOTAL=$((TOTAL + 1))
 after_meta="$(pgrep -af 'tests/test_issue6_test27_fix\.sh' 2>/dev/null || true)"
 after_make="$(pgrep -af 'make[[:space:]]+check' 2>/dev/null || true)"
