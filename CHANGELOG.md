@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Stop lens and between-round agent dispatch when the base template cannot be read or prompt composition fails; failed lenses remain resumable and successful resumes clear the prompt failure reason. Retry a failed between-round handoff before advancing on resume, preserving completed lens work. Add coverage for saved polish task-hour budgets and adversarial renderer input (#428).
+- Stop lens and between-round agent dispatch when the base template cannot be read or prompt composition fails; failed lenses remain resumable and successful resumes clear the prompt failure reason, including when a lens cannot write its abort marker. Retry a failed between-round handoff before advancing on resume, preserving completed lens work. Add coverage for saved polish task-hour budgets and adversarial renderer input (#428).
 - Keep test-runner child stdin separate from its suite-discovery stream, preventing skipped suites and missed failures. Use isolated runner fixtures and short parallel-filing scratch paths so validation remains reliable in deep checkouts.
 
 - Direct template rendering now uses the one-hour default for invalid `TASK_HOURS` values, matching the polish renderer. CLI arguments and saved resume values still require positive integers (#424).

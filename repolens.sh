@@ -2628,6 +2628,12 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
   rm -f "$LOG_BASE/.systemic-failure-abort"
   clear_stop_reason "$SUMMARY_FILE"
 fi
+# A lens can persist its prompt failure in the summary when the marker write
+# fails. Clear that fallback on retry even when no regular marker exists.
+if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
+    && jq -e '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE" >/dev/null 2>&1; then
+  clear_stop_reason "$SUMMARY_FILE"
+fi
 if [[ -n "$REMOTE_TARGET" ]]; then
   REMOTE_RUN_DIR="$LOG_BASE/.remote"
   mkdir -p "$REMOTE_RUN_DIR"
@@ -4654,7 +4660,10 @@ run_lens() {
 
   if (( prompt_rc != 0 )); then
     log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
-    printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+    if ! printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"; then
+      log_error "[$domain/$lens_id] Unable to persist systemic-abort marker."
+      set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
+    fi
     record_lens "$SUMMARY_FILE" "$domain" "$lens_id" 0 "prompt-render-failed" 0 0
     return 1
   fi
@@ -4765,7 +4774,10 @@ run_lens() {
       fi
       if (( prompt_rc != 0 )); then
         log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
-        printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+        if ! printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"; then
+          log_error "[$domain/$lens_id] Unable to persist systemic-abort marker."
+          set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
+        fi
         exit_status="prompt-render-failed"
         break
       fi

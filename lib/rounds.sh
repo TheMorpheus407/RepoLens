@@ -2221,6 +2221,14 @@ _rounds_agent_abort_reason() {
     return 0
   fi
 
+  # Lens workers share summary.json with the parent. A prompt failure remains
+  # fatal when its abort marker could not be written, including parallel runs.
+  if [[ -f "${SUMMARY_FILE:-}" ]] \
+      && jq -e '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE" >/dev/null 2>&1; then
+    printf '%s\n' "prompt-render-failed"
+    return 0
+  fi
+
   if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
     printf '%s\n' "rate-limited"
     return 0
