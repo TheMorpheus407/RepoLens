@@ -345,6 +345,7 @@ for prose_body in 'Follow-up with no new citations.' \
     $'Fenced sample:\n```sh\nsrc/$route/a.sh:1\n```' \
     $'Fenced sample:\n````\nexample/`tool`:1abc\n```\nsrc/$route/a.sh:1\n````' \
     $'Multiline span ``example/tool:1abc\ncontinued``' \
+    $'Fenced source citation:\n```sh\nsrc/a.sh:1\n```' \
     'URL with punctuation https://example.org/status,~/src/missing.sh:1' \
     'URL with punctuation https://example.org/status;~/src/missing.sh:1' \
     'src/a.sh:1' '**src/a.sh:1**' '"**src/a.sh:1**,**src/a.sh:1**"' \
@@ -362,12 +363,46 @@ for prose_body in 'Follow-up with no new citations.' \
     "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
   mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
   _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
-  check "citation-free action remains publishable: $prose_body" \
+  check "supported action remains publishable: $prose_body" \
     test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
-  check "citation-free action posts exactly once: $prose_body" \
+  check "supported action posts exactly once: $prose_body" \
     test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
   check "action preserves exact body: $prose_body" \
     jq -e --arg body "$prose_body" '.body == $body' "$TMP/comment.json"
+done
+
+# N23: classifier masking does not exempt recognized fenced citations from
+# validation of the original body. The parent evidence remains valid in scope.
+for fenced_case in missing line scope; do
+  fresh
+  CROSS_LINK_MODE=comment
+  fenced_reference='src/a.sh:1'
+  case "$fenced_case" in
+    missing) fenced_reference='src/missing.sh:1'; fenced_reason='file not found' ;;
+    line) fenced_reference='src/a.sh:2'; fenced_reason='line exceeds file length' ;;
+    scope)
+      MODE=branch-review BRANCH_SCOPE_FILE="$TMP/scope.json"
+      printf '["src/a.sh"]\n' > "$BRANCH_SCOPE_FILE"
+      cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/support.sh"
+      fenced_reference='src/support.sh:1'; fenced_reason='out-of-scope citation'
+      ;;
+  esac
+  printf -v fenced_body 'Fenced sample:\n```sh\n%s\n```' "$fenced_reference"
+  check "N23 classifier masks fenced sample: $fenced_case" \
+    test -z "$(_filing_action_reference_candidates "$fenced_body")"
+  check "N23 shared extractor retains fenced citation: $fenced_case" \
+    test "$(repolens_extract_citations "$fenced_body")" = "$fenced_reference"
+  jq --arg body "$fenced_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "N23 fenced citation fails for the expected reason: $fenced_case" \
+    grep -Fq "$fenced_reason" "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+  check "N23 fenced citation has no success receipt: $fenced_case" \
+    test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  check "N23 fenced citation performs zero comment POSTs: $fenced_case" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
 done
 
 fresh

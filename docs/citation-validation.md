@@ -43,15 +43,20 @@ an existing file can be out of scope, and an in-scope line can be nonexistent.
 | N18 | Invalid nested parent checked before valid action evidence | Parent failure rejects action; zero comment creates | filing governance N18 |
 | N19 | Valid nested evidence as issue or action body | Publish once through mocked structured readback | filing governance N19 |
 | N20 | Valid independent parent, action containing unsupported file-like citations (including conventional root files), alone or alongside valid bare/quoted anchors | Reject the action with a diagnostic and zero comment POSTs | filing governance unsupported-action cases |
-| N21 | Valid parent, citation-free action prose, opaque URL (including commas/semicolons), comma-terminated timestamp or excluded backtick span (including multiline fences) | Preserve ordinary comment publication | filing governance citation-free action cases |
+| N21 | Valid parent, citation-free action prose, opaque URL (including commas/semicolons), comma-terminated timestamp or backtick sample (including multiline fences) with no recognized source citation | Preserve ordinary comment publication | filing governance citation-free action cases |
 | N22 | Action citation classification fails | Record failure; zero comment creates | filing governance citation probe failure |
+| N23 | Valid parent, recognized source citation inside a multiline fence | Apply live-source and branch-scope checks; reject missing files, nonexistent lines or out-of-scope paths with zero comment POSTs | filing governance fenced-citation cases |
 
 The action guard classifies every body and requires nonempty strict extraction
 for each bare candidate. Quoted members stay opaque during classification;
 only the original body supplies evidence to scope and live-source validation.
 This action publication check is stricter than extraction alone (N13).
 Backtick masking in the classifier spans the complete body, including multiline
-fenced samples; quoted source citations still undergo live-source checks.
+fenced samples. The shared extractor still scans the original body: recognized
+bare or quoted source citations, including those inside fences, undergo
+live-source and branch-scope checks. For example, a fenced `src/$route/a.sh:1`
+sample remains publishable, while a fenced `src/missing.sh:1` fails if that file
+does not exist.
 Commas and semicolons within URL tokens remain URL bytes. A following bare
 source reference requires whitespace and is checked independently.
 
