@@ -196,9 +196,11 @@ validate_verification_manifest() {
 #                     AGENT_TIMEOUT_SECS, AGENT_KILL_GRACE_SECS.
 #
 #   Returns 0 on success (verification.json promoted or no findings to verify),
-#   non-zero on dispatch / validation failure.
+#   non-zero on dispatch / validation failure or parent interruption (signal
+#   exit code). Rechecks cancellation after preparation before agent admission.
 run_verifier() {
   local run_id="${1:-}"
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if [[ -z "$run_id" ]]; then
     echo "run_verifier: missing run_id" >&2
     return 2
@@ -294,6 +296,9 @@ run_verifier() {
   # via a callback function. Mirrors the _FILING_AGENT_CALLBACK pattern used
   # by lib/filing.sh and makes verifier tests possible without real agent
   # invocations (per CLAUDE.md::Tests, real models are forbidden in tests).
+  # Prompt composition can return successfully after a parent signal.
+  # Neither the test callback nor the real model may start after cancellation.
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if [[ -n "${_VERIFIER_AGENT_CALLBACK:-}" ]] && declare -F "${_VERIFIER_AGENT_CALLBACK}" >/dev/null 2>&1; then
     agent_output="$("${_VERIFIER_AGENT_CALLBACK}" "$run_id" "$prompt_text")" || {
       echo "run_verifier: verifier callback failed" >&2
