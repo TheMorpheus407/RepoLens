@@ -1947,7 +1947,8 @@ resolve_run_exit_code() {
 # summary.json's stopped_reason; when that is empty (e.g. a summary-write race or
 # a sentinel dropped without a stop reason) it falls back to whichever abort
 # sentinel is present so the attempt entry is never blank while the run clearly
-# aborted. Reads SUMMARY_FILE + the LOG_BASE sentinels; no side effects.
+# aborted. If persistence failed, retain the parent-memory failure reason.
+# Reads SUMMARY_FILE + the LOG_BASE sentinels; no side effects.
 resolve_why_stopped() {
   local reason
   reason="$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || printf '')"
@@ -1975,7 +1976,7 @@ resolve_why_stopped() {
     esac
     return 0
   fi
-  printf ''
+  printf '%s' "${ROUNDS_FAILURE_REASON:-}"
 }
 
 apply_rate_limit_abort_final_state() {
@@ -2628,9 +2629,9 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
   rm -f "$LOG_BASE/.systemic-failure-abort"
   clear_stop_reason "$SUMMARY_FILE"
 fi
-# A failed marker write must not leave an old prompt error on a successful retry.
+# A failed marker write must not leave an old execution error on a successful retry.
 if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
-    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" == "prompt-render-failed" ]]; then
+    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed)$ ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
@@ -4660,6 +4661,7 @@ run_lens() {
   if (( prompt_rc != 0 )); then
     log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
     printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+    set_stop_reason "$SUMMARY_FILE" "prompt-render-failed" || true
     record_lens "$SUMMARY_FILE" "$domain" "$lens_id" 0 "prompt-render-failed" 0 0
     return 1
   fi
@@ -4771,6 +4773,7 @@ run_lens() {
       if (( prompt_rc != 0 )); then
         log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
         printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+        set_stop_reason "$SUMMARY_FILE" "prompt-render-failed" || true
         exit_status="prompt-render-failed"
         break
       fi

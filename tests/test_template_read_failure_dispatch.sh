@@ -26,6 +26,7 @@ REAL_CAT="$(command -v cat)"
 export REAL_CAT
 cat > "$TEST_DIR/bin/cat" <<'CAT'
 #!/usr/bin/env bash
+set -uo pipefail
 if [[ "$#" -eq 1 && "$1" == "${FAIL_TEMPLATE:-}" ]]; then
   printf 'Partial template read.'
   exit 42
@@ -34,12 +35,14 @@ exec "$REAL_CAT" "$@"
 CAT
 cat > "$TEST_DIR/bin/codex" <<'AGENT'
 #!/usr/bin/env bash
+set -uo pipefail
 printf 'called\n' >> "$AGENT_CALLS"
 printf 'DONE\n'
 AGENT
 # Every forge command stays in this shim, including auth and label bootstrap.
 cat > "$TEST_DIR/bin/gh" <<'FORGE'
 #!/usr/bin/env bash
+set -uo pipefail
 printf '[]\n'
 FORGE
 chmod +x "$TEST_DIR/bin/"*
@@ -53,7 +56,8 @@ json_matches() { jq -e "$@" >/dev/null; }
 # A failed base read must return no partial prompt, including an actual missing file.
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib/template.sh"
-for template in "$TEST_DIR/missing-base.md" "$SCRIPT_DIR/prompts/_base/audit.md"; do
+mkdir "$TEST_DIR/directory-base"
+for template in "$TEST_DIR/missing-base.md" "$TEST_DIR/directory-base" "$SCRIPT_DIR/prompts/_base/audit.md"; do
   if [[ -f "$template" ]]; then export FAIL_TEMPLATE="$template"; else unset FAIL_TEMPLATE; fi
   rendered="$(compose_prompt "$template" "$SCRIPT_DIR/prompts/lenses/security/injection.md" '' '' audit)"
   render_rc=$?
@@ -64,19 +68,20 @@ unset FAIL_TEMPLATE
 printf 'Plan a small command-line audit tool.\n' > "$TEST_DIR/spec.md"
 
 for mode in audit greenfield; do
-  for sink in local forge; do
+  for sink in local forge blocked-marker; do
     LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-template-$mode-$sink.XXXXXX")" || exit 1
     CASE_DIRS+=("$LOG_BASE")
     RUN_ID="${LOG_BASE#"$SCRIPT_DIR/logs/"}"
     export FAIL_TEMPLATE="$SCRIPT_DIR/prompts/_base/$mode.md"
     export AGENT_CALLS="$LOG_BASE/agent-calls"
+    if [[ "$sink" == blocked-marker ]]; then mkdir "$LOG_BASE/.systemic-failure-abort"; fi
     args=(--mode "$mode" --resume "$RUN_ID" --rounds 1 --depth 1)
     if [[ "$mode" == greenfield ]]; then
       args+=(--spec "$TEST_DIR/spec.md" --focus backlog-planning)
     else
       args+=(--focus injection)
     fi
-    if [[ "$sink" == local ]]; then
+    if [[ "$sink" != forge ]]; then
       args+=(--local --output "$LOG_BASE/output")
     else
       args+=(--forge gh)
@@ -90,6 +95,7 @@ for mode in audit greenfield; do
     check test "$cli_rc" -ne 0
     check test ! -e "$AGENT_CALLS"
     check json_matches '.stopped_reason == "prompt-render-failed" and any(.lenses[]; .status == "prompt-render-failed")' "$LOG_BASE/summary.json"
+    check test ! -e "$LOG_BASE/rounds/round-1/.completed"
     check test ! -s "$LOG_BASE/.completed"
     check json_matches '.state == "failed"' "$LOG_BASE/status.json"
     if [[ "$mode" == audit && "$sink" == local ]]; then
@@ -147,6 +153,18 @@ check test "${REPOLENS_FINAL_STATE:-}" = failed
 check json_matches '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE"
 check test -s "$LOG_BASE/.systemic-failure-abort"
 check test "$(_rounds_agent_abort_reason)" = prompt-render-failed
+
+# Missing templates must use the same diagnostic path, including signal precedence.
+BASE_PROMPTS_DIR="$TEST_DIR/no-templates"
+rm -f "$LOG_BASE/.systemic-failure-abort"
+printf '{"stopped_reason":null}\n' > "$SUMMARY_FILE"
+REPOLENS_FINAL_STATE=interrupted
+run_meta_orchestrator "$TEST_DIR/meta/missing/round-1" "$TEST_DIR/meta/missing/round-2"
+check test "$?" -ne 0
+check test "$REPOLENS_FINAL_STATE" = interrupted
+check json_matches '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE"
+check test -f "$LOG_BASE/.systemic-failure-abort"
+check test ! -e "$AGENT_CALLS"
 
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

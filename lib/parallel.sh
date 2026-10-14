@@ -259,6 +259,8 @@ sem_acquire() {
   while true; do
     (( _REPOLENS_SCOPE_FAILED == 0 )) || return 1
     _parallel_poll_once || return 1
+    # A callback collected while waiting for capacity is authoritative too.
+    (( ${_REPOLENS_WAIT_RC:-0} == 0 )) || return 1
     if _parallel_agent_abort_pending; then
       return 1
     fi

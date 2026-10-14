@@ -384,10 +384,6 @@ run_meta_orchestrator() {
     _rounds_meta_warn "Unable to create round directory for meta-orchestrator handoff"
     return 1
   fi
-  if [[ ! -f "$template_file" ]]; then
-    _rounds_meta_warn "Meta-orchestrator template missing: $template_file"
-    return 1
-  fi
   if ! declare -F compose_prompt >/dev/null 2>&1; then
     _rounds_meta_warn "compose_prompt is not available for meta-orchestrator prompt rendering"
     return 1
@@ -404,6 +400,7 @@ run_meta_orchestrator() {
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
     _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
+    ROUNDS_FAILURE_REASON="prompt-render-failed"
     printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
     set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
     if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
@@ -2233,7 +2230,20 @@ _rounds_agent_abort_reason() {
     return 0
   fi
 
+  if [[ -n "${ROUNDS_FAILURE_REASON:-}" ]]; then
+    printf '%s\n' "$ROUNDS_FAILURE_REASON"
+    return 0
+  fi
   return 1
+}
+
+# Keep a parent-memory fallback when every diagnostic write is unavailable.
+_rounds_record_execution_failure() {
+  if ! ROUNDS_FAILURE_REASON="$(_rounds_agent_abort_reason)"; then
+    ROUNDS_FAILURE_REASON="$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null)" || ROUNDS_FAILURE_REASON=""
+    [[ "$ROUNDS_FAILURE_REASON" == "prompt-render-failed" ]] || ROUNDS_FAILURE_REASON="lens-execution-failed"
+  fi
+  set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON" || true
 }
 
 _rounds_remote_check_master() {
@@ -2390,6 +2400,7 @@ run_rounds() {
     return 2
   fi
 
+  ROUNDS_FAILURE_REASON=""
   eval "lens_list=(\"\${${lens_list_var}[@]}\")"
   lens_total="${TOTAL_LENSES:-${#lens_list[@]}}"
 
@@ -2463,6 +2474,9 @@ run_rounds() {
       if [[ -n "${RESUME_RUN_ID:-}" ]] \
           && ! _rounds_all_lenses_completed "$round_completed_lenses_file" "${active_lens_list[@]}"; then
         log_info "[round $round/$rounds_total] Completed marker has pending lenses for current selection; resuming"
+      elif (( round < rounds_total )) \
+          && { [[ ! -f "$current_round_dir/dispatch.md" ]] || [[ ! -f "$current_round_dir/hypotheses.md" ]]; }; then
+        log_info "[round $round/$rounds_total] Completed marker has a pending meta handoff; resuming"
       else
         log_info "[round $round/$rounds_total] Skipping completed round"
         continue
@@ -2563,6 +2577,7 @@ run_rounds() {
             set_stop_reason "$SUMMARY_FILE" "$abort_reason"
             break
           fi
+          _rounds_record_execution_failure
           if declare -F _cleanup_children >/dev/null 2>&1; then
             _cleanup_children || true
           else
@@ -2575,6 +2590,7 @@ run_rounds() {
 
       if ! wait_all; then
         log_warn "Some lenses exited with errors."
+        _rounds_record_execution_failure
       fi
       if [[ "${_REPOLENS_SCOPE_FAILED:-0}" == 1 ]]; then
         if declare -F _cleanup_children >/dev/null 2>&1; then
@@ -2620,7 +2636,10 @@ run_rounds() {
 
         local_count=$((local_count + 1))
         log_info "--- Lens $local_count/$lens_total ---"
-        run_lens "$lens_entry"
+        if ! run_lens "$lens_entry"; then
+          _rounds_record_execution_failure
+          break
+        fi
       done
     fi
 
@@ -2637,24 +2656,25 @@ run_rounds() {
       return "$round_rc"
     fi
 
+    if (( round < rounds_total )); then
+      META_ORCH_SATURATED=0
+      run_meta_orchestrator "$round" "$((round + 1))"
+      round_rc=$?
+      if (( round_rc != 0 )); then
+        _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+        return "$round_rc"
+      fi
+    fi
+
     mark_round_completed "$round"
     round_rc=$?
     _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
     if (( round_rc != 0 )); then
       return "$round_rc"
     fi
-
-    if (( round < rounds_total )); then
-      META_ORCH_SATURATED=0
-      run_meta_orchestrator "$round" "$((round + 1))"
-      round_rc=$?
-      if (( round_rc != 0 )); then
-        return "$round_rc"
-      fi
-      if [[ "${META_ORCH_SATURATED:-0}" == "1" ]]; then
-        log_info "[round $round] Investigation saturated; skipping remaining rounds"
-        break
-      fi
+    if (( round < rounds_total )) && [[ "${META_ORCH_SATURATED:-0}" == "1" ]]; then
+      log_info "[round $round] Investigation saturated; skipping remaining rounds"
+      break
     fi
   done
 }

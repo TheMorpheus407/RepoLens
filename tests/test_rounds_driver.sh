@@ -640,6 +640,8 @@ echo ""
 echo "Test 9: completed rounds are skipped under resume"
 reset_case "resume-skip"
 ROUND_COMPLETED_BEFORE="1"
+mkdir -p "$LOG_BASE/rounds/round-1"
+touch "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/hypotheses.md"
 run_rounds 2 LENSES
 rc=$?
 assert_eq "resume run exits successfully" "0" "$rc"
@@ -652,15 +654,15 @@ assert_eq "resume skip marks only the newly completed round" \
           "$(join_by " " "${MARKED_ROUNDS[@]}")"
 
 echo ""
-echo "Test 10: wait_all failure warns but does not fail the round without a rate-limit marker"
+echo "Test 10: wait_all failure stops the round without a rate-limit marker"
 reset_case "wait-all-warning"
 PARALLEL=true
 WAIT_ALL_RC=42
 run_rounds 1 LENSES
 rc=$?
-assert_eq "wait_all non-zero preserves current non-fatal behavior" "0" "$rc"
+assert_eq "wait_all non-zero is authoritative" "1" "$rc"
 assert_contains "wait_all non-zero logs a warning" "Some lenses exited with errors." "$(join_by " " "${LOG_LINES[@]}")"
-assert_eq "wait_all non-zero still marks the round complete" "1" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+assert_eq "wait_all non-zero leaves the round incomplete" "" "$(join_by " " "${MARKED_ROUNDS[@]}")"
 
 echo ""
 echo "Test 10b: lifecycle infrastructure failures do not complete rounds"
@@ -693,7 +695,7 @@ assert_eq "meta-orchestrator failure stops before round 2 dispatch" \
           "security/injection quality/dead-code" \
           "$(join_by " " "${RUN_LENS_CALLS[@]}")"
 assert_eq "meta-orchestrator is called once before failure" "1->2" "$(join_by " " "${META_CALLS[@]}")"
-assert_eq "meta-orchestrator failure still leaves completed round marked" "1" "$(join_by " " "${MARKED_ROUNDS[@]}")"
+assert_eq "meta-orchestrator failure leaves round incomplete" "" "$(join_by " " "${MARKED_ROUNDS[@]}")"
 
 echo ""
 echo "Test 12: sequential max-issues skip records only incomplete remaining lenses"
@@ -726,8 +728,8 @@ assert_eq "mark_round_completed failure runs only the first round" \
 assert_eq "mark_round_completed failure attempts to mark the finished round" \
           "1" \
           "$(join_by " " "${MARKED_ROUNDS[@]}")"
-assert_eq "mark_round_completed failure does not call meta orchestrator" \
-          "" \
+assert_eq "mark_round_completed failure follows required meta handoff" \
+          "1->2" \
           "$(join_by " " "${META_CALLS[@]}")"
 assert_eq "mark_round_completed failure restores run-level completed_lenses_file" \
           "$LOG_BASE/.completed" \

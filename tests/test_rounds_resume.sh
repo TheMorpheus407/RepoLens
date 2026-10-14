@@ -234,6 +234,8 @@ reset_case "partial-round2"
 TOTAL_LENSES=${#FIXTURE_LENSES[@]}
 init_run_layout "$RUN_ID" 3 "${#FIXTURE_LENSES[@]}" "${FIXTURE_LENSES[@]}"
 finalize_round "$RUN_ID" 1
+# A completed non-final round includes both required handoff artifacts.
+touch "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/hypotheses.md"
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${FIXTURE_LENSES[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
 printf '%s\n%s\n' "${FIXTURE_LENSES[0]}" "${FIXTURE_LENSES[1]}" > "$LOG_BASE/.rounds/round-2.lenses.completed"
@@ -262,6 +264,8 @@ LENSES2=("security/injection" "security/xss-csrf")
 TOTAL_LENSES=${#LENSES2[@]}
 init_run_layout "$RUN_ID" 2 "${#LENSES2[@]}" "${LENSES2[@]}"
 finalize_round "$RUN_ID" 1
+# A completed non-final round includes both required handoff artifacts.
+touch "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/hypotheses.md"
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${LENSES2[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
 RESUME_RUN_ID="$RUN_ID"
@@ -285,6 +289,8 @@ LENSES3=("security/injection" "security/xss-csrf")
 TOTAL_LENSES=${#LENSES3[@]}
 init_run_layout "$RUN_ID" 2 "${#LENSES3[@]}" "${LENSES3[@]}"
 finalize_round "$RUN_ID" 1
+# A completed non-final round includes both required handoff artifacts.
+touch "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/hypotheses.md"
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${LENSES3[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
 # Round 2 dispatch was written at the end of round 1 by the prior run; zero

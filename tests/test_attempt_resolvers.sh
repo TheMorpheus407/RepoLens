@@ -131,6 +131,7 @@ reset_state() {
         "$LOG_BASE/.agent-no-progress-abort" \
         "$LOG_BASE/.systemic-failure-abort" \
         "$SUMMARY_FILE"
+  ROUNDS_FAILURE_REASON=""
   REPOLENS_FINAL_STATE="finished"
   REPOLENS_INTERRUPT_EXIT_CODE="130"
   RUN_ROUNDS_RC="0"
@@ -329,6 +330,25 @@ echo "resolve_why_stopped: clean run yields an empty why_stopped"
 reset_state
 assert_eq "no stopped_reason, no sentinel, not interrupted -> empty string" \
   "" "$(resolve_why_stopped)"
+
+reset_state
+ROUNDS_FAILURE_REASON="lens-execution-failed"
+RUN_ROUNDS_RC=1
+assert_eq "unpersisted callback failure retains attempt detail" \
+  "lens-execution-failed" "$(resolve_why_stopped)"
+assert_eq "unpersisted callback failure keeps nonzero process exit" \
+  "1" "$(resolve_run_exit_code)"
+REPOLENS_FINAL_STATE=interrupted
+REPOLENS_INTERRUPT_EXIT_CODE=143
+assert_eq "signal reason precedes in-memory callback fallback" \
+  "interrupted-sigterm" "$(resolve_why_stopped)"
+assert_eq "signal exit precedes callback error" "143" "$(resolve_run_exit_code)"
+reset_state
+ROUNDS_FAILURE_REASON="prompt-render-failed"
+: > "$LOG_BASE/.rate-limit-abort"
+assert_eq "rate-limit reason precedes in-memory prompt fallback" \
+  "rate-limit" "$(resolve_why_stopped)"
+assert_eq "rate-limit exit precedes callback error" "3" "$(resolve_run_exit_code)"
 
 echo ""
 echo "Results: $PASS/$TOTAL passed, $FAIL failed"
