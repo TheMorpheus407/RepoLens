@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Stop lens and meta agent dispatch when a base template cannot be read, discard partial reads, and retain failed lens status for retry with `--resume` (review of #427/#429, #428).
+
 - Reject unsupported file-like citations in cross-link actions including conventional root files and references alongside valid anchors, even when independent parent evidence is valid. Preserve citation-free prose, opaque URLs, comma-terminated timestamps, and backtick samples across lines when they contain no recognized source citations. Recognized citations inside fences still undergo live-source and branch-scope checks (review of #418, #437).
 
 - Reject unsupported bare citation tokens and malformed comma/semicolon lists as a whole, preventing unrelated suffix files from validating. Malformed lists containing citations fail validation even with a separate valid anchor or a failed alternative formatting interpretation. Preserve nested formatting around lists and their members, validate supporting references in mixed bare/backtick lists, and prevent excluded inline spans from joining into fabricated paths (review of #418, #436).

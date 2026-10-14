@@ -402,7 +402,16 @@ run_meta_orchestrator() {
   fi
 
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
-  prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"
+  if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
+    _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
+    printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+    set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
+      # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
+      REPOLENS_FINAL_STATE="failed"
+    fi
+    return 1
+  fi
   printf '%s\n' "$prompt" > "$prompt_path" || return 1
 
   log_info "[round $round] Running meta-orchestrator for round $next_round"
@@ -2196,7 +2205,7 @@ _rounds_agent_abort_reason() {
     local systemic_reason
     systemic_reason="$(head -n 1 "$LOG_BASE/.systemic-failure-abort" 2>/dev/null || true)"
     case "$systemic_reason" in
-      auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error)
+      auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error|prompt-render-failed)
         printf '%s\n' "$systemic_reason"
         ;;
       *)
