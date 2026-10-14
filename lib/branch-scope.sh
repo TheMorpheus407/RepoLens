@@ -21,7 +21,9 @@
 # bare citations allow '+' mid-path (e.g. src/routes/+page.svelte) and require
 # a path separator/extension or a conventional root file. A bare token carrying
 # unsupported characters is rejected whole after trimming prose delimiters;
-# punctuation inside a token cannot make its suffix a citation.
+# punctuation inside a token cannot make its suffix a citation. Adjacent
+# comma/semicolon lists are accepted only if every nonempty member is valid;
+# paired Markdown emphasis and outer prose punctuation are supported.
 # The complete remaining token must match the bare path grammar to become
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
@@ -33,16 +35,55 @@ repolens_extract_citations() {
       [[ "$path" == *://* || "$path" =~ ^[0-9:]+$ ]] && continue
       printf '%s\n' "$token"
     done < <(grep -oE '`[^`]+:[0-9]+(-[0-9]+)?`' <<< "$body" | sed 's/^`//; s/`$//')
-    while IFS= read -r token; do
-      path="${token%:*}"
-      case "$path" in
-        */*|*.*|Makefile|Dockerfile|Containerfile|Jenkinsfile|LICENSE|README|Gemfile|Rakefile|Procfile)
-          printf '%s\n' "$token" ;;
-      esac
-    done < <(sed -E 's#https?://[^[:space:]<>`]+##g; s/`[^`]*`//g' <<< "$body" \
-      | grep -oE '[^[:space:],;]+' \
-      | sed -E 's/^[([{"]+//; s/[])}."]+$//' \
-      | grep -E '^[A-Za-z_./-][A-Za-z0-9_+./-]*:[0-9]+(-[0-9]+)?$')
+    # Mask excluded spans with an unsupported character instead of deleting
+    # them: surrounding text must never join into a fabricated bare path.
+    sed -E 's#https?://[^[:space:]<>`]+#@#g; s/`[^`]*`/@/g' <<< "$body" \
+      | grep -oE '[^[:space:]]+' \
+      | awk '
+        function normalize(value, previous, first, last) {
+          do {
+            previous = value
+            sub(/^[([{]+/, "", value)
+            sub(/[])}.:!?]+$/, "", value)
+            first = substr(value, 1, 1)
+            last = substr(value, length(value), 1)
+            if (length(value) > 4 && substr(value, 1, 2) == "~~" &&
+                substr(value, length(value) - 1) == "~~") {
+              value = substr(value, 3, length(value) - 4)
+            } else if (length(value) > 2 &&
+                ((first == last && index("*_\042\047", first)) ||
+                 (first == "<" && last == ">"))) {
+              value = substr(value, 2, length(value) - 2)
+            }
+          } while (value != previous)
+          return value
+        }
+        function citation(value, path) {
+          if (value !~ /^[A-Za-z_./-][A-Za-z0-9_+./-]*:[0-9]+(-[0-9]+)?$/)
+            return 0
+          path = value
+          sub(/:[0-9]+(-[0-9]+)?$/, "", path)
+          return path ~ /[\/.]/ ||
+            path ~ /^(Makefile|Dockerfile|Containerfile|Jenkinsfile|LICENSE|README|Gemfile|Rakefile|Procfile)$/
+        }
+        function citation_list(value, members, count, i, member, result) {
+          count = split(value, members, /[,;]/)
+          result = ""
+          for (i = 1; i <= count; i++) {
+            if (members[i] == "") continue
+            member = normalize(members[i])
+            if (!citation(member)) return ""
+            result = result member "\n"
+          }
+          return result
+        }
+        {
+          result = citation_list($0)
+          # Formatting may enclose the entire list rather than each member.
+          if (result == "") result = citation_list(normalize($0))
+          printf "%s", result
+        }
+      '
   } | sort -u
 }
 

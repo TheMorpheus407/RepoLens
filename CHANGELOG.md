@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Reject unsupported bare citation tokens at explicit prose boundaries, preventing `$`, `!`, and other unsupported path characters from validating an unrelated suffix file (review of #418).
+- Reject unsupported bare citation tokens and malformed comma/semicolon lists as a whole, preventing unrelated suffix files from validating. Preserve outer Markdown/prose formatting and prevent excluded inline spans from joining into fabricated paths (review of #418, #436).
 
 - Reuse one fresh open-issue snapshot per reopen-suggestion enact pass, including lookup failures, while preserving comment actions, exact-title deduplication, creation budgets, and receipt verification (#423).
 - Use a short, dedicated scratch path for parallel filing test fixtures, and exercise recursion guards with isolated suites that verify skipped meta-tests, failure reporting, and exit status (#426).

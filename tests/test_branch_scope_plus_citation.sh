@@ -308,4 +308,89 @@ quoted_bad="$(repolens_extract_citations 'See `src/routes/!page.svelte:1`')"
 assert_has_line "backticks preserve punctuation in a complete path" \
   'src/routes/!page.svelte:1' "$quoted_bad"
 
+echo ""
+echo "=== Case 12: formatted citations remain visible to both consumers ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for formatted in "'page.svelte:1'" '**page.svelte:1**' '*page.svelte:1*' \
+    '_page.svelte:1_' '__page.svelte:1__' '~~page.svelte:1~~' \
+    '<page.svelte:1>' 'page.svelte:1:' 'page.svelte:1!' 'page.svelte:1?' '("**page.svelte:1**")'; do
+  assert_eq "$formatted extracts the complete citation" 'page.svelte:1' \
+    "$(repolens_extract_citations "See $formatted")"
+  branch_scope_verify_body "$formatted" >/dev/null 2>&1
+  assert_success "$formatted passes scope for its actual path" "$?"
+  formatted_entry="$(jq -n --arg body "$formatted" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_C" "$formatted_entry" >/dev/null 2>&1
+  assert_success "$formatted verifies the actual line" "$?"
+
+  # A formatted supporting citation must not disappear behind a valid anchor.
+  supporting="${formatted//page.svelte:1/src\/routes\/+page.svelte:999}"
+  mixed_body="page.svelte:1 and $supporting"
+  branch_scope_verify_body "$mixed_body" >/dev/null 2>&1
+  assert_failure "$formatted cannot hide an out-of-scope supporting path" "$?"
+  mixed_entry="$(jq -n --arg body "$mixed_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$mixed_entry" >/dev/null 2>&1
+  assert_failure "$formatted cannot hide an out-of-range supporting line" "$?"
+  missing="${formatted//page.svelte:1/src\/missing.sh:1}"
+  missing_entry="$(jq -n --arg body "page.svelte:1 and $missing" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$missing_entry" >/dev/null 2>&1
+  assert_failure "$formatted cannot hide a missing supporting file" "$?"
+done
+
+echo ""
+echo "=== Case 13: separators cannot expose an unsupported path suffix ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for bad_token in 'src/routes/,page.svelte:1' 'src/routes/;page.svelte:1' \
+    'src/routes/,;page.svelte:1' 'src/routes/,**page.svelte:1**' \
+    'page.svelte:1,src/routes/;page.svelte:1' \
+    '~page.svelte:1~' '**src/routes/*page.svelte:1**' "'src/routes/!page.svelte:1'"; do
+  assert_eq "$bad_token yields no suffix citation" "" \
+    "$(repolens_extract_citations "$bad_token")"
+  branch_scope_verify_body "$bad_token" >/dev/null 2>&1
+  assert_failure "$bad_token cannot pass scope using the root twin" "$?"
+  bad_entry="$(jq -n --arg body "$bad_token" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_C" "$bad_entry" >/dev/null 2>&1
+  assert_failure "$bad_token cannot verify using the root twin" "$?"
+done
+for list in 'page.svelte:1,src/routes/+page.svelte:2' \
+    'page.svelte:1;src/routes/+page.svelte:2' \
+    "'page.svelte:1',**src/routes/+page.svelte:2**" \
+    '(page.svelte:1,src/routes/+page.svelte:2)' \
+    '**page.svelte:1,src/routes/+page.svelte:2**' \
+    'page.svelte:1,;'; do
+  expected='page.svelte:1'
+  if [[ "$list" == *src/routes/* ]]; then
+    expected="$(printf 'page.svelte:1\nsrc/routes/+page.svelte:2')"
+  fi
+  assert_eq "$list preserves complete citation-list members" "$expected" \
+    "$(repolens_extract_citations "$list")"
+done
+
+echo ""
+echo "=== Case 14: excluded inline spans cannot fabricate a bare path ==="
+printf '["page.svelte","src/routes/+page.svelte"]\n' > "$SCOPE_FILE"
+for fabricated in 'page.svelte:1`note`' 'src/routes/`note`+page.svelte:1' \
+    'page.svelte:1https://example.com/note'; do
+  assert_eq "$fabricated cannot join text around an excluded span" "" \
+    "$(repolens_extract_citations "$fabricated")"
+  branch_scope_verify_body "$fabricated" >/dev/null 2>&1
+  assert_failure "$fabricated cannot pass scope with a fabricated path" "$?"
+  fabricated_entry="$(jq -n --arg body "$fabricated" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$fabricated_entry" >/dev/null 2>&1
+  assert_failure "$fabricated cannot verify a fabricated path" "$?"
+done
+# Unsupported filename characters remain usable in complete backtick citations.
+for separator in ',' ';'; do
+  quoted_path="src/routes/${separator}page.svelte"
+  printf 'actual separator filename\n' > "$PROJECT_A/$quoted_path"
+  printf '["%s"]\n' "$quoted_path" > "$SCOPE_FILE"
+  quoted_body="\`$quoted_path:1\`"
+  assert_eq "quoted $separator filename remains complete" "$quoted_path:1" \
+    "$(repolens_extract_citations "$quoted_body")"
+  branch_scope_verify_body "$quoted_body" >/dev/null 2>&1
+  assert_success "quoted $separator filename passes its own scope" "$?"
+  quoted_entry="$(jq -n --arg body "$quoted_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$quoted_entry" >/dev/null 2>&1
+  assert_success "quoted $separator filename verifies its actual source" "$?"
+done
+
 finish
