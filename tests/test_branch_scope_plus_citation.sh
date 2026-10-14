@@ -474,4 +474,59 @@ assert_eq "malformed evidence remains preserved for inspection" \
 assert_eq "quarantine records the malformed-list reason" 'malformed citation list in body' \
   "$(cat "$TMP/malformed-findings/invalid.md.out-of-scope.reason")"
 
+echo ""
+echo "=== Case 17: failed whole-list normalization preserves malformed evidence ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for separator in ',' ';'; do
+  for format in "'%s'" '"%s"' '*%s*' '**%s**' '_%s_' '__%s__' '~~%s~~' '<%s>'; do
+    supporting_path='src/missing.sh:1'
+    supporting="${format//%s/$supporting_path}"
+    notes="${format//%s/notes}"
+    for malformed in "$supporting$separator$notes" "$notes$separator$supporting"; do
+      malformed_body="page.svelte:1 and $malformed"
+      repolens_extract_citations "$malformed_body" >/dev/null 2>&1
+      assert_failure "$malformed retains an extraction error after normalization" "$?"
+      branch_scope_verify_body "$malformed_body" >/dev/null 2>&1
+      assert_failure "$malformed cannot hide out-of-scope evidence behind an anchor" "$?"
+      malformed_entry="$(jq -n --arg body "$malformed_body" '{body:$body}')"
+      filing_verify_cluster_citations "$PROJECT_A" "$malformed_entry" >/dev/null 2>&1
+      assert_failure "$malformed cannot hide a missing supporting file" "$?"
+    done
+  done
+  for supporting in '**src/routes/+page.svelte:999**' '**`src/missing.sh:1`**'; do
+    malformed_body="page.svelte:1 and $supporting${separator}**notes**"
+    repolens_extract_citations "$malformed_body" >/dev/null 2>&1
+    assert_failure "$supporting reports malformed supporting evidence" "$?"
+    malformed_entry="$(jq -n --arg body "$malformed_body" '{body:$body}')"
+    filing_verify_cluster_citations "$PROJECT_A" "$malformed_entry" >/dev/null 2>&1
+    assert_failure "$supporting cannot bypass line/quoted-file checks" "$?"
+  done
+
+  # The first interpretation sees an unformatted middle citation and unmatched
+  # outer wrappers. A valid whole-list interpretation must still be accepted.
+  printf '["page.svelte","src/routes/+page.svelte","scope/file.sh"]\n' > "$SCOPE_FILE"
+  expected="$(printf 'page.svelte:1\nscope/file.sh:1\nsrc/routes/+page.svelte:2')"
+  for format in "'%s'" '"%s"' '*%s*' '**%s**' '_%s_' '__%s__' '~~%s~~' '<%s>'; do
+    list_body="page.svelte:1${separator}src/routes/+page.svelte:2${separator}scope/file.sh:1"
+    list="${format//%s/$list_body}"
+    extracted="$(repolens_extract_citations "$list")"
+    assert_success "$list accepts complete whole-list formatting" "$?"
+    assert_eq "$list retains all three citation identities" "$expected" "$extracted"
+    branch_scope_verify_body "$list" >/dev/null 2>&1
+    assert_success "$list verifies every allowlisted path" "$?"
+    formatted_entry="$(jq -n --arg body "$list" '{body:$body}')"
+    filing_verify_cluster_citations "$PROJECT_A" "$formatted_entry" >/dev/null 2>&1
+    assert_success "$list verifies all actual sources" "$?"
+  done
+  printf '["page.svelte"]\n' > "$SCOPE_FILE"
+done
+
+malformed_body='page.svelte:1 and **src/missing.sh:1**,**notes**'
+printf '%s\n' "$malformed_body" > "$TMP/malformed-findings/formatted.md"
+branch_scope_filter_directory "$TMP/malformed-findings"
+assert_eq "formatted malformed evidence is preserved verbatim" "$malformed_body" \
+  "$(cat "$TMP/malformed-findings/formatted.md.out-of-scope" 2>/dev/null)"
+assert_eq "formatted malformed evidence retains its rejection reason" 'malformed citation list in body' \
+  "$(cat "$TMP/malformed-findings/formatted.md.out-of-scope.reason" 2>/dev/null)"
+
 finish

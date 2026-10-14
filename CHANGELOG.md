@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Reject unsupported bare citation tokens and malformed comma/semicolon lists as a whole, preventing unrelated suffix files from validating. Malformed lists containing citations fail validation even with a separate valid anchor. Preserve outer Markdown/prose formatting, validate supporting references in mixed bare/backtick lists, and prevent excluded inline spans from joining into fabricated paths (review of #418, #436).
+- Reject unsupported bare citation tokens and malformed comma/semicolon lists as a whole, preventing unrelated suffix files from validating. Malformed lists containing citations fail validation even with a separate valid anchor or a failed alternative formatting interpretation. Preserve outer Markdown/prose formatting, validate supporting references in mixed bare/backtick lists, and prevent excluded inline spans from joining into fabricated paths (review of #418, #436).
 
 - Reuse one fresh open-issue snapshot per reopen-suggestion enact pass, including lookup failures, while preserving comment actions, exact-title deduplication, creation budgets, and receipt verification (#423).
 - Use a short, dedicated scratch path for parallel filing test fixtures, and exercise recursion guards with isolated suites that verify skipped meta-tests, failure reporting, and exit status (#426).

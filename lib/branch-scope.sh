@@ -98,7 +98,13 @@ repolens_extract_citations() {
           for (token_index = 1; token_index <= token_count; token_index++) {
             result = citation_list(tokens[token_index])
             # Formatting may enclose the entire list rather than each member.
-            if (!list_valid) result = citation_list(normalize(tokens[token_index]))
+            # Only a valid alternative can supersede a malformed first parse;
+            # another invalid parse must not erase recognized bad evidence.
+            if (!list_valid) {
+              original_malformed = malformed_list
+              result = citation_list(normalize(tokens[token_index]))
+              if (!list_valid && original_malformed) malformed_list = 1
+            }
             if (malformed_list) extraction_failed = 1
             printf "%s", result
           }

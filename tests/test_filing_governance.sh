@@ -272,7 +272,11 @@ check 'NUL cross-link payload is rejected before provider calls' test ! -s "$TMP
 check 'NUL cross-link payload records terminal failure' test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
 
 for malformed_body in 'src/a.sh:1 and src/missing.sh:1,garbage' \
-    'src/a.sh:1,garbage' '`src/a.sh:1`,garbage'; do
+    'src/a.sh:1,garbage' '`src/a.sh:1`,garbage' \
+    'src/a.sh:1 and **src/missing.sh:1**,**notes**' \
+    'src/a.sh:1 and "notes";"src/missing.sh:1"' \
+    'src/a.sh:1 and __src/a.sh:999__,__notes__' \
+    '**`src/a.sh:1`**,**notes**'; do
   fresh
   set_body "$malformed_body"
   run || true
