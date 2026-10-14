@@ -20,26 +20,106 @@
 # Shared citation grammar: backticks support spaces and extensionless paths;
 # bare citations allow '+' mid-path (e.g. src/routes/+page.svelte) and require
 # a path separator/extension or a conventional root file. A bare token carrying
-# any other unsupported character is rejected whole — its suffix never becomes
+# unsupported characters is rejected whole after trimming prose delimiters;
+# punctuation inside a token cannot make its suffix a citation. Adjacent
+# comma/semicolon lists are accepted only if every nonempty member is valid;
+# paired Markdown emphasis and outer prose punctuation are supported.
+# A malformed list containing a recognized citation returns nonzero; callers
+# must reject the body even if other citations were emitted.
+# The complete remaining token must match the bare path grammar to become
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
-  local body="$1" token path
+  local body="$1" token path quoted_marker='quoted'
+  # Use a letter sequence absent from the input. Masking excluded spans with
+  # '@' cannot fabricate that sequence or impersonate a quoted list member.
+  while [[ "$body" == *"$quoted_marker"* ]]; do quoted_marker+='q'; done
+  quoted_marker="@$quoted_marker@"
   {
     while IFS= read -r token; do
       path="${token%:*}"
       [[ "$path" == *://* || "$path" =~ ^[0-9:]+$ ]] && continue
       printf '%s\n' "$token"
     done < <(grep -oE '`[^`]+:[0-9]+(-[0-9]+)?`' <<< "$body" | sed 's/^`//; s/`$//')
-    while IFS= read -r token; do
-      path="${token%:*}"
-      case "$path" in
-        */*|*.*|Makefile|Dockerfile|Containerfile|Jenkinsfile|LICENSE|README|Gemfile|Rakefile|Procfile)
-          printf '%s\n' "$token" ;;
-      esac
-    done < <(sed -E 's#https?://[^[:space:]<>`]+##g; s/`[^`]*`//g' <<< "$body" \
-      | grep -oE '(^|[^A-Za-z0-9_+./@~%#=-])[A-Za-z_./-][A-Za-z0-9_+./-]*:[0-9]+(-[0-9]+)?' \
-      | sed -E 's/^[^A-Za-z_./-]//')
+    # Keep recognized quoted citations as opaque list members, while masking
+    # excluded spans. Neither replacement can join text into a bare path.
+    sed -E -e 's#https?://[^[:space:]<>`]+#@#g' \
+      -e 's#`[^`]*://[^`]*`#@#g' \
+      -e 's/`[0-9:]+:[0-9]+(-[0-9]+)?`/@/g' \
+      -e "s/\`[^\`]+:[0-9]+(-[0-9]+)?\`/$quoted_marker/g" \
+      -e 's/`[^`]*`/@/g' <<< "$body" \
+      | awk -v quoted_marker="$quoted_marker" '
+        function unwrap(value, first, last) {
+          first = substr(value, 1, 1)
+          last = substr(value, length(value), 1)
+          # Peel one layer so a list is retried before member formatting can
+          # be mistaken for another wrapper around the entire list.
+          if (length(value) && index("([{", first))
+            return substr(value, 2)
+          if (length(value) && index("])}.:!?", last))
+            return substr(value, 1, length(value) - 1)
+          if (length(value) > 4 && substr(value, 1, 2) == "~~" &&
+              substr(value, length(value) - 1) == "~~")
+            return substr(value, 3, length(value) - 4)
+          if (length(value) > 2 &&
+              ((first == last && index("*_\042\047", first)) ||
+               (first == "<" && last == ">")))
+            return substr(value, 2, length(value) - 2)
+          return value
+        }
+        function normalize(value, previous) {
+          do {
+            previous = value
+            value = unwrap(value)
+          } while (value != previous)
+          return value
+        }
+        function citation(value, path) {
+          if (value !~ /^[A-Za-z_./-][A-Za-z0-9_+./-]*:[0-9]+(-[0-9]+)?$/)
+            return 0
+          path = value
+          sub(/:[0-9]+(-[0-9]+)?$/, "", path)
+          return path ~ /[\/.]/ ||
+            path ~ /^(Makefile|Dockerfile|Containerfile|Jenkinsfile|LICENSE|README|Gemfile|Rakefile|Procfile)$/
+        }
+        function citation_list(value, members, count, i, member, result, invalid, recognized) {
+          count = split(value, members, /[,;]/)
+          result = ""
+          invalid = recognized = 0
+          for (i = 1; i <= count; i++) {
+            if (members[i] == "") continue
+            member = normalize(members[i])
+            # Already emitted by the quoted branch. Only a whole member
+            # qualifies; embedded markers still invalidate the bare token.
+            if (member == quoted_marker || citation(member)) {
+              recognized = 1
+              if (member != quoted_marker) result = result member "\n"
+            } else invalid = 1
+          }
+          list_valid = !invalid
+          malformed_list = count > 1 && recognized && invalid
+          return invalid ? "" : result
+        }
+        {
+          token_count = split($0, tokens, /[[:space:]]+/)
+          for (token_index = 1; token_index <= token_count; token_index++) {
+            value = tokens[token_index]
+            token_malformed = 0
+            do {
+              result = citation_list(value)
+              if (list_valid) break
+              if (malformed_list) token_malformed = 1
+              previous = value
+              value = unwrap(value)
+            } while (value != previous)
+            # A complete interpretation wins; unsuccessful interpretations
+            # retain every recognized malformed-list error across layers.
+            if (!list_valid && token_malformed) extraction_failed = 1
+            printf "%s", result
+          }
+        }
+        END { exit extraction_failed ? 1 : 0 }
+      '
   } | sort -u
 }
 
@@ -51,7 +131,10 @@ branch_scope_verify_body() {
     printf 'branch scope missing or invalid\n'
     return 1
   fi
-  citations="$(repolens_extract_citations "$body")"
+  if ! citations="$(repolens_extract_citations "$body")"; then
+    printf 'malformed citation list in body\n'
+    return 1
+  fi
   [[ -n "$citations" ]] || { printf 'branch finding has no file:line citation\n'; return 1; }
   while IFS= read -r path; do
     path="${path%:*}"

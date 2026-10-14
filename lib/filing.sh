@@ -218,13 +218,13 @@ filing_verify_cluster_citations() {
     return 1
   fi
 
-  # Extract citations of the form `path:N` or `path:N-M`. The path component
-  # accepts letters/digits/_/-/./ slash, must contain at least one '/' or
-  # '.' to avoid trapping things like `step:1`, and the line number must be
-  # numeric. Use a temporary while loop with grep -oE so each match is
-  # processed independently.
+  # The shared extractor preserves complete paths and formatted citations.
+  # A malformed list is a body-level failure, even with another valid anchor.
   local citations
-  citations="$(repolens_extract_citations "$body")"
+  if ! citations="$(repolens_extract_citations "$body")"; then
+    printf 'malformed citation list in body\n'
+    return 1
+  fi
 
   if [[ -z "$citations" ]]; then
     printf 'no citations found in body\n'
@@ -559,7 +559,7 @@ _filing_cross_link_enact() {
   local -A seen=()
 
   local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc
-  local evidence reason target response readback title new_number reconcile_done body_json reserve_rc
+  local evidence reason target response readback title new_number reconcile_done body_json reserve_rc action_citations
   local open_issues duplicate open_issues_status=unfetched
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
     [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || continue
@@ -634,7 +634,11 @@ _filing_cross_link_enact() {
       continue
     fi
     # Newly introduced citations in the action itself must also verify.
-    if [[ -n "$(repolens_extract_citations "$body")" ]]; then
+    if ! action_citations="$(repolens_extract_citations "$body")"; then
+      printf 'VERIFICATION_FAILED: malformed citation list in body\n' > "$sentinel_failed"
+      continue
+    fi
+    if [[ -n "$action_citations" ]]; then
       if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" \
           || ! reason="$(branch_scope_verify_body "$body")"; then
         printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$sentinel_failed"

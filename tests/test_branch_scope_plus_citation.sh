@@ -289,4 +289,305 @@ tilde_entry="$(jq -n --arg body "$tilde_body" '{body:$body}')"
 filing_verify_cluster_citations "$PROJECT_C" "$tilde_entry" >/dev/null 2>&1
 assert_failure "citation check rejects '~' citation even when the suffix file exists" "$?"
 
+echo ""
+echo "=== Case 11: unsupported bare token characters cannot validate suffix twins ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for bad_path in 'src/$route/page.svelte' 'src/routes/!page.svelte' \
+    'src/routes/&page.svelte' 'src/routes/?page.svelte' \
+    'src/routes/*page.svelte' 'src/routes/épage.svelte' \
+    'src/routes/[page.svelte' 'src/routes/(page.svelte'; do
+  bad_body="The regression is at $bad_path:1"
+  assert_eq "$bad_path yields no suffix citation" "" "$(repolens_extract_citations "$bad_body")"
+  branch_scope_verify_body "$bad_body" >/dev/null 2>&1
+  assert_failure "$bad_path cannot pass scope using the root twin" "$?"
+  bad_entry="$(jq -n --arg body "$bad_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_C" "$bad_entry" >/dev/null 2>&1
+  assert_failure "$bad_path cannot pass citation verification using the root twin" "$?"
+done
+quoted_bad="$(repolens_extract_citations 'See `src/routes/!page.svelte:1`')"
+assert_has_line "backticks preserve punctuation in a complete path" \
+  'src/routes/!page.svelte:1' "$quoted_bad"
+
+echo ""
+echo "=== Case 12: formatted citations remain visible to both consumers ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for formatted in "'page.svelte:1'" '**page.svelte:1**' '*page.svelte:1*' \
+    '_page.svelte:1_' '__page.svelte:1__' '~~page.svelte:1~~' \
+    '<page.svelte:1>' 'page.svelte:1:' 'page.svelte:1!' 'page.svelte:1?' '("**page.svelte:1**")'; do
+  assert_eq "$formatted extracts the complete citation" 'page.svelte:1' \
+    "$(repolens_extract_citations "See $formatted")"
+  branch_scope_verify_body "$formatted" >/dev/null 2>&1
+  assert_success "$formatted passes scope for its actual path" "$?"
+  formatted_entry="$(jq -n --arg body "$formatted" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_C" "$formatted_entry" >/dev/null 2>&1
+  assert_success "$formatted verifies the actual line" "$?"
+
+  # A formatted supporting citation must not disappear behind a valid anchor.
+  supporting="${formatted//page.svelte:1/src\/routes\/+page.svelte:999}"
+  mixed_body="page.svelte:1 and $supporting"
+  branch_scope_verify_body "$mixed_body" >/dev/null 2>&1
+  assert_failure "$formatted cannot hide an out-of-scope supporting path" "$?"
+  mixed_entry="$(jq -n --arg body "$mixed_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$mixed_entry" >/dev/null 2>&1
+  assert_failure "$formatted cannot hide an out-of-range supporting line" "$?"
+  missing="${formatted//page.svelte:1/src\/missing.sh:1}"
+  missing_entry="$(jq -n --arg body "page.svelte:1 and $missing" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$missing_entry" >/dev/null 2>&1
+  assert_failure "$formatted cannot hide a missing supporting file" "$?"
+done
+
+echo ""
+echo "=== Case 13: separators cannot expose an unsupported path suffix ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for bad_token in 'src/routes/,page.svelte:1' 'src/routes/;page.svelte:1' \
+    'src/routes/,;page.svelte:1' 'src/routes/,**page.svelte:1**' \
+    'page.svelte:1,src/routes/;page.svelte:1' \
+    '~page.svelte:1~' '**src/routes/*page.svelte:1**' "'src/routes/!page.svelte:1'"; do
+  assert_eq "$bad_token yields no suffix citation" "" \
+    "$(repolens_extract_citations "$bad_token")"
+  branch_scope_verify_body "$bad_token" >/dev/null 2>&1
+  assert_failure "$bad_token cannot pass scope using the root twin" "$?"
+  bad_entry="$(jq -n --arg body "$bad_token" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_C" "$bad_entry" >/dev/null 2>&1
+  assert_failure "$bad_token cannot verify using the root twin" "$?"
+done
+for list in 'page.svelte:1,src/routes/+page.svelte:2' \
+    'page.svelte:1;src/routes/+page.svelte:2' \
+    "'page.svelte:1',**src/routes/+page.svelte:2**" \
+    '(page.svelte:1,src/routes/+page.svelte:2)' \
+    '**page.svelte:1,src/routes/+page.svelte:2**' \
+    'page.svelte:1,;'; do
+  expected='page.svelte:1'
+  if [[ "$list" == *src/routes/* ]]; then
+    expected="$(printf 'page.svelte:1\nsrc/routes/+page.svelte:2')"
+  fi
+  assert_eq "$list preserves complete citation-list members" "$expected" \
+    "$(repolens_extract_citations "$list")"
+done
+
+echo ""
+echo "=== Case 14: excluded inline spans cannot fabricate a bare path ==="
+printf '["page.svelte","src/routes/+page.svelte"]\n' > "$SCOPE_FILE"
+for fabricated in 'page.svelte:1`note`' 'src/routes/`note`+page.svelte:1' \
+    'page.svelte:1https://example.com/note'; do
+  assert_eq "$fabricated cannot join text around an excluded span" "" \
+    "$(repolens_extract_citations "$fabricated")"
+  branch_scope_verify_body "$fabricated" >/dev/null 2>&1
+  assert_failure "$fabricated cannot pass scope with a fabricated path" "$?"
+  fabricated_entry="$(jq -n --arg body "$fabricated" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$fabricated_entry" >/dev/null 2>&1
+  assert_failure "$fabricated cannot verify a fabricated path" "$?"
+done
+# Unsupported filename characters remain usable in complete backtick citations.
+for separator in ',' ';'; do
+  quoted_path="src/routes/${separator}page.svelte"
+  printf 'actual separator filename\n' > "$PROJECT_A/$quoted_path"
+  printf '["%s"]\n' "$quoted_path" > "$SCOPE_FILE"
+  quoted_body="\`$quoted_path:1\`"
+  assert_eq "quoted $separator filename remains complete" "$quoted_path:1" \
+    "$(repolens_extract_citations "$quoted_body")"
+  branch_scope_verify_body "$quoted_body" >/dev/null 2>&1
+  assert_success "quoted $separator filename passes its own scope" "$?"
+  quoted_entry="$(jq -n --arg body "$quoted_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$quoted_entry" >/dev/null 2>&1
+  assert_success "quoted $separator filename verifies its actual source" "$?"
+done
+
+echo ""
+echo "=== Case 15: mixed quoted/bare lists validate every supporting citation ==="
+for separator in ',' ';'; do
+  for list in "\`page.svelte:1\`${separator}src/routes/+page.svelte:2" \
+      "src/routes/+page.svelte:2${separator}\`page.svelte:1\`" \
+      "**\`page.svelte:1\`${separator}src/routes/+page.svelte:2**" \
+      "\`src/routes/,page.svelte:1\`${separator}src/routes/+page.svelte:2"; do
+    supporting='src/routes/+page.svelte:2'
+    assert_has_line "$list preserves its bare supporting reference" "$supporting" \
+      "$(repolens_extract_citations "$list")"
+    printf '["page.svelte","src/routes/,page.svelte"]\n' > "$SCOPE_FILE"
+    branch_scope_verify_body "$list" >/dev/null 2>&1
+    assert_failure "$list cannot hide an out-of-scope supporting path" "$?"
+    mixed_entry="$(jq -n --arg body "$list" '{body:$body}')"
+    filing_verify_cluster_citations "$PROJECT_A" "$mixed_entry" >/dev/null 2>&1
+    assert_success "$list verifies both actual sources" "$?"
+    printf '["page.svelte","src/routes/,page.svelte","src/routes/+page.svelte"]\n' > "$SCOPE_FILE"
+    branch_scope_verify_body "$list" >/dev/null 2>&1
+    assert_success "$list passes scope when both paths are allowlisted" "$?"
+
+    for invalid in 'src/missing.sh:1' 'src/routes/+page.svelte:999'; do
+      invalid_list="${list//$supporting/$invalid}"
+      assert_has_line "$invalid_list retains the invalid supporting citation" "$invalid" \
+        "$(repolens_extract_citations "$invalid_list")"
+      invalid_entry="$(jq -n --arg body "$invalid_list" '{body:$body}')"
+      filing_verify_cluster_citations "$PROJECT_A" "$invalid_entry" >/dev/null 2>&1
+      assert_failure "$invalid_list cannot hide invalid supporting evidence" "$?"
+    done
+  done
+done
+
+# A quoted path containing spaces or punctuation is one complete list member.
+printf 'quoted source\n' > "$PROJECT_A/file with spaces"
+mixed_body='`file with spaces:1`,page.svelte:1;`src/routes/;page.svelte:1`'
+assert_eq "quoted spaces and separators preserve all mixed-list members" \
+  "$(printf 'file with spaces:1\npage.svelte:1\nsrc/routes/;page.svelte:1')" \
+  "$(repolens_extract_citations "$mixed_body")"
+
+# Excluded spans and marker-like user text must still reject the complete token.
+for invalid_list in '`note`,page.svelte:1' '`12:30`,page.svelte:1' \
+    '`12:30-40`;page.svelte:1' '`https://example.com/a.sh:1`,page.svelte:1' \
+    '`ssh://example.com/a.sh:1`,page.svelte:1' \
+    '`ftp://example.com/a.sh:1`;page.svelte:1' \
+    '@quoted@,page.svelte:1' '@quoted`note`,page.svelte:1' \
+    'src/`scope/file.sh:1`,page.svelte:1'; do
+  assert_lacks_line "$invalid_list cannot expose a bare suffix" 'page.svelte:1' \
+    "$(repolens_extract_citations "$invalid_list")"
+done
+
+echo ""
+echo "=== Case 16: malformed supporting lists invalidate the whole finding ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for malformed in 'src/missing.sh:1,garbage' 'src/routes/+page.svelte:999;garbage' \
+    'garbage,src/missing.sh:1' '`src/missing.sh:1`,garbage' \
+    '`page.svelte:1`,garbage' '**src/missing.sh:1,garbage**' \
+    'src/routes/,page.svelte:1' 'src/`scope/file.sh:1`,page.svelte:1'; do
+  malformed_body="page.svelte:1 and $malformed"
+  repolens_extract_citations "$malformed_body" >/dev/null 2>&1
+  assert_failure "$malformed reports an extraction error despite a valid anchor" "$?"
+  branch_scope_verify_body "$malformed_body" >/dev/null 2>&1
+  assert_failure "$malformed cannot bypass scope with a separate anchor" "$?"
+  malformed_entry="$(jq -n --arg body "$malformed_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$malformed_entry" >/dev/null 2>&1
+  assert_failure "$malformed cannot bypass live-source checks with a separate anchor" "$?"
+done
+prose_body='page.svelte:1 and ordinary,prose;lists plus step:1,notes'
+branch_scope_verify_body "$prose_body" >/dev/null 2>&1
+assert_success "ordinary prose lists do not invalidate a finding" "$?"
+prose_entry="$(jq -n --arg body "$prose_body" '{body:$body}')"
+filing_verify_cluster_citations "$PROJECT_A" "$prose_entry" >/dev/null 2>&1
+assert_success "ordinary prose lists preserve live-source verification" "$?"
+
+mkdir -p "$TMP/malformed-findings"
+printf 'page.svelte:1 and src/missing.sh:1,garbage\n' > "$TMP/malformed-findings/invalid.md"
+branch_scope_filter_directory "$TMP/malformed-findings"
+assert_eq "malformed evidence remains preserved for inspection" \
+  'page.svelte:1 and src/missing.sh:1,garbage' \
+  "$(cat "$TMP/malformed-findings/invalid.md.out-of-scope")"
+assert_eq "quarantine records the malformed-list reason" 'malformed citation list in body' \
+  "$(cat "$TMP/malformed-findings/invalid.md.out-of-scope.reason")"
+
+echo ""
+echo "=== Case 17: failed whole-list normalization preserves malformed evidence ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for separator in ',' ';'; do
+  for format in "'%s'" '"%s"' '*%s*' '**%s**' '_%s_' '__%s__' '~~%s~~' '<%s>'; do
+    supporting_path='src/missing.sh:1'
+    supporting="${format//%s/$supporting_path}"
+    notes="${format//%s/notes}"
+    for malformed in "$supporting$separator$notes" "$notes$separator$supporting"; do
+      malformed_body="page.svelte:1 and $malformed"
+      repolens_extract_citations "$malformed_body" >/dev/null 2>&1
+      assert_failure "$malformed retains an extraction error after normalization" "$?"
+      branch_scope_verify_body "$malformed_body" >/dev/null 2>&1
+      assert_failure "$malformed cannot hide out-of-scope evidence behind an anchor" "$?"
+      malformed_entry="$(jq -n --arg body "$malformed_body" '{body:$body}')"
+      filing_verify_cluster_citations "$PROJECT_A" "$malformed_entry" >/dev/null 2>&1
+      assert_failure "$malformed cannot hide a missing supporting file" "$?"
+    done
+  done
+  for supporting in '**src/routes/+page.svelte:999**' '**`src/missing.sh:1`**'; do
+    malformed_body="page.svelte:1 and $supporting${separator}**notes**"
+    repolens_extract_citations "$malformed_body" >/dev/null 2>&1
+    assert_failure "$supporting reports malformed supporting evidence" "$?"
+    malformed_entry="$(jq -n --arg body "$malformed_body" '{body:$body}')"
+    filing_verify_cluster_citations "$PROJECT_A" "$malformed_entry" >/dev/null 2>&1
+    assert_failure "$supporting cannot bypass line/quoted-file checks" "$?"
+  done
+
+  # The first interpretation sees an unformatted middle citation and unmatched
+  # outer wrappers. A valid whole-list interpretation must still be accepted.
+  printf '["page.svelte","src/routes/+page.svelte","scope/file.sh"]\n' > "$SCOPE_FILE"
+  expected="$(printf 'page.svelte:1\nscope/file.sh:1\nsrc/routes/+page.svelte:2')"
+  for format in "'%s'" '"%s"' '*%s*' '**%s**' '_%s_' '__%s__' '~~%s~~' '<%s>'; do
+    list_body="page.svelte:1${separator}src/routes/+page.svelte:2${separator}scope/file.sh:1"
+    list="${format//%s/$list_body}"
+    extracted="$(repolens_extract_citations "$list")"
+    assert_success "$list accepts complete whole-list formatting" "$?"
+    assert_eq "$list retains all three citation identities" "$expected" "$extracted"
+    branch_scope_verify_body "$list" >/dev/null 2>&1
+    assert_success "$list verifies every allowlisted path" "$?"
+    formatted_entry="$(jq -n --arg body "$list" '{body:$body}')"
+    filing_verify_cluster_citations "$PROJECT_A" "$formatted_entry" >/dev/null 2>&1
+    assert_success "$list verifies all actual sources" "$?"
+  done
+  printf '["page.svelte"]\n' > "$SCOPE_FILE"
+done
+
+malformed_body='page.svelte:1 and **src/missing.sh:1**,**notes**'
+printf '%s\n' "$malformed_body" > "$TMP/malformed-findings/formatted.md"
+branch_scope_filter_directory "$TMP/malformed-findings"
+assert_eq "formatted malformed evidence is preserved verbatim" "$malformed_body" \
+  "$(cat "$TMP/malformed-findings/formatted.md.out-of-scope" 2>/dev/null)"
+assert_eq "formatted malformed evidence retains its rejection reason" 'malformed citation list in body' \
+  "$(cat "$TMP/malformed-findings/formatted.md.out-of-scope.reason" 2>/dev/null)"
+
+echo ""
+echo "=== Case 18: nested formatting follows the citation behavior table ==="
+# docs/citation-validation.md rows N1-N6: both member orders, both separators,
+# and each outer/member formatting composition must retain every citation.
+formats=("'%s'" '"%s"' '*%s*' '**%s**' '_%s_' '__%s__' '~~%s~~' '<%s>' '(%s)' '[%s]')
+for outer in "${formats[@]}"; do
+  for inner in "${formats[@]}"; do
+    for separator in ',' ';'; do
+      first="${inner//%s/src\/missing.sh:1}"
+      second="${inner//%s/page.svelte:1}"
+      for members in "$first$separator$second" "$second$separator$first"; do
+        list="${outer//%s/$members}"
+        assert_has_line "N1 $list preserves the supporting reference" 'src/missing.sh:1' \
+          "$(repolens_extract_citations "$list")"
+      done
+    done
+  done
+done
+
+# Check real consumers on representative compositions; parser checks above
+# cover the full wrapper cross-product without repeating filesystem work.
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+while IFS='|' read -r row body expected extract_status scope_status live_status; do
+  rc=0
+  extracted="$(repolens_extract_citations "$body")" || rc=$?
+  assert_eq "$row extraction status" "$extract_status" "$rc"
+  if [[ "$expected" != error ]]; then
+    assert_eq "$row complete citations" "${expected//;/$'\n'}" "$extracted"
+  fi
+  rc=0
+  branch_scope_verify_body "$body" >/dev/null 2>&1 || rc=$?
+  assert_eq "$row scope status" "$scope_status" "$rc"
+  rc=0
+  entry="$(jq -n --arg body "$body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$entry" >/dev/null 2>&1 || rc=$?
+  assert_eq "$row live-source status" "$live_status" "$rc"
+done <<'CASES'
+N2|"**page.svelte:1**,**page.svelte:1**"|page.svelte:1|0|0|0
+N3|page.svelte:1 and "**src/missing.sh:1**,**page.svelte:1**"|page.svelte:1;src/missing.sh:1|0|1|1
+N4|"**page.svelte:1**;**src/missing.sh:1**" and page.svelte:1|page.svelte:1;src/missing.sh:1|0|1|1
+N5|page.svelte:1 and <__src/routes/+page.svelte:999__;__page.svelte:1__>|page.svelte:1;src/routes/+page.svelte:999|0|1|1
+N6|page.svelte:1 and ("**src/routes/+page.svelte:2**,**page.svelte:1**")|page.svelte:1;src/routes/+page.svelte:2|0|1|0
+N7|page.svelte:1 and "**src/missing.sh:1**,**notes**"|error|1|1|1
+N8|'__notes__;__src/missing.sh:1__' and page.svelte:1|error|1|1|1
+N9|page.svelte:1 and <**`src/missing.sh:1`**,**notes**>|error|1|1|1
+N10|page.svelte:1 and "**`page.svelte:1`**,**src/missing.sh:1**"|page.svelte:1;src/missing.sh:1|0|1|1
+N11|page.svelte:1 and '**src/routes/;page.svelte:1**'|error|1|1|1
+N12|page.svelte:1 and "**ordinary**,**prose**"|page.svelte:1|0|0|0
+N13|page.svelte:1 and "**src/routes/!page.svelte:1**"|page.svelte:1|0|0|0
+N14|page.svelte:1 and "**src/`note`missing.sh:1**"|page.svelte:1|0|0|1
+CASES
+
+# N15: scope rejection preserves the exact evidence and names the actual path.
+nested_body='page.svelte:1 and "**src/missing.sh:1**,**page.svelte:1**"'
+printf '%s\n' "$nested_body" > "$TMP/malformed-findings/nested.md"
+branch_scope_filter_directory "$TMP/malformed-findings"
+assert_eq "N15 nested evidence is preserved verbatim" "$nested_body" \
+  "$(cat "$TMP/malformed-findings/nested.md.out-of-scope" 2>/dev/null)"
+assert_eq "N15 nested rejection names the supporting path" 'out-of-scope citation: src/missing.sh' \
+  "$(cat "$TMP/malformed-findings/nested.md.out-of-scope.reason" 2>/dev/null)"
+
 finish

@@ -271,6 +271,61 @@ _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
 check 'NUL cross-link payload is rejected before provider calls' test ! -s "$TMP/calls"
 check 'NUL cross-link payload records terminal failure' test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
 
+for malformed_body in 'src/a.sh:1 and src/missing.sh:1,garbage' \
+    'src/a.sh:1,garbage' '`src/a.sh:1`,garbage' \
+    'src/a.sh:1 and **src/missing.sh:1**,**notes**' \
+    'src/a.sh:1 and "notes";"src/missing.sh:1"' \
+    'src/a.sh:1 and __src/a.sh:999__,__notes__' \
+    '**`src/a.sh:1`**,**notes**' \
+    'src/a.sh:1 and "**src/missing.sh:1**,**src/a.sh:1**"' \
+    '"__src/a.sh:1__;__src/a.sh:999__" and src/a.sh:1' \
+    'src/a.sh:1 and <**src/missing.sh:1**,**notes**>' \
+    '"**`src/missing.sh:1`**;**src/a.sh:1**"'; do
+  fresh
+  set_body "$malformed_body"
+  run || true
+  check "malformed list gets a governor failure: $malformed_body" failed
+  check "malformed list cannot reach issue creation: $malformed_body" no_create
+
+  fresh
+  CROSS_LINK_MODE=comment
+  jq --arg body "$malformed_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "malformed action records rejection: $malformed_body" \
+    test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+  check "malformed action cannot reach comment creation: $malformed_body" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+done
+
+# docs/citation-validation.md N16-N19: parent evidence is checked before action
+# evidence; a valid parent never authorizes invalid new supporting references.
+fresh
+CROSS_LINK_MODE=comment
+set_body 'src/a.sh:1 and "**src/missing.sh:1**,**src/a.sh:1**"'
+jq '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:"src/a.sh:1"}]' \
+  "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+_filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+check 'N18 invalid nested parent rejects an otherwise valid action' \
+  test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+check 'N18 invalid nested parent performs zero comment mutations' \
+  test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+
+fresh
+set_body '"**src/a.sh:1**,**src/a.sh:1**"'
+check 'N19 complete nested citations remain publishable' run
+fresh
+CROSS_LINK_MODE=comment
+jq '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:"\"**src/a.sh:1**,**src/a.sh:1**\""}]' \
+  "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+_filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+check 'N19 valid parent and nested action publish exactly one comment' \
+  test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+
 # The tea adapter uses authenticated raw API JSON; its display output has
 # flattened label names and is not a reliable readback contract.
 tea() {
