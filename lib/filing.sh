@@ -457,6 +457,66 @@ _filing_fail() {
   rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
 }
 
+# Emit complete whitespace tokens carrying bare file/line-shaped references.
+# This is only a classifier: the shared extractor decides supported grammar.
+_filing_action_reference_candidates() {
+  awk '
+    # Mask equal-length backtick runs, allowing shorter runs inside a span.
+    # Excluded snippets must neither expose references nor join path bytes.
+    function mask_spans(value, result, start, width, tail, offset, run, content, path) {
+      result = ""
+      while (match(value, /`+/)) {
+        start = RSTART
+        width = RLENGTH
+        result = result substr(value, 1, start - 1)
+        tail = substr(value, start + width)
+        offset = 0
+        while (match(tail, /`+/)) {
+          run = RLENGTH
+          offset += RSTART + run - 1
+          tail = substr(tail, RSTART + run)
+          if (run == width) break
+        }
+        if (run != width) return result substr(value, start)
+        content = substr(value, start + width, offset - width)
+        path = content
+        sub(/:[0-9]+(-[0-9]+)?$/, "", path)
+        # Keep recognized quoted members opaque and valid for list parsing.
+        # This placeholder is only classified, never used as live evidence.
+        if (content ~ /^[^`]+:[0-9]+(-[0-9]+)?$/ &&
+            path !~ /:\/\// && path !~ /^[0-9:]+$/)
+          result = result "`quoted:1`"
+        else result = result "@"
+        value = substr(value, start + width + offset)
+        run = 0
+      }
+      return result value
+    }
+    # Match delimiters across the complete body so multiline excluded spans
+    # cannot expose their inner text as independent action references.
+    { body = body $0 "\n" }
+    END {
+      value = mask_spans(body)
+      gsub(/[[:alpha:]][[:alnum:]+.-]*:\/\/[^[:space:]<>`]+/, "@", value)
+      count = split(value, tokens, /[[:space:]]+/)
+      for (i = 1; i <= count; i++) {
+        members = split(tokens[i], parts, /[,;]/)
+        found = 0
+        for (j = 1; j <= members; j++) {
+          token = parts[j]
+          gsub(/^[([{\042\047*_<>]+|[])}.\042\047:!?*_<>]+$/, "", token)
+          if (token ~ /^[0-9][0-9:\/.TtZz+-]*$/ ||
+              tolower(token) ~ /^[0-9][0-9]?\/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\/[0-9][0-9][0-9][0-9]:[0-9:.z+-]+$/) continue
+          if (token ~ /[\/.][^[:space:]]*:[0-9]+(-[0-9]+)?/ ||
+              token ~ /(^|[^A-Za-z0-9_.\/-])(Makefile|Dockerfile|Containerfile|Jenkinsfile|LICENSE|README|Gemfile|Rakefile|Procfile):[0-9]+/)
+            found = 1
+        }
+        if (found) print tokens[i]
+      }
+    }
+  ' <<< "$1"
+}
+
 # _filing_cross_link_enact <run_id>
 #   Iterate every manifest entry's cross_link_actions[] and enact them via
 #   the forge layer. Idempotent: each (type, issue_number) pair is keyed by
@@ -638,6 +698,28 @@ _filing_cross_link_enact() {
       printf 'VERIFICATION_FAILED: malformed citation list in body\n' > "$sentinel_failed"
       continue
     fi
+    # Classification covers every action, including mixed valid/unsupported
+    # references. Candidates never replace the original validation body.
+    local action_reference_candidates action_reference candidate_citations
+    if ! action_reference_candidates="$(_filing_action_reference_candidates "$body")"; then
+      printf 'VERIFICATION_FAILED: action citation classification failed\n' > "$sentinel_failed"
+      continue
+    fi
+    local unsupported_reference=0
+    while IFS= read -r action_reference; do
+      [[ -n "$action_reference" ]] || continue
+      if ! candidate_citations="$(repolens_extract_citations "$action_reference" | sed '/^quoted:1$/d')"; then
+        printf 'VERIFICATION_FAILED: action citation classification failed\n' > "$sentinel_failed"
+        unsupported_reference=1
+        break
+      fi
+      if [[ -z "$candidate_citations" ]]; then
+        printf 'VERIFICATION_FAILED: unsupported action citation; quote the complete path\n' > "$sentinel_failed"
+        unsupported_reference=1
+        break
+      fi
+    done <<< "$action_reference_candidates"
+    (( unsupported_reference )) && continue
     if [[ -n "$action_citations" ]]; then
       if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" \
           || ! reason="$(branch_scope_verify_body "$body")"; then

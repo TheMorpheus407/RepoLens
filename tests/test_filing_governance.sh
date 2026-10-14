@@ -300,6 +300,141 @@ for malformed_body in 'src/a.sh:1 and src/missing.sh:1,garbage' \
     test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
 done
 
+# Review of #418: independent parent evidence must not turn an unsupported
+# file-like reference in an action into citation-free prose.
+unsupported_home_ref=\~/src/a.sh:1
+for unsupported_body in "$unsupported_home_ref" 'src/$route/a.sh:1' 'src/!a.sh:1' \
+    '@Makefile:999' '+Makefile:1' 'Dockerfile:1abc' \
+    'src/a.sh:1 and ~/src/missing.sh:1' \
+    "${unsupported_home_ref%a.sh:1}missing.sh:1 and src/a.sh:1" \
+    'src/a.sh:1 and @Makefile:999' \
+    'src/a.sh:1 and **src/$route/missing.sh:1**' \
+    '**src/a.sh:1**,**~/src/missing.sh:1**' \
+    '`src/a.sh:1`~/src/missing.sh:1' \
+    '`src/a.sh:1`,~/src/missing.sh:1' \
+    $'```sh\nsrc/$route/a.sh:1\n```\n~/src/missing.sh:1' \
+    'https://example.org/status, ~/src/missing.sh:1' \
+    'https://example.org/status; ~/src/missing.sh:1' \
+    'See `src/missing.sh:1`'; do
+  fresh
+  CROSS_LINK_MODE=comment
+  jq --arg body "$unsupported_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "unsupported action records rejection: $unsupported_body" \
+    test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+  check "unsupported action has no success receipt: $unsupported_body" \
+    test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  check "unsupported action performs zero comment POSTs: $unsupported_body" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+done
+for prose_body in 'Follow-up with no new citations.' \
+    'Observed at 12:30; see https://example.org:8443/status.' \
+    'HTTPS://EXAMPLE.ORG:8443/path' 'Observed at 2026/10/14:12' \
+    'Observed at 2026.10.14T12:30:45Z' \
+    'Observed at [14/Oct/2026:12:30:45+0000]' \
+    'Observed at 2026/10/14:12:30:45+00:00' \
+    'Literal snippet `example/tool:1abc`' \
+    'Observed at 2026.10.14T12:30:45Z, retry succeeded.' \
+    'Observed at [14/Oct/2026:12:30:45+0000], then restarted.' \
+    'Literal snippet ``example/tool:1abc``' \
+    'Literal snippet ```example/tool:1abc```' \
+    'Literal snippet ``example/`tool`:1abc``' \
+    $'Fenced sample:\n```sh\nsrc/$route/a.sh:1\n```' \
+    $'Fenced sample:\n````\nexample/`tool`:1abc\n```\nsrc/$route/a.sh:1\n````' \
+    $'Multiline span ``example/tool:1abc\ncontinued``' \
+    $'Fenced source citation:\n```sh\nsrc/a.sh:1\n```' \
+    'URL with punctuation https://example.org/status,~/src/missing.sh:1' \
+    'URL with punctuation https://example.org/status;~/src/missing.sh:1' \
+    'src/a.sh:1' '**src/a.sh:1**' '"**src/a.sh:1**,**src/a.sh:1**"' \
+    'See `src/with spaces.sh:1`' \
+    'See `src/with,semicolon;.sh:1`' \
+    'See ``src/a.sh:1``' \
+    '`src/a.sh:1`,src/a.sh:1' 'src/a.sh:1;`src/with spaces.sh:1`' \
+    '<**`src/with,semicolon;.sh:1`**,**src/a.sh:1**>'; do
+  fresh
+  CROSS_LINK_MODE=comment
+  cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/with spaces.sh"
+  cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/with,semicolon;.sh"
+  jq --arg body "$prose_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "supported action remains publishable: $prose_body" \
+    test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  check "supported action posts exactly once: $prose_body" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+  check "action preserves exact body: $prose_body" \
+    jq -e --arg body "$prose_body" '.body == $body' "$TMP/comment.json"
+done
+
+# N23: classifier masking does not exempt recognized fenced citations from
+# validation of the original body. The parent evidence remains valid in scope.
+for fenced_case in missing line scope; do
+  fresh
+  CROSS_LINK_MODE=comment
+  fenced_reference='src/a.sh:1'
+  case "$fenced_case" in
+    missing) fenced_reference='src/missing.sh:1'; fenced_reason='file not found' ;;
+    line) fenced_reference='src/a.sh:2'; fenced_reason='line exceeds file length' ;;
+    scope)
+      MODE=branch-review BRANCH_SCOPE_FILE="$TMP/scope.json"
+      printf '["src/a.sh"]\n' > "$BRANCH_SCOPE_FILE"
+      cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/support.sh"
+      fenced_reference='src/support.sh:1'; fenced_reason='out-of-scope citation'
+      ;;
+  esac
+  printf -v fenced_body 'Fenced sample:\n```sh\n%s\n```' "$fenced_reference"
+  check "N23 classifier masks fenced sample: $fenced_case" \
+    test -z "$(_filing_action_reference_candidates "$fenced_body")"
+  check "N23 shared extractor retains fenced citation: $fenced_case" \
+    test "$(repolens_extract_citations "$fenced_body")" = "$fenced_reference"
+  jq --arg body "$fenced_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "N23 fenced citation fails for the expected reason: $fenced_case" \
+    grep -Fq "$fenced_reason" "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+  check "N23 fenced citation has no success receipt: $fenced_case" \
+    test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  check "N23 fenced citation performs zero comment POSTs: $fenced_case" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+done
+
+fresh
+CROSS_LINK_MODE=comment
+jq --arg body 'A citation-free follow-up.' \
+  '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+  "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+probe_bin="$TMP/citation-probe-bin"
+probe_real_awk="$(command -v awk)"
+mkdir -p "$probe_bin"
+cat > "$probe_bin/awk" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  *'print "candidate"'*|*'if (found) print tokens[i]'*) : > "$REPOLENS_TEST_PROBE_CALLED"; exit 2 ;;
+esac
+exec "$REPOLENS_TEST_REAL_AWK" "$@"
+SH
+chmod +x "$probe_bin/awk"
+REPOLENS_TEST_REAL_AWK="$probe_real_awk" \
+  REPOLENS_TEST_PROBE_CALLED="$TMP/citation-probe-called" \
+  PATH="$probe_bin:$PATH" \
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+check 'citation probe failure was exercised' test -f "$TMP/citation-probe-called"
+check 'citation probe failure records an action rejection' \
+  test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+check 'citation probe failure cannot produce a success receipt' \
+  test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+check 'citation probe failure performs zero comment POSTs' \
+  test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+
 # docs/citation-validation.md N16-N19: parent evidence is checked before action
 # evidence; a valid parent never authorizes invalid new supporting references.
 fresh
