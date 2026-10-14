@@ -529,4 +529,65 @@ assert_eq "formatted malformed evidence is preserved verbatim" "$malformed_body"
 assert_eq "formatted malformed evidence retains its rejection reason" 'malformed citation list in body' \
   "$(cat "$TMP/malformed-findings/formatted.md.out-of-scope.reason" 2>/dev/null)"
 
+echo ""
+echo "=== Case 18: nested formatting follows the citation behavior table ==="
+# docs/citation-validation.md rows N1-N6: both member orders, both separators,
+# and each outer/member formatting composition must retain every citation.
+formats=("'%s'" '"%s"' '*%s*' '**%s**' '_%s_' '__%s__' '~~%s~~' '<%s>' '(%s)' '[%s]')
+for outer in "${formats[@]}"; do
+  for inner in "${formats[@]}"; do
+    for separator in ',' ';'; do
+      first="${inner//%s/src\/missing.sh:1}"
+      second="${inner//%s/page.svelte:1}"
+      for members in "$first$separator$second" "$second$separator$first"; do
+        list="${outer//%s/$members}"
+        assert_has_line "N1 $list preserves the supporting reference" 'src/missing.sh:1' \
+          "$(repolens_extract_citations "$list")"
+      done
+    done
+  done
+done
+
+# Check real consumers on representative compositions; parser checks above
+# cover the full wrapper cross-product without repeating filesystem work.
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+while IFS='|' read -r row body expected extract_status scope_status live_status; do
+  rc=0
+  extracted="$(repolens_extract_citations "$body")" || rc=$?
+  assert_eq "$row extraction status" "$extract_status" "$rc"
+  if [[ "$expected" != error ]]; then
+    assert_eq "$row complete citations" "${expected//;/$'\n'}" "$extracted"
+  fi
+  rc=0
+  branch_scope_verify_body "$body" >/dev/null 2>&1 || rc=$?
+  assert_eq "$row scope status" "$scope_status" "$rc"
+  rc=0
+  entry="$(jq -n --arg body "$body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$entry" >/dev/null 2>&1 || rc=$?
+  assert_eq "$row live-source status" "$live_status" "$rc"
+done <<'CASES'
+N2|"**page.svelte:1**,**page.svelte:1**"|page.svelte:1|0|0|0
+N3|page.svelte:1 and "**src/missing.sh:1**,**page.svelte:1**"|page.svelte:1;src/missing.sh:1|0|1|1
+N4|"**page.svelte:1**;**src/missing.sh:1**" and page.svelte:1|page.svelte:1;src/missing.sh:1|0|1|1
+N5|page.svelte:1 and <__src/routes/+page.svelte:999__;__page.svelte:1__>|page.svelte:1;src/routes/+page.svelte:999|0|1|1
+N6|page.svelte:1 and ("**src/routes/+page.svelte:2**,**page.svelte:1**")|page.svelte:1;src/routes/+page.svelte:2|0|1|0
+N7|page.svelte:1 and "**src/missing.sh:1**,**notes**"|error|1|1|1
+N8|'__notes__;__src/missing.sh:1__' and page.svelte:1|error|1|1|1
+N9|page.svelte:1 and <**`src/missing.sh:1`**,**notes**>|error|1|1|1
+N10|page.svelte:1 and "**`page.svelte:1`**,**src/missing.sh:1**"|page.svelte:1;src/missing.sh:1|0|1|1
+N11|page.svelte:1 and '**src/routes/;page.svelte:1**'|error|1|1|1
+N12|page.svelte:1 and "**ordinary**,**prose**"|page.svelte:1|0|0|0
+N13|page.svelte:1 and "**src/routes/!page.svelte:1**"|page.svelte:1|0|0|0
+N14|page.svelte:1 and "**src/`note`missing.sh:1**"|page.svelte:1|0|0|1
+CASES
+
+# N15: scope rejection preserves the exact evidence and names the actual path.
+nested_body='page.svelte:1 and "**src/missing.sh:1**,**page.svelte:1**"'
+printf '%s\n' "$nested_body" > "$TMP/malformed-findings/nested.md"
+branch_scope_filter_directory "$TMP/malformed-findings"
+assert_eq "N15 nested evidence is preserved verbatim" "$nested_body" \
+  "$(cat "$TMP/malformed-findings/nested.md.out-of-scope" 2>/dev/null)"
+assert_eq "N15 nested rejection names the supporting path" 'out-of-scope citation: src/missing.sh' \
+  "$(cat "$TMP/malformed-findings/nested.md.out-of-scope.reason" 2>/dev/null)"
+
 finish

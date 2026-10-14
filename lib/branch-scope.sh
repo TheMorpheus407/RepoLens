@@ -49,21 +49,28 @@ repolens_extract_citations() {
       -e "s/\`[^\`]+:[0-9]+(-[0-9]+)?\`/$quoted_marker/g" \
       -e 's/`[^`]*`/@/g' <<< "$body" \
       | awk -v quoted_marker="$quoted_marker" '
-        function normalize(value, previous, first, last) {
+        function unwrap(value, first, last) {
+          first = substr(value, 1, 1)
+          last = substr(value, length(value), 1)
+          # Peel one layer so a list is retried before member formatting can
+          # be mistaken for another wrapper around the entire list.
+          if (length(value) && index("([{", first))
+            return substr(value, 2)
+          if (length(value) && index("])}.:!?", last))
+            return substr(value, 1, length(value) - 1)
+          if (length(value) > 4 && substr(value, 1, 2) == "~~" &&
+              substr(value, length(value) - 1) == "~~")
+            return substr(value, 3, length(value) - 4)
+          if (length(value) > 2 &&
+              ((first == last && index("*_\042\047", first)) ||
+               (first == "<" && last == ">")))
+            return substr(value, 2, length(value) - 2)
+          return value
+        }
+        function normalize(value, previous) {
           do {
             previous = value
-            sub(/^[([{]+/, "", value)
-            sub(/[])}.:!?]+$/, "", value)
-            first = substr(value, 1, 1)
-            last = substr(value, length(value), 1)
-            if (length(value) > 4 && substr(value, 1, 2) == "~~" &&
-                substr(value, length(value) - 1) == "~~") {
-              value = substr(value, 3, length(value) - 4)
-            } else if (length(value) > 2 &&
-                ((first == last && index("*_\042\047", first)) ||
-                 (first == "<" && last == ">"))) {
-              value = substr(value, 2, length(value) - 2)
-            }
+            value = unwrap(value)
           } while (value != previous)
           return value
         }
@@ -96,16 +103,18 @@ repolens_extract_citations() {
         {
           token_count = split($0, tokens, /[[:space:]]+/)
           for (token_index = 1; token_index <= token_count; token_index++) {
-            result = citation_list(tokens[token_index])
-            # Formatting may enclose the entire list rather than each member.
-            # Only a valid alternative can supersede a malformed first parse;
-            # another invalid parse must not erase recognized bad evidence.
-            if (!list_valid) {
-              original_malformed = malformed_list
-              result = citation_list(normalize(tokens[token_index]))
-              if (!list_valid && original_malformed) malformed_list = 1
-            }
-            if (malformed_list) extraction_failed = 1
+            value = tokens[token_index]
+            token_malformed = 0
+            do {
+              result = citation_list(value)
+              if (list_valid) break
+              if (malformed_list) token_malformed = 1
+              previous = value
+              value = unwrap(value)
+            } while (value != previous)
+            # A complete interpretation wins; unsuccessful interpretations
+            # retain every recognized malformed-list error across layers.
+            if (!list_valid && token_malformed) extraction_failed = 1
             printf "%s", result
           }
         }
