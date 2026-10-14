@@ -24,22 +24,31 @@
 # punctuation inside a token cannot make its suffix a citation. Adjacent
 # comma/semicolon lists are accepted only if every nonempty member is valid;
 # paired Markdown emphasis and outer prose punctuation are supported.
+# A malformed list containing a recognized citation returns nonzero; callers
+# must reject the body even if other citations were emitted.
 # The complete remaining token must match the bare path grammar to become
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
-  local body="$1" token path
+  local body="$1" token path quoted_marker='quoted'
+  # Use a letter sequence absent from the input. Masking excluded spans with
+  # '@' cannot fabricate that sequence or impersonate a quoted list member.
+  while [[ "$body" == *"$quoted_marker"* ]]; do quoted_marker+='q'; done
+  quoted_marker="@$quoted_marker@"
   {
     while IFS= read -r token; do
       path="${token%:*}"
       [[ "$path" == *://* || "$path" =~ ^[0-9:]+$ ]] && continue
       printf '%s\n' "$token"
     done < <(grep -oE '`[^`]+:[0-9]+(-[0-9]+)?`' <<< "$body" | sed 's/^`//; s/`$//')
-    # Mask excluded spans with an unsupported character instead of deleting
-    # them: surrounding text must never join into a fabricated bare path.
-    sed -E 's#https?://[^[:space:]<>`]+#@#g; s/`[^`]*`/@/g' <<< "$body" \
-      | grep -oE '[^[:space:]]+' \
-      | awk '
+    # Keep recognized quoted citations as opaque list members, while masking
+    # excluded spans. Neither replacement can join text into a bare path.
+    sed -E -e 's#https?://[^[:space:]<>`]+#@#g' \
+      -e 's#`[^`]*://[^`]*`#@#g' \
+      -e 's/`[0-9:]+:[0-9]+(-[0-9]+)?`/@/g' \
+      -e "s/\`[^\`]+:[0-9]+(-[0-9]+)?\`/$quoted_marker/g" \
+      -e 's/`[^`]*`/@/g' <<< "$body" \
+      | awk -v quoted_marker="$quoted_marker" '
         function normalize(value, previous, first, last) {
           do {
             previous = value
@@ -66,23 +75,35 @@ repolens_extract_citations() {
           return path ~ /[\/.]/ ||
             path ~ /^(Makefile|Dockerfile|Containerfile|Jenkinsfile|LICENSE|README|Gemfile|Rakefile|Procfile)$/
         }
-        function citation_list(value, members, count, i, member, result) {
+        function citation_list(value, members, count, i, member, result, invalid, recognized) {
           count = split(value, members, /[,;]/)
           result = ""
+          invalid = recognized = 0
           for (i = 1; i <= count; i++) {
             if (members[i] == "") continue
             member = normalize(members[i])
-            if (!citation(member)) return ""
-            result = result member "\n"
+            # Already emitted by the quoted branch. Only a whole member
+            # qualifies; embedded markers still invalidate the bare token.
+            if (member == quoted_marker || citation(member)) {
+              recognized = 1
+              if (member != quoted_marker) result = result member "\n"
+            } else invalid = 1
           }
-          return result
+          list_valid = !invalid
+          malformed_list = count > 1 && recognized && invalid
+          return invalid ? "" : result
         }
         {
-          result = citation_list($0)
-          # Formatting may enclose the entire list rather than each member.
-          if (result == "") result = citation_list(normalize($0))
-          printf "%s", result
+          token_count = split($0, tokens, /[[:space:]]+/)
+          for (token_index = 1; token_index <= token_count; token_index++) {
+            result = citation_list(tokens[token_index])
+            # Formatting may enclose the entire list rather than each member.
+            if (!list_valid) result = citation_list(normalize(tokens[token_index]))
+            if (malformed_list) extraction_failed = 1
+            printf "%s", result
+          }
         }
+        END { exit extraction_failed ? 1 : 0 }
       '
   } | sort -u
 }
@@ -95,7 +116,10 @@ branch_scope_verify_body() {
     printf 'branch scope missing or invalid\n'
     return 1
   fi
-  citations="$(repolens_extract_citations "$body")"
+  if ! citations="$(repolens_extract_citations "$body")"; then
+    printf 'malformed citation list in body\n'
+    return 1
+  fi
   [[ -n "$citations" ]] || { printf 'branch finding has no file:line citation\n'; return 1; }
   while IFS= read -r path; do
     path="${path%:*}"

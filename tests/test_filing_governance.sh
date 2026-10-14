@@ -271,6 +271,27 @@ _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
 check 'NUL cross-link payload is rejected before provider calls' test ! -s "$TMP/calls"
 check 'NUL cross-link payload records terminal failure' test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
 
+for malformed_body in 'src/a.sh:1 and src/missing.sh:1,garbage' \
+    'src/a.sh:1,garbage' '`src/a.sh:1`,garbage'; do
+  fresh
+  set_body "$malformed_body"
+  run || true
+  check "malformed list gets a governor failure: $malformed_body" failed
+  check "malformed list cannot reach issue creation: $malformed_body" no_create
+
+  fresh
+  CROSS_LINK_MODE=comment
+  jq --arg body "$malformed_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "malformed action records rejection: $malformed_body" \
+    test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+  check "malformed action cannot reach comment creation: $malformed_body" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+done
+
 # The tea adapter uses authenticated raw API JSON; its display output has
 # flattened label names and is not a reliable readback contract.
 tea() {

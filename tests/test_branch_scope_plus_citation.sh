@@ -393,4 +393,85 @@ for separator in ',' ';'; do
   assert_success "quoted $separator filename verifies its actual source" "$?"
 done
 
+echo ""
+echo "=== Case 15: mixed quoted/bare lists validate every supporting citation ==="
+for separator in ',' ';'; do
+  for list in "\`page.svelte:1\`${separator}src/routes/+page.svelte:2" \
+      "src/routes/+page.svelte:2${separator}\`page.svelte:1\`" \
+      "**\`page.svelte:1\`${separator}src/routes/+page.svelte:2**" \
+      "\`src/routes/,page.svelte:1\`${separator}src/routes/+page.svelte:2"; do
+    supporting='src/routes/+page.svelte:2'
+    assert_has_line "$list preserves its bare supporting reference" "$supporting" \
+      "$(repolens_extract_citations "$list")"
+    printf '["page.svelte","src/routes/,page.svelte"]\n' > "$SCOPE_FILE"
+    branch_scope_verify_body "$list" >/dev/null 2>&1
+    assert_failure "$list cannot hide an out-of-scope supporting path" "$?"
+    mixed_entry="$(jq -n --arg body "$list" '{body:$body}')"
+    filing_verify_cluster_citations "$PROJECT_A" "$mixed_entry" >/dev/null 2>&1
+    assert_success "$list verifies both actual sources" "$?"
+    printf '["page.svelte","src/routes/,page.svelte","src/routes/+page.svelte"]\n' > "$SCOPE_FILE"
+    branch_scope_verify_body "$list" >/dev/null 2>&1
+    assert_success "$list passes scope when both paths are allowlisted" "$?"
+
+    for invalid in 'src/missing.sh:1' 'src/routes/+page.svelte:999'; do
+      invalid_list="${list//$supporting/$invalid}"
+      assert_has_line "$invalid_list retains the invalid supporting citation" "$invalid" \
+        "$(repolens_extract_citations "$invalid_list")"
+      invalid_entry="$(jq -n --arg body "$invalid_list" '{body:$body}')"
+      filing_verify_cluster_citations "$PROJECT_A" "$invalid_entry" >/dev/null 2>&1
+      assert_failure "$invalid_list cannot hide invalid supporting evidence" "$?"
+    done
+  done
+done
+
+# A quoted path containing spaces or punctuation is one complete list member.
+printf 'quoted source\n' > "$PROJECT_A/file with spaces"
+mixed_body='`file with spaces:1`,page.svelte:1;`src/routes/;page.svelte:1`'
+assert_eq "quoted spaces and separators preserve all mixed-list members" \
+  "$(printf 'file with spaces:1\npage.svelte:1\nsrc/routes/;page.svelte:1')" \
+  "$(repolens_extract_citations "$mixed_body")"
+
+# Excluded spans and marker-like user text must still reject the complete token.
+for invalid_list in '`note`,page.svelte:1' '`12:30`,page.svelte:1' \
+    '`12:30-40`;page.svelte:1' '`https://example.com/a.sh:1`,page.svelte:1' \
+    '`ssh://example.com/a.sh:1`,page.svelte:1' \
+    '`ftp://example.com/a.sh:1`;page.svelte:1' \
+    '@quoted@,page.svelte:1' '@quoted`note`,page.svelte:1' \
+    'src/`scope/file.sh:1`,page.svelte:1'; do
+  assert_lacks_line "$invalid_list cannot expose a bare suffix" 'page.svelte:1' \
+    "$(repolens_extract_citations "$invalid_list")"
+done
+
+echo ""
+echo "=== Case 16: malformed supporting lists invalidate the whole finding ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for malformed in 'src/missing.sh:1,garbage' 'src/routes/+page.svelte:999;garbage' \
+    'garbage,src/missing.sh:1' '`src/missing.sh:1`,garbage' \
+    '`page.svelte:1`,garbage' '**src/missing.sh:1,garbage**' \
+    'src/routes/,page.svelte:1' 'src/`scope/file.sh:1`,page.svelte:1'; do
+  malformed_body="page.svelte:1 and $malformed"
+  repolens_extract_citations "$malformed_body" >/dev/null 2>&1
+  assert_failure "$malformed reports an extraction error despite a valid anchor" "$?"
+  branch_scope_verify_body "$malformed_body" >/dev/null 2>&1
+  assert_failure "$malformed cannot bypass scope with a separate anchor" "$?"
+  malformed_entry="$(jq -n --arg body "$malformed_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$malformed_entry" >/dev/null 2>&1
+  assert_failure "$malformed cannot bypass live-source checks with a separate anchor" "$?"
+done
+prose_body='page.svelte:1 and ordinary,prose;lists plus step:1,notes'
+branch_scope_verify_body "$prose_body" >/dev/null 2>&1
+assert_success "ordinary prose lists do not invalidate a finding" "$?"
+prose_entry="$(jq -n --arg body "$prose_body" '{body:$body}')"
+filing_verify_cluster_citations "$PROJECT_A" "$prose_entry" >/dev/null 2>&1
+assert_success "ordinary prose lists preserve live-source verification" "$?"
+
+mkdir -p "$TMP/malformed-findings"
+printf 'page.svelte:1 and src/missing.sh:1,garbage\n' > "$TMP/malformed-findings/invalid.md"
+branch_scope_filter_directory "$TMP/malformed-findings"
+assert_eq "malformed evidence remains preserved for inspection" \
+  'page.svelte:1 and src/missing.sh:1,garbage' \
+  "$(cat "$TMP/malformed-findings/invalid.md.out-of-scope")"
+assert_eq "quarantine records the malformed-list reason" 'malformed citation list in body' \
+  "$(cat "$TMP/malformed-findings/invalid.md.out-of-scope.reason")"
+
 finish
