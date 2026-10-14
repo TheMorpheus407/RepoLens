@@ -35,9 +35,9 @@
 # Each row also runs with writable and unavailable summary storage. Actual
 # attempt publication is checked after finalization, not against resolvers alone.
 # shellcheck disable=SC2034,SC2329 # Globals/callbacks consumed by extracted code.
-set -euo pipefail
+set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_DIR="$(mktemp -d)"
+TEST_DIR="$(mktemp -d)" || exit 1
 trap 'rm -rf "$TEST_DIR"' EXIT
 sed -n '/^rate_limit_sleep_interrupt_marker() {/,/^_handle_hangup() {/p' \
   "$SCRIPT_DIR/repolens.sh" | sed '$d' > "$TEST_DIR/finalizers.sh"
@@ -55,7 +55,7 @@ eval "$(declare -f rate_limit_abort_stopped_reason | sed '1s/rate_limit_abort_st
 # The unconditional filing reconciliation in main runs even after failed rounds.
 sed -n '/^if ! \$LOCAL_MODE && { \[\[ "\$MODE" == branch-review/,/^# Emit deduped forge-warning/p' \
   "$SCRIPT_DIR/repolens.sh" | sed '$d' > "$TEST_DIR/accounting.sh"
-test -s "$TEST_DIR/accounting.sh"
+test -s "$TEST_DIR/accounting.sh" || exit 1
 passed=0 failed=0
 check_eq() {
   if [[ "$2" == "$3" ]]; then passed=$((passed + 1));
@@ -148,10 +148,9 @@ for SIGNAL in HUP INT TERM; do
           ;;
       esac
       if [[ "$row" == filing-* || "$row" == during-accounting ]]; then
-        # Production shell handles errors explicitly; sourcing as a condition
-        # prevents this test's errexit from changing that execution contract.
+        # Execute the production block with its explicit error handling.
         # shellcheck source=/dev/null
-        if source "$TEST_DIR/accounting.sh"; then :; fi
+        source "$TEST_DIR/accounting.sh"
         apply_rate_limit_abort_final_state || true
       else
         apply_rate_limit_abort_final_state || true
