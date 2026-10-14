@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Stop interrupted rounds after successful parallel cleanup and preserve signal-specific attempt diagnostics over concurrent prompt or rate-limit failures, even when summary writes fail (review of #438).
+
 - Stop lens and meta agent dispatch when a base template cannot be read, discard partial reads, and retain failed lens status for retry with `--resume` (review of #427/#429, #428). Keep callback and collection failures authoritative when diagnostics cannot persist, and retry missing between-round handoffs before completing a round. Reuse verified successful handoffs after partial completion writes, preserve saturation and signal stop reasons, and match attributed dispatches against canonical lens completions.
 
 - Reject unsupported file-like citations in cross-link actions including conventional root files and references alongside valid anchors, even when independent parent evidence is valid. Preserve citation-free prose, opaque URLs, comma-terminated timestamps, and backtick samples across lines when they contain no recognized source citations. Recognized citations inside fences still undergo live-source and branch-scope checks (review of #418, #437).

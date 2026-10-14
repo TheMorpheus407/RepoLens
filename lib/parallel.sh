@@ -78,6 +78,7 @@ repolens_auto_max_parallel() {
 }
 
 _parallel_agent_abort_pending() {
+  [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]] && return 0
   [[ -n "${LOG_BASE:-}" ]] || return 1
   [[ -f "$LOG_BASE/.rate-limit-abort" || -f "$LOG_BASE/.rate-limit-sleep-interrupt" \
     || -f "$LOG_BASE/.agent-no-progress-abort" || -f "$LOG_BASE/.systemic-failure-abort" ]]

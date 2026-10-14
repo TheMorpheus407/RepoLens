@@ -162,7 +162,7 @@ REPOLENS_FINAL_STATE=interrupted
 run_meta_orchestrator "$TEST_DIR/meta/missing/round-1" "$TEST_DIR/meta/missing/round-2"
 check test "$?" -ne 0
 check test "$REPOLENS_FINAL_STATE" = interrupted
-check json_matches '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE"
+check json_matches '.stopped_reason == "interrupted-sigint"' "$SUMMARY_FILE"
 check test -f "$LOG_BASE/.systemic-failure-abort"
 check test ! -e "$AGENT_CALLS"
 

@@ -46,7 +46,7 @@ TOTAL=0
 
 TMP_PARENT="$SCRIPT_DIR/logs/test-rounds-resume"
 mkdir -p "$TMP_PARENT"
-TMPDIR="$(mktemp -d "$TMP_PARENT/run.XXXXXX")"
+TMPDIR="$(mktemp -d "$TMP_PARENT/run.XXXXXX")" || exit 1
 CREATED_RUN_IDS=()
 
 cleanup() {
@@ -349,9 +349,9 @@ printf 'Resume gate fixture bug report — placeholder text.\n' > "$BUG_FILE"
 
 # Fabricate a prior run's round-1/metadata.json with rounds_total=3 so that the
 # resume-time gate can read it back.
-FAKE_RUN_ID="20260101T000000Z-resumetest"
+FAKE_LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-rounds-resumetest.XXXXXX")" || exit 1
+FAKE_RUN_ID="${FAKE_LOG_BASE##*/}"
 CREATED_RUN_IDS+=("$FAKE_RUN_ID")
-FAKE_LOG_BASE="$SCRIPT_DIR/logs/$FAKE_RUN_ID"
 mkdir -p "$FAKE_LOG_BASE/rounds/round-1"
 jq -n '{round_number:1,breadth:2,rounds_total:3,start_ts:"2026-01-01T00:00:00Z",lens_count:2,lens_ids:["injection","xss-csrf"]}' \
   > "$FAKE_LOG_BASE/rounds/round-1/metadata.json"
@@ -406,9 +406,9 @@ assert_eq "matching --rounds on resume passes the gate (dry-run exits 0)" \
 echo ""
 echo "Test 5: legacy run without round-1/metadata.json passes the gate"
 
-LEGACY_RUN_ID="20260101T000000Z-resumelegacy"
+LEGACY_LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-rounds-resumelegacy.XXXXXX")" || exit 1
+LEGACY_RUN_ID="${LEGACY_LOG_BASE##*/}"
 CREATED_RUN_IDS+=("$LEGACY_RUN_ID")
-LEGACY_LOG_BASE="$SCRIPT_DIR/logs/$LEGACY_RUN_ID"
 # Deliberately create the run log dir WITHOUT rounds/round-1/metadata.json,
 # simulating a pre-#147 run layout.
 mkdir -p "$LEGACY_LOG_BASE"

@@ -1943,7 +1943,8 @@ resolve_run_exit_code() {
   printf '0'
 }
 
-# resolve_why_stopped — print the attempt's why_stopped string. Prefers
+# resolve_why_stopped — print the attempt's why_stopped string. Interruption
+# takes precedence over concurrent failure diagnostics. Otherwise prefer
 # summary.json's stopped_reason; when that is empty (e.g. a summary-write race or
 # a sentinel dropped without a stop reason) it falls back to whichever abort
 # sentinel is present so the attempt entry is never blank while the run clearly
@@ -1951,6 +1952,14 @@ resolve_run_exit_code() {
 # Reads SUMMARY_FILE + the LOG_BASE sentinels; no side effects.
 resolve_why_stopped() {
   local reason
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+    case "${REPOLENS_INTERRUPT_EXIT_CODE:-130}" in
+      129) printf 'interrupted-sighup' ;;
+      143) printf 'interrupted-sigterm' ;;
+      *) printf 'interrupted-sigint' ;;
+    esac
+    return 0
+  fi
   reason="$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || printf '')"
   if [[ -n "$reason" ]]; then
     printf '%s' "$reason"
@@ -1966,14 +1975,6 @@ resolve_why_stopped() {
   fi
   if [[ -f "$LOG_BASE/.systemic-failure-abort" ]]; then
     printf 'systemic-failure'
-    return 0
-  fi
-  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
-    case "${REPOLENS_INTERRUPT_EXIT_CODE:-130}" in
-      129) printf 'interrupted-sighup' ;;
-      143) printf 'interrupted-sigterm' ;;
-      *) printf 'interrupted-sigint' ;;
-    esac
     return 0
   fi
   printf '%s' "${ROUNDS_FAILURE_REASON:-}"

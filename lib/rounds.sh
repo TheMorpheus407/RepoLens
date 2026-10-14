@@ -420,9 +420,9 @@ run_meta_orchestrator() {
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
     _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
-    ROUNDS_FAILURE_REASON="prompt-render-failed"
     printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
-    set_stop_reason "$SUMMARY_FILE" "prompt-render-failed"
+    ROUNDS_FAILURE_REASON="prompt-render-failed"
+    _rounds_record_execution_failure
     if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
       # shellcheck disable=SC2034 # repolens.sh reads the final state after rounds.
       REPOLENS_FINAL_STATE="failed"
@@ -2269,6 +2269,16 @@ _rounds_record_skipped_lenses() {
 }
 
 _rounds_agent_abort_reason() {
+  # Successful signal cleanup can leave the collector with no child error.
+  # Interruption remains authoritative over concurrent agent diagnostics.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    case "${REPOLENS_INTERRUPT_EXIT_CODE:-130}" in
+      129) printf '%s\n' 'interrupted-sighup' ;;
+      143) printf '%s\n' 'interrupted-sigterm' ;;
+      *) printf '%s\n' 'interrupted-sigint' ;;
+    esac
+    return 0
+  fi
   if [[ -f "$LOG_BASE/.systemic-failure-abort" ]]; then
     local systemic_reason
     systemic_reason="$(head -n 1 "$LOG_BASE/.systemic-failure-abort" 2>/dev/null || true)"
@@ -2686,7 +2696,11 @@ run_rounds() {
         if declare -F _cleanup_children >/dev/null 2>&1; then
           _cleanup_children || true
         fi
-        set_stop_reason "$SUMMARY_FILE" "process-scope-cleanup-failed"
+        if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+          _rounds_record_execution_failure
+        else
+          set_stop_reason "$SUMMARY_FILE" "process-scope-cleanup-failed"
+        fi
         _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
         return 1
       fi
@@ -2746,6 +2760,12 @@ run_rounds() {
       return "$round_rc"
     fi
 
+    if abort_reason="$(_rounds_agent_abort_reason)"; then
+      set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+      _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+      return 1
+    fi
+
     if (( round < rounds_total )); then
       META_ORCH_SATURATED=0
       run_meta_orchestrator "$round" "$((round + 1))"
@@ -2754,6 +2774,12 @@ run_rounds() {
         _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
         return "$round_rc"
       fi
+    fi
+
+    if abort_reason="$(_rounds_agent_abort_reason)"; then
+      set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+      _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"
+      return 1
     fi
 
     mark_round_completed "$round"
