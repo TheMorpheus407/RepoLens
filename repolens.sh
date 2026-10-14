@@ -1980,8 +1980,11 @@ resolve_why_stopped() {
   printf '%s' "${ROUNDS_FAILURE_REASON:-}"
 }
 
+# Recover child sleep interruption or quota state, retaining a newer parent
+# signal even when it arrives during marker/summary I/O. Diagnostic writes are
+# best effort; they cannot change the signal's in-memory state or exit code.
 apply_rate_limit_abort_final_state() {
-  local marker key value exit_code="" stopped_reason="" existing_reason
+  local marker key value exit_code="" stopped_reason="" existing_reason final_state="" signal_reason
 
   marker="$(rate_limit_sleep_interrupt_marker)"
   if [[ -f "$marker" ]]; then
@@ -2001,27 +2004,38 @@ apply_rate_limit_abort_final_state() {
       *) stopped_reason="$(rate_limit_sleep_stopped_reason "$exit_code" 2>/dev/null || printf '%s\n' "interrupted-sigint")" ;;
     esac
 
-    REPOLENS_FINAL_STATE="interrupted"
-    REPOLENS_INTERRUPT_EXIT_CODE="$exit_code"
-    set_stop_reason "$SUMMARY_FILE" "$stopped_reason"
-    return 0
-  fi
-
-  if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+    final_state="interrupted"
+  elif [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
     existing_reason="$(rate_limit_abort_stopped_reason)"
     if is_phase_rate_limit_stopped_reason "$existing_reason"; then
-      REPOLENS_FINAL_STATE="failed"
-      return 0
+      final_state="failed"
+    else
+      final_state="rate-limit-pending"
+      if [[ -z "$existing_reason" ]]; then stopped_reason="rate-limited"; fi
     fi
-
-    REPOLENS_FINAL_STATE="rate-limit-pending"
-    if [[ -z "$existing_reason" ]]; then
-      set_stop_reason "$SUMMARY_FILE" "rate-limited"
-    fi
-    return 0
   fi
 
-  return 1
+  # Check after reads: the returning parallel traps may have fired meanwhile.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+    stopped_reason="$(resolve_why_stopped)"
+  else
+    [[ -n "$final_state" ]] || return 1
+    REPOLENS_FINAL_STATE="$final_state"
+    if [[ "$final_state" == "interrupted" ]]; then
+      REPOLENS_INTERRUPT_EXIT_CODE="$exit_code"
+    fi
+  fi
+  if [[ -n "$stopped_reason" ]]; then
+    set_stop_reason "$SUMMARY_FILE" "$stopped_reason" || true
+  fi
+  # A signal can also arrive while the preceding diagnostic write holds a lock.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+    signal_reason="$(resolve_why_stopped)"
+    if [[ "$stopped_reason" != "$signal_reason" ]]; then
+      set_stop_reason "$SUMMARY_FILE" "$signal_reason" || true
+    fi
+  fi
+  return 0
 }
 
 _handle_hangup() {
@@ -5269,8 +5283,10 @@ if ! $LOCAL_MODE && { [[ "$MODE" == branch-review ]] || [[ -f "$LOG_BASE/final/m
   if ! reconcile_summary_filing "$SUMMARY_FILE" "$_verified_issues" "$MAX_ISSUES" \
       || (( _filing_count_rc != 0 )); then
     log_warn "Filing: unable to reconcile verified issue counts"
-    REPOLENS_FINAL_STATE="failed"
-    set_stop_reason "$SUMMARY_FILE" "filing-accounting-failed"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
+      REPOLENS_FINAL_STATE="failed"
+      set_stop_reason "$SUMMARY_FILE" "filing-accounting-failed"
+    fi
     RUN_ROUNDS_RC=1
   fi
   unset _verified_issues _filing_count_rc

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve the current parent interruption through final rate-limit resolution and filing-accounting errors, including signals during diagnostic I/O; recover child sleep signals only when the parent has no interruption.
+
 - Retire an older accepted handoff before running newly pending lenses so interruption cannot reuse stale selection or saturation on the next resume (review of #438).
 
 - Stop interrupted rounds after successful parallel cleanup and preserve signal-specific attempt diagnostics over concurrent prompt or rate-limit failures, even when summary writes fail (review of #438).
