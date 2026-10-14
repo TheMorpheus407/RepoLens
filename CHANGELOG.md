@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve parent interruption through post-round synthesis and filing failures, and prevent a new filing batch after cancelled synthesis (repolens-r1-p1-2).
+
 - Stop prompt composition on failed or partial lens reads, preventing agent dispatch and keeping the lens resumable (repolens-r1-p1-1).
 
 - Scope callback fail-fast behavior to lens rounds, preserving governed filing batches. Clear previous interruption diagnostics on explicit resume, stop interrupted saved-handoff recovery, and retain a run-failure reason when diagnostics cannot be saved (#438).
