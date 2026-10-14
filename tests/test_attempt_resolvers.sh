@@ -350,6 +350,43 @@ assert_eq "rate-limit reason precedes in-memory prompt fallback" \
   "rate-limit" "$(resolve_why_stopped)"
 assert_eq "rate-limit exit precedes callback error" "3" "$(resolve_run_exit_code)"
 
+# Exercise a real round collector after its parallel signal trap has fired.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/rounds.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/summary.sh"
+# shellcheck disable=SC2329 # Sourced driver callbacks.
+log_info() { :; }
+# shellcheck disable=SC2329
+log_warn() { :; }
+# shellcheck disable=SC2329
+init_parallel() { return 0; }
+# shellcheck disable=SC2329
+spawn_lens() { return 0; }
+# shellcheck disable=SC2329
+wait_all() {
+  REPOLENS_FINAL_STATE=interrupted
+  REPOLENS_INTERRUPT_EXIT_CODE="$SIGNAL_EXIT"
+  return 42
+}
+PARALLEL=true
+LOCAL_MODE=false
+RESUME_RUN_ID=signal-probe
+RUN_ID=signal-probe
+LENSES=(security/injection)
+for SIGNAL_EXIT in 130 143; do
+  reset_state
+  write_summary_reason ""
+  run_rounds 1 LENSES
+  RUN_ROUNDS_RC=$?
+  expected_signal=interrupted-sigint
+  if [[ "$SIGNAL_EXIT" == 143 ]]; then expected_signal=interrupted-sigterm; fi
+  assert_eq "collector preserves persisted signal reason ($SIGNAL_EXIT)" \
+    "$expected_signal" "$(resolve_why_stopped)"
+  assert_eq "collector preserves signal exit ($SIGNAL_EXIT)" \
+    "$SIGNAL_EXIT" "$(resolve_run_exit_code)"
+done
+
 echo ""
 echo "Results: $PASS/$TOTAL passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then

@@ -234,11 +234,13 @@ reset_case "partial-round2"
 TOTAL_LENSES=${#FIXTURE_LENSES[@]}
 init_run_layout "$RUN_ID" 3 "${#FIXTURE_LENSES[@]}" "${FIXTURE_LENSES[@]}"
 finalize_round "$RUN_ID" 1
-# A completed non-final round includes both required handoff artifacts.
+# A completed non-final round includes handoff artifacts and accepted raw evidence.
 touch "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/hypotheses.md"
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${FIXTURE_LENSES[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
 printf '%s\n%s\n' "${FIXTURE_LENSES[0]}" "${FIXTURE_LENSES[1]}" > "$LOG_BASE/.rounds/round-2.lenses.completed"
+cp "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/meta-orchestrator-output.txt"
+_rounds_meta_certify_success "$LOG_BASE/rounds/round-1"
 RESUME_RUN_ID="$RUN_ID"
 
 LENSES=("${FIXTURE_LENSES[@]}")
@@ -264,10 +266,12 @@ LENSES2=("security/injection" "security/xss-csrf")
 TOTAL_LENSES=${#LENSES2[@]}
 init_run_layout "$RUN_ID" 2 "${#LENSES2[@]}" "${LENSES2[@]}"
 finalize_round "$RUN_ID" 1
-# A completed non-final round includes both required handoff artifacts.
+# A completed non-final round includes handoff artifacts and accepted raw evidence.
 touch "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/hypotheses.md"
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${LENSES2[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
+cp "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/meta-orchestrator-output.txt"
+_rounds_meta_certify_success "$LOG_BASE/rounds/round-1"
 RESUME_RUN_ID="$RUN_ID"
 
 run_rounds 2 LENSES2
@@ -289,7 +293,7 @@ LENSES3=("security/injection" "security/xss-csrf")
 TOTAL_LENSES=${#LENSES3[@]}
 init_run_layout "$RUN_ID" 2 "${#LENSES3[@]}" "${LENSES3[@]}"
 finalize_round "$RUN_ID" 1
-# A completed non-final round includes both required handoff artifacts.
+# A completed non-final round includes handoff artifacts and accepted raw evidence.
 touch "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/hypotheses.md"
 mkdir -p "$LOG_BASE/.rounds"
 printf '%s\n' "${LENSES3[@]}" > "$LOG_BASE/.rounds/round-1.lenses.completed"
@@ -301,6 +305,8 @@ cat > "$LOG_BASE/rounds/round-1/dispatch.md" <<'DISPATCH'
 
 LENS: injection
 DISPATCH
+cp "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/meta-orchestrator-output.txt"
+_rounds_meta_certify_success "$LOG_BASE/rounds/round-1"
 RESUME_RUN_ID="$RUN_ID"
 # The active_lens_list seeded by the caller is the full set; dispatch.md must
 # narrow it down to the single dispatched lens for round 2.

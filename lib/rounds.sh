@@ -140,12 +140,13 @@ _rounds_restore_completed_lenses_file() {
 _rounds_all_lenses_completed() {
   local completion_file="$1"
   shift
-  local lens_entry
+  local lens_entry canonical role focus anchor exclude
 
   [[ -n "$completion_file" && -f "$completion_file" ]] || return 1
 
   for lens_entry in "$@"; do
-    grep -qxF "$lens_entry" "$completion_file" 2>/dev/null || return 1
+    _rounds_meta_tuple_parse "$lens_entry" canonical role focus anchor exclude
+    grep -qxF "$canonical" "$completion_file" 2>/dev/null || return 1
   done
 
   return 0
@@ -302,7 +303,10 @@ finalize_round() {
     rm -f "$tmp_marker"
     return 1
   fi
-  mv "$tmp_marker" "$marker" || return 1
+  if [[ -d "$marker" ]] || ! mv "$tmp_marker" "$marker"; then
+    rm -f "$tmp_marker"
+    return 1
+  fi
   _rounds_best_effort_sync "$marker"
   _rounds_best_effort_sync "$marker_dir"
 }
@@ -324,7 +328,7 @@ is_round_completed() {
 }
 
 mark_round_completed() {
-  local run_id round legacy_marker legacy_marker_dir
+  local run_id round
   if (( $# >= 2 )); then
     finalize_round "$1" "$2"
     return $?
@@ -334,7 +338,12 @@ mark_round_completed() {
   round="$1"
   finalize_round "$run_id" "$round" || return $?
 
-  legacy_marker="$(_rounds_legacy_marker_path "$round")"
+  _rounds_write_legacy_marker "$round"
+}
+
+_rounds_write_legacy_marker() {
+  local legacy_marker legacy_marker_dir
+  legacy_marker="$(_rounds_legacy_marker_path "$1")"
   legacy_marker_dir="${legacy_marker%/*}"
   mkdir -p "$legacy_marker_dir" || return 1
   : > "$legacy_marker" || return 1
@@ -342,10 +351,20 @@ mark_round_completed() {
   _rounds_best_effort_sync "$legacy_marker_dir"
 }
 
+# Recovery repairs only missing barriers; an accepted primary retains its time.
+_rounds_repair_completion() {
+  local round="$1" marker legacy_marker
+  marker="$(round_completed_marker "${RUN_ID:-}" "$round")" || return $?
+  legacy_marker="$(_rounds_legacy_marker_path "$round")"
+  if [[ ! -f "$marker" ]]; then finalize_round "$round" || return $?; fi
+  if [[ ! -f "$legacy_marker" ]]; then _rounds_write_legacy_marker "$round" || return $?; fi
+  return 0
+}
+
 run_meta_orchestrator() {
   local prev_arg="$1" next_arg="$2"
   local run_id="${RUN_ID:-}" repo_root prev_round_dir next_round_dir
-  local round next_round digest_path dispatch_path hypotheses_path
+  local round next_round digest_path
   local prompt_path output_path template_name template_file project_path prompt vars
   local agent_rc=0
 
@@ -372,8 +391,6 @@ run_meta_orchestrator() {
 
   repo_root="$(_rounds_repo_root)"
   digest_path="$prev_round_dir/digest.md"
-  dispatch_path="$prev_round_dir/dispatch.md"
-  hypotheses_path="$prev_round_dir/hypotheses.md"
   prompt_path="$prev_round_dir/meta-orchestrator-prompt.md"
   output_path="$prev_round_dir/meta-orchestrator-output.txt"
   template_name="$(_rounds_meta_template_name_for_mode "${MODE:-}")"
@@ -396,6 +413,9 @@ run_meta_orchestrator() {
     _rounds_meta_warn "AGENT is not configured for meta-orchestrator dispatch"
     return 1
   fi
+
+  # A fresh invocation must never inherit another attempt's accepted result.
+  rm -f "$prev_round_dir/meta-orchestrator-success.json" "$output_path.envelope.json" || return 1
 
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
@@ -429,16 +449,67 @@ run_meta_orchestrator() {
     return "$agent_rc"
   fi
 
-  if _rounds_meta_no_fresh_angles "$output_path"; then
-    _rounds_meta_write_no_fresh_dispatch "$dispatch_path" "$hypotheses_path" || return $?
-    META_ORCH_SATURATED=1
+  _rounds_meta_certify_success "$prev_round_dir" || return 1
+  _rounds_meta_restore_success "$prev_round_dir" || return $?
+  if [[ "${META_ORCH_SATURATED:-0}" == 1 ]]; then
     log_info "[round $round] Meta-orchestrator reported NO_FRESH_ANGLES"
-    return 0
+  else
+    log_info "[round $round] Meta-orchestrator dispatch written to $prev_round_dir/dispatch.md"
   fi
-
-  _rounds_meta_parse_output "$output_path" "$dispatch_path" "$hypotheses_path" || return $?
-  log_info "[round $round] Meta-orchestrator dispatch written to $dispatch_path"
   return 0
+}
+
+# Exact bytes, including envelope absence, bind the proof to one accepted call.
+_rounds_meta_result_fingerprint() {
+  local dir="$1" output_hash envelope_hash="absent"
+  [[ -f "$dir/meta-orchestrator-output.txt" ]] || return 1
+  output_hash="$(git hash-object --stdin < "$dir/meta-orchestrator-output.txt")" || return 1
+  if [[ -e "$dir/meta-orchestrator-output.txt.envelope.json" ]]; then
+    [[ -f "$dir/meta-orchestrator-output.txt.envelope.json" ]] || return 1
+    envelope_hash="$(git hash-object --stdin < "$dir/meta-orchestrator-output.txt.envelope.json")" || return 1
+  fi
+  jq -cn --arg output "$output_hash" --arg envelope "$envelope_hash" \
+    '{version:1, output:$output, envelope:$envelope}'
+}
+
+# Atomically accept the exact successful invocation before derived writes.
+_rounds_meta_certify_success() {
+  local dir="$1" proof="$1/meta-orchestrator-success.json" tmp fingerprint
+  fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 1
+  [[ ! -d "$proof" ]] || return 1
+  tmp="$(mktemp "$proof.tmp.XXXXXX")" || return 1
+  if ! printf '%s\n' "$fingerprint" > "$tmp" || ! mv "$tmp" "$proof"; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# Return 1 for absent/invalid proof; 2 for a verified result that cannot be
+# installed. Matching artifacts retain their bytes and modification times.
+_rounds_meta_restore_success() {
+  local dir="$1" fingerprint staging rc=0 name
+  META_ORCH_SATURATED=0
+  fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 1
+  jq -e --argjson expected "$fingerprint" '. == $expected' \
+    "$dir/meta-orchestrator-success.json" >/dev/null 2>&1 || return 1
+  staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
+  if _rounds_meta_no_fresh_angles "$dir/meta-orchestrator-output.txt"; then
+    _rounds_meta_write_no_fresh_dispatch "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
+    META_ORCH_SATURATED=1
+  else
+    _rounds_meta_parse_output "$dir/meta-orchestrator-output.txt" "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
+  fi
+  if (( rc == 0 )); then
+    for name in dispatch.md hypotheses.md; do
+      if cmp -s "$staging/$name" "$dir/$name"; then continue; fi
+      if [[ -d "$dir/$name" ]] || ! mv "$staging/$name" "$dir/$name"; then
+        rc=2
+        break
+      fi
+    done
+  fi
+  rm -rf "$staging"
+  return "$rc"
 }
 
 _rounds_meta_template_name_for_mode() {
@@ -2239,6 +2310,15 @@ _rounds_agent_abort_reason() {
 
 # Keep a parent-memory fallback when every diagnostic write is unavailable.
 _rounds_record_execution_failure() {
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    case "${REPOLENS_INTERRUPT_EXIT_CODE:-130}" in
+      129) ROUNDS_FAILURE_REASON="interrupted-sighup" ;;
+      143) ROUNDS_FAILURE_REASON="interrupted-sigterm" ;;
+      *) ROUNDS_FAILURE_REASON="interrupted-sigint" ;;
+    esac
+    set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON" || true
+    return 0
+  fi
   if ! ROUNDS_FAILURE_REASON="$(_rounds_agent_abort_reason)"; then
     ROUNDS_FAILURE_REASON="$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null)" || ROUNDS_FAILURE_REASON=""
     [[ "$ROUNDS_FAILURE_REASON" == "prompt-render-failed" ]] || ROUNDS_FAILURE_REASON="lens-execution-failed"
@@ -2465,27 +2545,37 @@ run_rounds() {
     fi
     lens_total="${#active_lens_list[@]}"
 
-    if is_round_completed "$round"; then
-      round_completed_lenses_file="${completed_lenses_file:-}"
-      if (( rounds_total > 1 )); then
-        round_completed_lenses_file="$(_rounds_lens_completion_path "$round")"
-      fi
-
-      if [[ -n "${RESUME_RUN_ID:-}" ]] \
-          && ! _rounds_all_lenses_completed "$round_completed_lenses_file" "${active_lens_list[@]}"; then
-        log_info "[round $round/$rounds_total] Completed marker has pending lenses for current selection; resuming"
-      elif (( round < rounds_total )) \
-          && { [[ ! -f "$current_round_dir/dispatch.md" ]] || [[ ! -f "$current_round_dir/hypotheses.md" ]]; }; then
-        log_info "[round $round/$rounds_total] Completed marker has a pending meta handoff; resuming"
-      else
-        log_info "[round $round/$rounds_total] Skipping completed round"
-        continue
-      fi
+    round_completed_lenses_file="${completed_lenses_file:-}"
+    if (( rounds_total > 1 )); then
+      round_completed_lenses_file="$(_rounds_lens_completion_path "$round")"
     fi
 
     if abort_reason="$(_rounds_agent_abort_reason)"; then
       set_stop_reason "$SUMMARY_FILE" "$abort_reason"
       return 1
+    fi
+
+    # Eligibility is evaluated before callbacks: newly finished work needs a
+    # fresh handoff. Restore saturation before considering completion markers.
+    if _rounds_all_lenses_completed "$round_completed_lenses_file" "${active_lens_list[@]}"; then
+      if (( round < rounds_total )); then
+        _rounds_meta_restore_success "$current_round_dir"
+        round_rc=$?
+        if (( round_rc == 2 )); then return 1; fi
+        if (( round_rc == 0 )); then
+          _rounds_repair_completion "$round" || return $?
+          if [[ "${META_ORCH_SATURATED:-0}" == 1 ]]; then
+            log_info "[round $round] Investigation saturated; skipping remaining rounds"
+            break
+          fi
+          log_info "[round $round/$rounds_total] Skipping completed work with verified meta handoff"
+          continue
+        fi
+      elif is_round_completed "$round"; then
+        _rounds_repair_completion "$round" || return $?
+        log_info "[round $round/$rounds_total] Skipping completed round"
+        continue
+      fi
     fi
 
     if (( rounds_total > 1 )); then
