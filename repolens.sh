@@ -5153,17 +5153,20 @@ if (( RUN_ROUNDS_RC != 0 )) && [[ "${REPOLENS_FINAL_STATE:-finished}" == "finish
 fi
 
 # --- Polish ranking (post-rounds, pre-verifier) ---
-if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "polish" ]]; then
+if [[ "$RUN_ROUNDS_RC" -eq 0 && "$MODE" == "polish" && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
   log_info "Polish ranking: ordering surfaced suggestions"
   if run_polish_ranking "$RUN_ID"; then
     log_info "Polish ranking: ranked-suggestions.json promoted"
-    log_info "Polish issue emission: filing ranked lens shortlists"
-    if run_polish_issue_emission "$RUN_ID" "${REPOLENS_POLISH_TOP_N:-3}"; then
-      log_info "Polish issue emission: ranked lens shortlists processed"
-    else
-      die "Polish issue emission failed"
+    # Ranking can return after the parallel signal trap cancelled the run.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+      log_info "Polish issue emission: filing ranked lens shortlists"
+      if run_polish_issue_emission "$RUN_ID" "${REPOLENS_POLISH_TOP_N:-3}"; then
+        log_info "Polish issue emission: ranked lens shortlists processed"
+      elif [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+        die "Polish issue emission failed"
+      fi
     fi
-  else
+  elif [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
     die "Polish ranking failed"
   fi
 fi
@@ -5173,7 +5176,7 @@ fi
 # logs/<run-id>/final/verification.json so the synthesizer can skip WRONG
 # findings and downrank STALE ones. Verifier failures are non-fatal: a missing
 # verification.json simply means the synthesizer proceeds without filtering.
-if [[ "$RUN_ROUNDS_RC" -eq 0 && "${NO_VERIFIER:-true}" != "true" ]]; then
+if [[ "$RUN_ROUNDS_RC" -eq 0 && "${NO_VERIFIER:-true}" != "true" && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
   log_info "Verifier: re-reading cited code locations for evidence accuracy"
   if run_verifier "$RUN_ID"; then
     log_info "Verifier: verification.json promoted"

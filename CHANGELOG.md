@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Stop polish ranking, issue emission and verifier admission after a parent interruption, preserving signal handling when cancelled ranking returns (repolens-r2-p1-1).
+
 - Preserve parent interruption through post-round synthesis and filing failures, and prevent a new filing batch after cancelled synthesis (repolens-r1-p1-2).
 
 - Stop prompt composition on failed or partial lens reads, preventing agent dispatch and keeping the lens resumable (repolens-r1-p1-1).
