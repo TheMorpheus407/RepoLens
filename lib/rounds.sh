@@ -2586,6 +2586,10 @@ run_rounds() {
         log_info "[round $round/$rounds_total] Skipping completed round"
         continue
       fi
+    elif (( round < rounds_total )); then
+      # Pending lens work changes the handoff's inputs. Retire old acceptance
+      # before a callback can finish and be interrupted ahead of fresh meta work.
+      rm -f "$current_round_dir/meta-orchestrator-success.json" || return 1
     fi
 
     if (( rounds_total > 1 )); then

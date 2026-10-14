@@ -1000,7 +1000,7 @@ If a run is interrupted, crashes, or ends as `rate-limit-pending`, resume it:
 ./repolens.sh --project ~/my-app --agent claude --resume 20260315T120000Z-a1b2c3d4
 ```
 
-Completed lenses are skipped; unfinished and rate-limited lenses are retried. A failed between-round handoff is retried after its cause is resolved. A saved, verified successful handoff is reused if completion persistence failed, preserving its selection, hypotheses, and saturation result without another meta agent call. The run ID is printed at startup and found in `logs/`.
+Completed lenses are skipped; unfinished and rate-limited lenses are retried. A failed between-round handoff is retried after its cause is resolved. A saved, verified successful handoff is reused if completion persistence failed, preserving its selection, hypotheses, and saturation result without another meta agent call. Selecting unfinished lenses retires an older handoff before that work starts; resume then obtains a fresh handoff. The run ID is printed at startup and found in `logs/`.
 
 Resume **reuses the same `logs/<run-id>/` directory** — it does not create a new sibling run. Lenses that already finished are recorded in `logs/<run-id>/.completed` and are skipped on resume; only unfinished and rate-limited lenses run again. You can **narrow a resume** by adding `--focus <lens-id>` or `--domain <domain-id>`: only those lenses run, and their results merge into the same run rather than starting a fresh directory.
 

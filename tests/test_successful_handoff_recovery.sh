@@ -173,6 +173,42 @@ check test "$?" -eq 0
 check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 2
 check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 2
 
+# A newly completed lens followed by interruption must retire an older proof
+# before the next resume evaluates completion eligibility.
+eval "$(declare -f run_lens | sed '1s/run_lens/original_run_lens/')"
+for saved_output in normal saturated; do
+  reset_case "pending-interrupted-$saved_output"
+  META_OUTPUT="$saved_output"
+  run_rounds 2 LENSES
+  check test "$?" -eq 0
+  LENSES+=(security/xss-csrf)
+  run_lens() {
+    original_run_lens "$@"
+    if [[ "$CURRENT_ROUND_INDEX" == 1 && "$1" == security/xss-csrf ]]; then
+      REPOLENS_FINAL_STATE=interrupted
+      REPOLENS_INTERRUPT_EXIT_CODE=143
+    fi
+    return 0
+  }
+  run_rounds 2 LENSES
+  check test "$?" -ne 0
+  check test "$REPOLENS_FINAL_STATE" = interrupted
+  check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 1
+  check test ! -e "$LOG_BASE/rounds/round-1/meta-orchestrator-success.json"
+  run_lens() { original_run_lens "$@"; }
+  REPOLENS_FINAL_STATE=finished
+  if [[ "$saved_output" == normal ]]; then META_OUTPUT=saturated; else META_OUTPUT=normal; fi
+  run_rounds 2 LENSES
+  check test "$?" -eq 0
+  check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 2
+  check test "$(grep -c '^1:' "$LOG_BASE/lens-calls")" -eq 2
+  if [[ "$META_OUTPUT" == saturated ]]; then
+    check grep -q NO_FRESH_ANGLES "$LOG_BASE/rounds/round-1/dispatch.md"
+  else
+    check grep -q '^LENS: injection' "$LOG_BASE/rounds/round-1/dispatch.md"
+  fi
+done
+
 for fault in nonzero structured rate; do
   reset_case "agent-$fault"
   mkdir -p "$LOG_BASE/rounds/round-1"

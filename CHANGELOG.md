@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Retire an older accepted handoff before running newly pending lenses so interruption cannot reuse stale selection or saturation on the next resume (review of #438).
+
 - Stop interrupted rounds after successful parallel cleanup and preserve signal-specific attempt diagnostics over concurrent prompt or rate-limit failures, even when summary writes fail (review of #438).
 
 - Stop lens and meta agent dispatch when a base template cannot be read, discard partial reads, and retain failed lens status for retry with `--resume` (review of #427/#429, #428). Keep callback and collection failures authoritative when diagnostics cannot persist, and retry missing between-round handoffs before completing a round. Reuse verified successful handoffs after partial completion writes, preserve saturation and signal stop reasons, and match attributed dispatches against canonical lens completions.
