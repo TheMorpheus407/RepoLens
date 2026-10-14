@@ -20,7 +20,9 @@
 # Shared citation grammar: backticks support spaces and extensionless paths;
 # bare citations allow '+' mid-path (e.g. src/routes/+page.svelte) and require
 # a path separator/extension or a conventional root file. A bare token carrying
-# any other unsupported character is rejected whole — its suffix never becomes
+# unsupported characters is rejected whole after trimming prose delimiters;
+# punctuation inside a token cannot make its suffix a citation.
+# The complete remaining token must match the bare path grammar to become
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
@@ -38,8 +40,9 @@ repolens_extract_citations() {
           printf '%s\n' "$token" ;;
       esac
     done < <(sed -E 's#https?://[^[:space:]<>`]+##g; s/`[^`]*`//g' <<< "$body" \
-      | grep -oE '(^|[^A-Za-z0-9_+./@~%#=-])[A-Za-z_./-][A-Za-z0-9_+./-]*:[0-9]+(-[0-9]+)?' \
-      | sed -E 's/^[^A-Za-z_./-]//')
+      | grep -oE '[^[:space:],;]+' \
+      | sed -E 's/^[([{"]+//; s/[])}."]+$//' \
+      | grep -E '^[A-Za-z_./-][A-Za-z0-9_+./-]*:[0-9]+(-[0-9]+)?$')
   } | sort -u
 }
 

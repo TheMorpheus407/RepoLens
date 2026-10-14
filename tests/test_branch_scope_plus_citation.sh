@@ -289,4 +289,23 @@ tilde_entry="$(jq -n --arg body "$tilde_body" '{body:$body}')"
 filing_verify_cluster_citations "$PROJECT_C" "$tilde_entry" >/dev/null 2>&1
 assert_failure "citation check rejects '~' citation even when the suffix file exists" "$?"
 
+echo ""
+echo "=== Case 11: unsupported bare token characters cannot validate suffix twins ==="
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for bad_path in 'src/$route/page.svelte' 'src/routes/!page.svelte' \
+    'src/routes/&page.svelte' 'src/routes/?page.svelte' \
+    'src/routes/*page.svelte' 'src/routes/épage.svelte' \
+    'src/routes/[page.svelte' 'src/routes/(page.svelte'; do
+  bad_body="The regression is at $bad_path:1"
+  assert_eq "$bad_path yields no suffix citation" "" "$(repolens_extract_citations "$bad_body")"
+  branch_scope_verify_body "$bad_body" >/dev/null 2>&1
+  assert_failure "$bad_path cannot pass scope using the root twin" "$?"
+  bad_entry="$(jq -n --arg body "$bad_body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_C" "$bad_entry" >/dev/null 2>&1
+  assert_failure "$bad_path cannot pass citation verification using the root twin" "$?"
+done
+quoted_bad="$(repolens_extract_citations 'See `src/routes/!page.svelte:1`')"
+assert_has_line "backticks preserve punctuation in a complete path" \
+  'src/routes/!page.svelte:1' "$quoted_bad"
+
 finish
