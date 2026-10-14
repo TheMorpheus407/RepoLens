@@ -303,7 +303,15 @@ done
 # Review of #418: independent parent evidence must not turn an unsupported
 # file-like reference in an action into citation-free prose.
 unsupported_home_ref=\~/src/a.sh:1
-for unsupported_body in "$unsupported_home_ref" 'src/$route/a.sh:1' 'src/!a.sh:1'; do
+for unsupported_body in "$unsupported_home_ref" 'src/$route/a.sh:1' 'src/!a.sh:1' \
+    '@Makefile:999' '+Makefile:1' 'Dockerfile:1abc' \
+    'src/a.sh:1 and ~/src/missing.sh:1' \
+    "${unsupported_home_ref%a.sh:1}missing.sh:1 and src/a.sh:1" \
+    'src/a.sh:1 and @Makefile:999' \
+    'src/a.sh:1 and **src/$route/missing.sh:1**' \
+    '**src/a.sh:1**,**~/src/missing.sh:1**' \
+    '`src/a.sh:1`~/src/missing.sh:1' \
+    '`src/a.sh:1`,~/src/missing.sh:1'; do
   fresh
   CROSS_LINK_MODE=comment
   jq --arg body "$unsupported_body" \
@@ -324,9 +332,22 @@ for prose_body in 'Follow-up with no new citations.' \
     'Observed at 2026.10.14T12:30:45Z' \
     'Observed at [14/Oct/2026:12:30:45+0000]' \
     'Observed at 2026/10/14:12:30:45+00:00' \
-    'Literal snippet `example/tool:1abc`'; do
+    'Literal snippet `example/tool:1abc`' \
+    'Observed at 2026.10.14T12:30:45Z, retry succeeded.' \
+    'Observed at [14/Oct/2026:12:30:45+0000], then restarted.' \
+    'Literal snippet ``example/tool:1abc``' \
+    'Literal snippet ```example/tool:1abc```' \
+    'Literal snippet ``example/`tool`:1abc``' \
+    'src/a.sh:1' '**src/a.sh:1**' '"**src/a.sh:1**,**src/a.sh:1**"' \
+    'See `src/with spaces.sh:1`' \
+    'See `src/with,semicolon;.sh:1`' \
+    'See ``src/a.sh:1``' \
+    '`src/a.sh:1`,src/a.sh:1' 'src/a.sh:1;`src/with spaces.sh:1`' \
+    '<**`src/with,semicolon;.sh:1`**,**src/a.sh:1**>'; do
   fresh
   CROSS_LINK_MODE=comment
+  cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/with spaces.sh"
+  cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/with,semicolon;.sh"
   jq --arg body "$prose_body" \
     '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
     "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
@@ -351,7 +372,7 @@ cat > "$probe_bin/awk" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 case "${1:-}" in
-  *'print "candidate"'*) : > "$REPOLENS_TEST_PROBE_CALLED"; exit 2 ;;
+  *'print "candidate"'*|*'if (found) print tokens[i]'*) : > "$REPOLENS_TEST_PROBE_CALLED"; exit 2 ;;
 esac
 exec "$REPOLENS_TEST_REAL_AWK" "$@"
 SH
