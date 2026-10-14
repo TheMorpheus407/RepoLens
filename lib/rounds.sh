@@ -1057,54 +1057,56 @@ _rounds_meta_custom_focus_body() {
   fi
 }
 
+# Materialize a dispatch entry idempotently. Existing matching content belongs
+# to a prior attempt; IDs already claimed in this dispatch remain collisions.
 _rounds_meta_write_custom_lens() {
-  local custom_lenses_dir="$1" payload="$2" index="$3"
-  local category base_slug slug lens_dir lens_file focus_body
+  local custom_lenses_dir="$1" payload="$2" index="$3" reserved_entries="${4:-}"
+  local category base_slug slug lens_dir lens_file focus_body lens_content saved_content tmp_file
   local round_prefix="" collision_suffix=2
 
   category="$(_rounds_meta_custom_category_from_payload "$payload")" || return 1
   base_slug="$(_rounds_meta_slug "$category")"
   [[ -n "$base_slug" ]] || base_slug="custom-$index"
-
-  # Bug 1 — cross-round disambiguation. When CURRENT_ROUND_INDEX is set
-  # (multi-round mode), prefix the slug with r<N>- so the same agent-named
-  # category in round 2 and round 3 produces distinct lens IDs.
   if [[ -n "${CURRENT_ROUND_INDEX:-}" && "$CURRENT_ROUND_INDEX" =~ ^[0-9]+$ ]]; then
     round_prefix="r${CURRENT_ROUND_INDEX}-"
   fi
-
   slug="${round_prefix}${base_slug}"
   lens_dir="$custom_lenses_dir/custom"
-  lens_file="$lens_dir/$slug.md"
-
   mkdir -p "$lens_dir" || return 1
+  focus_body="$(_rounds_meta_custom_focus_body "$payload")" || return 1
 
-  # Bug 2 — same-round collision counter. Two distinct categories that
-  # slugify identically (e.g. "Payment retry race!" and "payment-retry race")
-  # would otherwise overwrite each other. Append -2, -3, ... until we land
-  # on a free filename.
-  while [[ -e "$lens_file" ]]; do
-    slug="${round_prefix}${base_slug}-${collision_suffix}"
+  while :; do
     lens_file="$lens_dir/$slug.md"
-    collision_suffix=$(( collision_suffix + 1 ))
+    lens_content="$(
+      printf -- '---\n'
+      printf 'id: %s\n' "$slug"
+      printf 'domain: custom\n'
+      printf 'name: Custom %s\n' "$slug"
+      printf 'role: meta-orchestrator custom follow-up\n'
+      printf -- '---\n'
+      printf '## Your Expert Focus\n\n'
+      printf 'Category: %s\n\n' "$category"
+      if [[ -n "$focus_body" ]]; then printf '%s\n' "$focus_body"; fi
+    )" || return 1
+    if [[ ! -e "$lens_file" && ! -L "$lens_file" ]]; then break; fi
+    if [[ " $reserved_entries " != *" custom/$slug "* ]]; then
+      saved_content="$(cat "$lens_file")" || return 1
+      if [[ "$saved_content" == "$lens_content" ]]; then
+        printf 'custom/%s\n' "$slug"
+        return 0
+      fi
+    fi
+    slug="${round_prefix}${base_slug}-${collision_suffix}"
+    collision_suffix=$((collision_suffix + 1))
   done
 
-  focus_body="$(_rounds_meta_custom_focus_body "$payload")"
-
-  {
-    printf -- '---\n'
-    printf 'id: %s\n' "$slug"
-    printf 'domain: custom\n'
-    printf 'name: Custom %s\n' "$slug"
-    printf 'role: meta-orchestrator custom follow-up\n'
-    printf -- '---\n'
-    printf '## Your Expert Focus\n\n'
-    printf 'Category: %s\n\n' "$category"
-    if [[ -n "$focus_body" ]]; then
-      printf '%s\n' "$focus_body"
-    fi
-  } > "$lens_file" || return 1
-
+  # Failed writes must not leave a truncated canonical file that changes the
+  # next attempt's collision suffix.
+  tmp_file="$(mktemp "$lens_file.tmp.XXXXXX")" || return 1
+  if ! printf '%s\n' "$lens_content" > "$tmp_file" || ! mv -f -- "$tmp_file" "$lens_file"; then
+    rm -f -- "$tmp_file"
+    return 1
+  fi
   printf 'custom/%s\n' "$slug"
 }
 
@@ -1160,13 +1162,15 @@ _rounds_meta_dispatch_custom_entries() {
 
     if (( in_custom )) && (( in_fence == 0 )) && _rounds_meta_dispatch_boundary "$trimmed"; then
       index=$((index + 1))
-      if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index")"; then
+      if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index" "${!seen_entries[*]}")"; then
         if [[ -z "${seen_entries[$custom_entry]:-}" ]]; then
           seen_entries["$custom_entry"]=1
           _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
           tuple="$(_rounds_meta_tuple_serialize "$custom_entry" "$role" "$focus" "$anchor" "$exclude")"
           printf '%s\n' "$tuple"
         fi
+      else
+        return 1
       fi
       payload=""
       in_custom=0
@@ -1190,15 +1194,18 @@ _rounds_meta_dispatch_custom_entries() {
       _rounds_meta_warn "Custom dispatch payload reached EOF with an unclosed fence; flushing as-is."
     fi
     index=$((index + 1))
-    if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index")"; then
+    if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index" "${!seen_entries[*]}")"; then
       if [[ -z "${seen_entries[$custom_entry]:-}" ]]; then
         seen_entries["$custom_entry"]=1
         _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
         tuple="$(_rounds_meta_tuple_serialize "$custom_entry" "$role" "$focus" "$anchor" "$exclude")"
         printf '%s\n' "$tuple"
       fi
+    else
+      return 1
     fi
   fi
+  return 0
 }
 
 _rounds_meta_dispatch_has_entries() {
@@ -2537,6 +2544,17 @@ run_rounds() {
         dispatched_lenses_output="$(_rounds_meta_dispatch_lens_entries "$dispatch_path")"
         round_custom_lenses_dir="${dispatch_path%/*}/custom-lenses"
         dispatched_custom_output="$(_rounds_meta_dispatch_custom_entries "$dispatch_path" "$round_custom_lenses_dir")"
+        round_rc=$?
+        if (( round_rc != 0 )); then
+          ROUNDS_FAILURE_REASON="custom-lens-materialization-failed"
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          else
+            set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON"
+          fi
+          log_warn "[round $round/$rounds_total] Custom lens materialization failed; round remains pending"
+          return "$round_rc"
+        fi
         dispatched_generic_output="$(_rounds_meta_dispatch_generic_entries "$dispatch_path")"
         if _rounds_meta_dispatch_has_entries "$dispatch_path"; then
           dispatch_has_entries=1

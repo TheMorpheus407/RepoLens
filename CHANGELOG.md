@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reuse custom-lens IDs on resume without losing same-round collision separation; propagate materialization failures so requested investigations cannot disappear into a completed round (repolens-r2-p1-2, repolens-r2-p1-3).
+
 - Stop polish ranking, later shortlist posts/drafts and verifier admission after a parent interruption, including signals during rendering, body promotion or prompt preparation. Preserve successful in-flight issue receipts and signal exit codes through empty batches and failed operations (repolens-r2-p1-1).
 
 - Preserve parent interruption through post-round synthesis and filing failures, and prevent a new filing batch after cancelled synthesis (repolens-r1-p1-2).
