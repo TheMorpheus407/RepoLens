@@ -33,16 +33,22 @@ source "$SCRIPT_DIR/lib/summary.sh"
 source "$SCRIPT_DIR/lib/parallel.sh"
 # The production trap and cleanup run with no workers. Only kernel admission is
 # stubbed; no model, forge, subprocess worker, or real scope is launched.
+# Admit an empty parallel fixture without requiring a process-scope backend.
 parallel_preflight() { _REPOLENS_SCOPE_READY=1; _REPOLENS_SCOPE_FAILED=0; }
+# Suppress informational output from the extracted production block.
 log_info() { :; }
+# Suppress expected warnings from the injected failure scenarios.
 log_warn() { :; }
 passed=0 failed=0
+# Count an expected/actual equality and print the scenario on mismatch.
 check_eq() {
   if [[ "$2" == "$3" ]]; then passed=$((passed + 1));
   else failed=$((failed + 1)); printf 'FAIL: %s expected [%s], got [%s]\n' "$1" "$2" "$3"; fi
 }
 FINALIZER_PID="$BASHPID"
+# Deliver SIGNAL to the parent even when invoked by the filing subshell.
 interrupt_parent() { kill -s "$SIGNAL" "$FINALIZER_PID"; }
+# Record synthesis admission, then inject the selected signal/return outcome.
 run_synthesizer() {
   printf 'called\n' >> "$LOG_BASE/synthesis-calls"
   case "$row" in
@@ -53,6 +59,7 @@ run_synthesizer() {
   esac
   return 0
 }
+# Record filing admission and simulate its terminal receipt or deferral marker.
 dispatch_filing_batch() {
   printf 'called\n' >> "$LOG_BASE/filing-calls"
   case "$row" in
