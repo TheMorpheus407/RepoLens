@@ -5180,6 +5180,8 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "${NO_VERIFIER:-true}" != "true" && "${REPOLENS_
   log_info "Verifier: re-reading cited code locations for evidence accuracy"
   if run_verifier "$RUN_ID"; then
     log_info "Verifier: verification.json promoted"
+  elif [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    log_info "Verifier: interrupted"
   elif [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
     log_warn "Verifier: rate-limited — aborting before synthesis"
     RUN_ROUNDS_RC=1

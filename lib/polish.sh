@@ -465,7 +465,10 @@ run_polish_issue_emission() {
     return 1
   fi
 
-  base_dir="$(_polish_run_base "$run_id")" || return 1
+  base_dir="$(_polish_run_base "$run_id")" || {
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return 1
+  }
   polish_dir="$base_dir/polish"
   ranked_file="$polish_dir/ranked-suggestions.json"
   filed_dir="$polish_dir/filed"
@@ -476,11 +479,15 @@ run_polish_issue_emission() {
     return 1
   fi
 
-  mkdir -p "$filed_dir" || return 1
+  mkdir -p "$filed_dir" || {
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return 1
+  }
 
   if ! _polish_build_issue_groups "$ranked_file" "$top_n" > "$groups_file"; then
     rm -f "$groups_file"
     _polish_log_warn "Polish issue emission: failed to group ranked suggestions"
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   fi
 
@@ -531,6 +538,11 @@ run_polish_issue_emission() {
       break
     }
 
+    # A signal deferred during promotion must stop local receipts too.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      emission_rc="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      break
+    fi
     if ${LOCAL_MODE:-false}; then
       issue_url="local:$body_file"
     else
@@ -573,6 +585,9 @@ run_polish_issue_emission() {
   done < "$groups_file"
 
   rm -f "$groups_file"
+  # Covers empty batches, the last in-flight create, and operation failures.
+  # Successful creates have already retained their receipt/count above.
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if (( emission_rc != 0 )); then
     return "$emission_rc"
   fi
