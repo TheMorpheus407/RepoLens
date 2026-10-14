@@ -42,6 +42,9 @@ an existing file can be out of scope, and an in-scope line can be nonexistent.
 | N17 | Valid parent checked before nested invalid action evidence | Record action failure; zero comment creates | filing governance nested invalid-body cases |
 | N18 | Invalid nested parent checked before valid action evidence | Parent failure rejects action; zero comment creates | filing governance N18 |
 | N19 | Valid nested evidence as issue or action body | Publish once through mocked structured readback | filing governance N19 |
+| N20 | Valid independent parent, action containing only unsupported file-like citations | Reject the action with a diagnostic and zero comment POSTs | filing governance unsupported-action cases |
+| N21 | Valid parent, citation-free action prose, URL or timestamp | Preserve ordinary comment publication | filing governance citation-free action cases |
+| N22 | Action citation classification fails | Record failure; zero comment creates | filing governance citation probe failure |
 
 “Citation suite” means `tests/test_branch_scope_plus_citation.sh`; “filing
 governance” means `tests/test_filing_governance.sh`. The existing separate product

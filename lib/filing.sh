@@ -638,6 +638,33 @@ _filing_cross_link_enact() {
       printf 'VERIFICATION_FAILED: malformed citation list in body\n' > "$sentinel_failed"
       continue
     fi
+    # Empty strict extraction can mean an unsupported file:line token.
+    # Recognize that shape before allowing citation-free action prose. The
+    # probe never supplies a path to a validator; the original body is retained.
+    if [[ -z "$action_citations" ]]; then
+      local action_reference_probe
+      if ! action_reference_probe="$(awk '
+        {
+          gsub(/[[:alpha:]][[:alnum:]+.-]*:\/\/[^[:space:]<>`]+/, "@")
+          gsub(/`[^`]*`/, "@")
+          for (i = 1; i <= NF; i++) {
+            token = $i
+            gsub(/^[([{\042\047*_<>]+|[])}.\042\047:!?;*_<>]+$/, "", token)
+            if (token ~ /^[0-9][0-9:\/.TtZz+-]*$/ ||
+                tolower(token) ~ /^[0-9][0-9]?\/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\/[0-9][0-9][0-9][0-9]:[0-9:.z+-]+$/) continue
+            if (token ~ /[\/.][^[:space:]]*:[0-9]+(-[0-9]+)?/) found = 1
+          }
+        }
+        END { if (found) print "candidate" }
+      ' <<< "$body")"; then
+        printf 'VERIFICATION_FAILED: action citation classification failed\n' > "$sentinel_failed"
+        continue
+      fi
+      if [[ -n "$action_reference_probe" ]]; then
+        printf 'VERIFICATION_FAILED: unsupported action citation; quote the complete path\n' > "$sentinel_failed"
+        continue
+      fi
+    fi
     if [[ -n "$action_citations" ]]; then
       if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" \
           || ! reason="$(branch_scope_verify_body "$body")"; then

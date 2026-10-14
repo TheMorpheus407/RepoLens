@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject unsupported file-like citations in cross-link actions even when independent parent evidence is valid, while preserving citation-free prose, URLs, and timestamps (review of #418).
+
 - Reject unsupported bare citation tokens and malformed comma/semicolon lists as a whole, preventing unrelated suffix files from validating. Malformed lists containing citations fail validation even with a separate valid anchor or a failed alternative formatting interpretation. Preserve nested formatting around lists and their members, validate supporting references in mixed bare/backtick lists, and prevent excluded inline spans from joining into fabricated paths (review of #418, #436).
 
 - Reuse one fresh open-issue snapshot per reopen-suggestion enact pass, including lookup failures, while preserving comment actions, exact-title deduplication, creation budgets, and receipt verification (#423).

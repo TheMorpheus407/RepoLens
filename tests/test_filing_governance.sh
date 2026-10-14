@@ -300,6 +300,74 @@ for malformed_body in 'src/a.sh:1 and src/missing.sh:1,garbage' \
     test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
 done
 
+# Review of #418: independent parent evidence must not turn an unsupported
+# file-like reference in an action into citation-free prose.
+unsupported_home_ref=\~/src/a.sh:1
+for unsupported_body in "$unsupported_home_ref" 'src/$route/a.sh:1' 'src/!a.sh:1'; do
+  fresh
+  CROSS_LINK_MODE=comment
+  jq --arg body "$unsupported_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "unsupported action records rejection: $unsupported_body" \
+    test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+  check "unsupported action has no success receipt: $unsupported_body" \
+    test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  check "unsupported action performs zero comment POSTs: $unsupported_body" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+done
+for prose_body in 'Follow-up with no new citations.' \
+    'Observed at 12:30; see https://example.org:8443/status.' \
+    'HTTPS://EXAMPLE.ORG:8443/path' 'Observed at 2026/10/14:12' \
+    'Observed at 2026.10.14T12:30:45Z' \
+    'Observed at [14/Oct/2026:12:30:45+0000]' \
+    'Observed at 2026/10/14:12:30:45+00:00' \
+    'Literal snippet `example/tool:1abc`'; do
+  fresh
+  CROSS_LINK_MODE=comment
+  jq --arg body "$prose_body" \
+    '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  check "citation-free action remains publishable: $prose_body" \
+    test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  check "citation-free action posts exactly once: $prose_body" \
+    test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+done
+
+fresh
+CROSS_LINK_MODE=comment
+jq --arg body 'A citation-free follow-up.' \
+  '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
+  "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+probe_bin="$TMP/citation-probe-bin"
+probe_real_awk="$(command -v awk)"
+mkdir -p "$probe_bin"
+cat > "$probe_bin/awk" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  *'print "candidate"'*) : > "$REPOLENS_TEST_PROBE_CALLED"; exit 2 ;;
+esac
+exec "$REPOLENS_TEST_REAL_AWK" "$@"
+SH
+chmod +x "$probe_bin/awk"
+REPOLENS_TEST_REAL_AWK="$probe_real_awk" \
+  REPOLENS_TEST_PROBE_CALLED="$TMP/citation-probe-called" \
+  PATH="$probe_bin:$PATH" \
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+check 'citation probe failure was exercised' test -f "$TMP/citation-probe-called"
+check 'citation probe failure records an action rejection' \
+  test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+check 'citation probe failure cannot produce a success receipt' \
+  test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+check 'citation probe failure performs zero comment POSTs' \
+  test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+
 # docs/citation-validation.md N16-N19: parent evidence is checked before action
 # evidence; a valid parent never authorizes invalid new supporting references.
 fresh
