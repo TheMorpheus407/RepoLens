@@ -311,7 +311,11 @@ for unsupported_body in "$unsupported_home_ref" 'src/$route/a.sh:1' 'src/!a.sh:1
     'src/a.sh:1 and **src/$route/missing.sh:1**' \
     '**src/a.sh:1**,**~/src/missing.sh:1**' \
     '`src/a.sh:1`~/src/missing.sh:1' \
-    '`src/a.sh:1`,~/src/missing.sh:1'; do
+    '`src/a.sh:1`,~/src/missing.sh:1' \
+    $'```sh\nsrc/$route/a.sh:1\n```\n~/src/missing.sh:1' \
+    'https://example.org/status, ~/src/missing.sh:1' \
+    'https://example.org/status; ~/src/missing.sh:1' \
+    'See `src/missing.sh:1`'; do
   fresh
   CROSS_LINK_MODE=comment
   jq --arg body "$unsupported_body" \
@@ -338,6 +342,11 @@ for prose_body in 'Follow-up with no new citations.' \
     'Literal snippet ``example/tool:1abc``' \
     'Literal snippet ```example/tool:1abc```' \
     'Literal snippet ``example/`tool`:1abc``' \
+    $'Fenced sample:\n```sh\nsrc/$route/a.sh:1\n```' \
+    $'Fenced sample:\n````\nexample/`tool`:1abc\n```\nsrc/$route/a.sh:1\n````' \
+    $'Multiline span ``example/tool:1abc\ncontinued``' \
+    'URL with punctuation https://example.org/status,~/src/missing.sh:1' \
+    'URL with punctuation https://example.org/status;~/src/missing.sh:1' \
     'src/a.sh:1' '**src/a.sh:1**' '"**src/a.sh:1**,**src/a.sh:1**"' \
     'See `src/with spaces.sh:1`' \
     'See `src/with,semicolon;.sh:1`' \
@@ -357,6 +366,8 @@ for prose_body in 'Follow-up with no new citations.' \
     test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
   check "citation-free action posts exactly once: $prose_body" \
     test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+  check "action preserves exact body: $prose_body" \
+    jq -e --arg body "$prose_body" '.body == $body' "$TMP/comment.json"
 done
 
 fresh

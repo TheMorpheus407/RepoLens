@@ -492,8 +492,11 @@ _filing_action_reference_candidates() {
       }
       return result value
     }
-    {
-      value = mask_spans($0)
+    # Match delimiters across the complete body so multiline excluded spans
+    # cannot expose their inner text as independent action references.
+    { body = body $0 "\n" }
+    END {
+      value = mask_spans(body)
       gsub(/[[:alpha:]][[:alnum:]+.-]*:\/\/[^[:space:]<>`]+/, "@", value)
       count = split(value, tokens, /[[:space:]]+/)
       for (i = 1; i <= count; i++) {
