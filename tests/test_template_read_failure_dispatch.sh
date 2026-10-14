@@ -23,7 +23,8 @@ CASE_DIRS=()
 trap 'rm -rf "$TEST_DIR" "${CASE_DIRS[@]}"' EXIT
 mkdir -p "$TEST_DIR/bin"
 REAL_CAT="$(command -v cat)"
-export REAL_CAT
+REAL_AWK="$(command -v awk)"
+export REAL_CAT REAL_AWK
 cat > "$TEST_DIR/bin/cat" <<'CAT'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -33,6 +34,17 @@ if [[ "$#" -eq 1 && "$1" == "${FAIL_TEMPLATE:-}" ]]; then
 fi
 exec "$REAL_CAT" "$@"
 CAT
+cat > "$TEST_DIR/bin/awk" <<'AWK'
+#!/usr/bin/env bash
+set -uo pipefail
+for arg in "$@"; do
+  if [[ "$arg" == "${FAIL_LENS:-}" ]]; then
+    printf 'Partial lens read.'
+    exit 42
+  fi
+done
+exec "$REAL_AWK" "$@"
+AWK
 cat > "$TEST_DIR/bin/codex" <<'AGENT'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -65,14 +77,32 @@ for template in "$TEST_DIR/missing-base.md" "$TEST_DIR/directory-base" "$SCRIPT_
   check test -z "$rendered"
 done
 unset FAIL_TEMPLATE
+# Lens read errors, including partial reads, must discard the entire prompt.
+printf "Unreadable lens\n" > "$TEST_DIR/unreadable-lens.md"
+chmod 000 "$TEST_DIR/unreadable-lens.md"
+for lens in "$TEST_DIR/missing-lens.md" "$TEST_DIR/unreadable-lens.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md"; do
+  if [[ "$lens" == "$SCRIPT_DIR/prompts/lenses/security/injection.md" ]]; then export FAIL_LENS="$lens"; else unset FAIL_LENS; fi
+  rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/audit.md" "$lens" '' '' audit)"
+  render_rc=$?
+  check test "$render_rc" -ne 0
+  check test -z "$rendered"
+done
+unset FAIL_LENS
 printf 'Plan a small command-line audit tool.\n' > "$TEST_DIR/spec.md"
 
+for failure_source in base lens; do
 for mode in audit greenfield; do
+  [[ "$failure_source" == lens && "$mode" == greenfield ]] && continue
   for sink in local forge blocked-marker; do
     LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-template-$mode-$sink.XXXXXX")" || exit 1
     CASE_DIRS+=("$LOG_BASE")
     RUN_ID="${LOG_BASE#"$SCRIPT_DIR/logs/"}"
-    export FAIL_TEMPLATE="$SCRIPT_DIR/prompts/_base/$mode.md"
+    unset FAIL_TEMPLATE FAIL_LENS
+    if [[ "$failure_source" == base ]]; then
+      export FAIL_TEMPLATE="$SCRIPT_DIR/prompts/_base/$mode.md"
+    else
+      export FAIL_LENS="$SCRIPT_DIR/prompts/lenses/security/injection.md"
+    fi
     export AGENT_CALLS="$LOG_BASE/agent-calls"
     if [[ "$sink" == blocked-marker ]]; then mkdir "$LOG_BASE/.systemic-failure-abort"; fi
     args=(--mode "$mode" --resume "$RUN_ID" --rounds 1 --depth 1)
@@ -100,7 +130,7 @@ for mode in audit greenfield; do
     check json_matches '.state == "failed"' "$LOG_BASE/status.json"
     if [[ "$mode" == audit && "$sink" == local ]]; then
       # Once readable, the same run clears the abort and retries the lens.
-      unset FAIL_TEMPLATE
+      unset FAIL_TEMPLATE FAIL_LENS
       env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
         REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \
         REPOLENS_LENS_HEARTBEAT_INTERVAL=0 REPOLENS_STATUS_INTERVAL=1 \
@@ -131,6 +161,7 @@ for mode in audit greenfield; do
       done
     fi
   done
+done
 done
 
 # The between-round meta caller must also stop before writing or dispatching.
