@@ -78,6 +78,7 @@ repolens_auto_max_parallel() {
 }
 
 _parallel_agent_abort_pending() {
+  [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]] && return 0
   [[ -n "${LOG_BASE:-}" ]] || return 1
   [[ -f "$LOG_BASE/.rate-limit-abort" || -f "$LOG_BASE/.rate-limit-sleep-interrupt" \
     || -f "$LOG_BASE/.agent-no-progress-abort" || -f "$LOG_BASE/.systemic-failure-abort" ]]
@@ -259,6 +260,11 @@ sem_acquire() {
   while true; do
     (( _REPOLENS_SCOPE_FAILED == 0 )) || return 1
     _parallel_poll_once || return 1
+    # Lens rounds fail fast; filing batches aggregate governed item rejections.
+    if [[ "${_REPOLENS_STOP_ON_CALLBACK_ERROR:-0}" == 1 ]] \
+        && (( ${_REPOLENS_WAIT_RC:-0} != 0 )); then
+      return 1
+    fi
     if _parallel_agent_abort_pending; then
       return 1
     fi

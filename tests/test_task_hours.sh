@@ -115,7 +115,7 @@ sample_text='Keep each task to 1 hour of work.'
 default_render="$(TASK_HOURS=1 _template_task_scope "$sample_text")"
 export TASK_HOURS=6
 check test "$(_template_task_scope "$sample_text")" = 'Keep each task to 6 hours of work.'
-for value in 06 0 -1 1.5 abc ''; do
+for value in 06 0 -1 1.5 abc '' '1;touch unsafe'; do
   export TASK_HOURS="$value"
   output="$(_template_task_scope "$sample_text" 2>/dev/null)"
   rc=$?
@@ -123,6 +123,18 @@ for value in 06 0 -1 1.5 abc ''; do
   check test "$output" = "$default_render"
   check contains "$output" '1 hour'
 done
+# Pin the same adversarial value at both renderer boundaries, in an owned cwd.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/polish.sh"
+export TASK_HOURS='1;touch unsafe'
+(
+  cd "$TEST_DIR" || exit 1
+  _template_task_scope "$sample_text" > renderer.txt
+  _polish_render_issue_body '{"domain":"fluency","lens_id":"spacing-consistency","items":[]}' polish.md probe ranked.json
+  test ! -e unsafe && ! grep -q 'touch unsafe' renderer.txt polish.md \
+    && grep -q 'approximately one hour' polish.md
+)
+check test "$?" -eq 0
 unset TASK_HOURS
 # Cover the remaining replacement variants in _template_task_scope: the
 # capitalized "1 Hour", compact "~1h", and hyphenated "one-hour" forms.

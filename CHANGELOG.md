@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Scope callback fail-fast behavior to lens rounds, preserving governed filing batches. Clear previous interruption diagnostics on explicit resume, stop interrupted saved-handoff recovery, and retain a run-failure reason when diagnostics cannot be saved (#438).
+
+- Preserve the current parent interruption through final rate-limit resolution and filing-accounting errors, including signals during diagnostic I/O; recover child sleep signals only when the parent has no interruption.
+
+- Retire an older accepted handoff before running newly pending lenses so interruption cannot reuse stale selection or saturation on the next resume (review of #438).
+
+- Stop interrupted rounds after successful parallel cleanup and preserve signal-specific attempt diagnostics over concurrent prompt or rate-limit failures, even when summary writes fail (review of #438).
+
+- Stop lens and meta agent dispatch when a base template cannot be read, discard partial reads, and retain failed lens status for retry with `--resume` (review of #427/#429, #428). Keep callback and collection failures authoritative when diagnostics cannot persist, and retry missing between-round handoffs before completing a round. Reuse verified successful handoffs after partial completion writes, preserve saturation and signal stop reasons, and match attributed dispatches against canonical lens completions.
+
 - Reject unsupported file-like citations in cross-link actions including conventional root files and references alongside valid anchors, even when independent parent evidence is valid. Preserve citation-free prose, opaque URLs, comma-terminated timestamps, and backtick samples across lines when they contain no recognized source citations. Recognized citations inside fences still undergo live-source and branch-scope checks (review of #418, #437).
 
 - Reject unsupported bare citation tokens and malformed comma/semicolon lists as a whole, preventing unrelated suffix files from validating. Malformed lists containing citations fail validation even with a separate valid anchor or a failed alternative formatting interpretation. Preserve nested formatting around lists and their members, validate supporting references in mixed bare/backtick lists, and prevent excluded inline spans from joining into fabricated paths (review of #418, #436).

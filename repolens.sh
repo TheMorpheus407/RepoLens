@@ -1943,13 +1943,23 @@ resolve_run_exit_code() {
   printf '0'
 }
 
-# resolve_why_stopped — print the attempt's why_stopped string. Prefers
+# resolve_why_stopped — print the attempt's why_stopped string. Interruption
+# takes precedence over concurrent failure diagnostics. Otherwise prefer
 # summary.json's stopped_reason; when that is empty (e.g. a summary-write race or
 # a sentinel dropped without a stop reason) it falls back to whichever abort
 # sentinel is present so the attempt entry is never blank while the run clearly
-# aborted. Reads SUMMARY_FILE + the LOG_BASE sentinels; no side effects.
+# aborted. If persistence failed, retain the parent-memory failure reason.
+# Reads SUMMARY_FILE + the LOG_BASE sentinels; no side effects.
 resolve_why_stopped() {
   local reason
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+    case "${REPOLENS_INTERRUPT_EXIT_CODE:-130}" in
+      129) printf 'interrupted-sighup' ;;
+      143) printf 'interrupted-sigterm' ;;
+      *) printf 'interrupted-sigint' ;;
+    esac
+    return 0
+  fi
   reason="$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || printf '')"
   if [[ -n "$reason" ]]; then
     printf '%s' "$reason"
@@ -1967,19 +1977,18 @@ resolve_why_stopped() {
     printf 'systemic-failure'
     return 0
   fi
-  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
-    case "${REPOLENS_INTERRUPT_EXIT_CODE:-130}" in
-      129) printf 'interrupted-sighup' ;;
-      143) printf 'interrupted-sigterm' ;;
-      *) printf 'interrupted-sigint' ;;
-    esac
-    return 0
+  reason="${ROUNDS_FAILURE_REASON:-}"
+  if [[ -z "$reason" && "${RUN_ROUNDS_RC:-0}" -ne 0 ]]; then
+    reason="run-execution-failed"
   fi
-  printf ''
+  printf '%s' "$reason"
 }
 
+# Recover child sleep interruption or quota state, retaining a newer parent
+# signal even when it arrives during marker/summary I/O. Diagnostic writes are
+# best effort; they cannot change the signal's in-memory state or exit code.
 apply_rate_limit_abort_final_state() {
-  local marker key value exit_code="" stopped_reason="" existing_reason
+  local marker key value exit_code="" stopped_reason="" existing_reason final_state="" signal_reason
 
   marker="$(rate_limit_sleep_interrupt_marker)"
   if [[ -f "$marker" ]]; then
@@ -1999,27 +2008,38 @@ apply_rate_limit_abort_final_state() {
       *) stopped_reason="$(rate_limit_sleep_stopped_reason "$exit_code" 2>/dev/null || printf '%s\n' "interrupted-sigint")" ;;
     esac
 
-    REPOLENS_FINAL_STATE="interrupted"
-    REPOLENS_INTERRUPT_EXIT_CODE="$exit_code"
-    set_stop_reason "$SUMMARY_FILE" "$stopped_reason"
-    return 0
-  fi
-
-  if [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+    final_state="interrupted"
+  elif [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
     existing_reason="$(rate_limit_abort_stopped_reason)"
     if is_phase_rate_limit_stopped_reason "$existing_reason"; then
-      REPOLENS_FINAL_STATE="failed"
-      return 0
+      final_state="failed"
+    else
+      final_state="rate-limit-pending"
+      if [[ -z "$existing_reason" ]]; then stopped_reason="rate-limited"; fi
     fi
-
-    REPOLENS_FINAL_STATE="rate-limit-pending"
-    if [[ -z "$existing_reason" ]]; then
-      set_stop_reason "$SUMMARY_FILE" "rate-limited"
-    fi
-    return 0
   fi
 
-  return 1
+  # Check after reads: the returning parallel traps may have fired meanwhile.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+    stopped_reason="$(resolve_why_stopped)"
+  else
+    [[ -n "$final_state" ]] || return 1
+    REPOLENS_FINAL_STATE="$final_state"
+    if [[ "$final_state" == "interrupted" ]]; then
+      REPOLENS_INTERRUPT_EXIT_CODE="$exit_code"
+    fi
+  fi
+  if [[ -n "$stopped_reason" ]]; then
+    set_stop_reason "$SUMMARY_FILE" "$stopped_reason" || true
+  fi
+  # A signal can also arrive while the preceding diagnostic write holds a lock.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == "interrupted" ]]; then
+    signal_reason="$(resolve_why_stopped)"
+    if [[ "$stopped_reason" != "$signal_reason" ]]; then
+      set_stop_reason "$SUMMARY_FILE" "$signal_reason" || true
+    fi
+  fi
+  return 0
 }
 
 _handle_hangup() {
@@ -2626,6 +2646,11 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.rate-limit-sleep-interrupt" ]]; then
 fi
 if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
   rm -f "$LOG_BASE/.systemic-failure-abort"
+  clear_stop_reason "$SUMMARY_FILE"
+fi
+# A failed marker write must not leave an old execution error on a successful retry.
+if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
+    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|process-scope-cleanup-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
@@ -4639,17 +4664,25 @@ run_lens() {
   fi
 
   # Compose prompt (pass local mode params)
-  local prompt="" lens_local_dir=""
+  local prompt="" lens_local_dir="" prompt_rc=0
   if $LOCAL_MODE; then
     lens_local_dir="${CURRENT_ROUND_OUTPUT_DIR:-$OUTPUT_DIR}/$domain/$lens_id"
     mkdir -p "$lens_local_dir"
     if [[ "$MODE" != "greenfield" ]]; then
-      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")"
+      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")" || prompt_rc=$?
     fi
   else
     if [[ "$MODE" != "greenfield" ]]; then
-      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
+      prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")" || prompt_rc=$?
     fi
+  fi
+
+  if (( prompt_rc != 0 )); then
+    log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
+    printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+    set_stop_reason "$SUMMARY_FILE" "prompt-render-failed" || true
+    record_lens "$SUMMARY_FILE" "$domain" "$lens_id" 0 "prompt-render-failed" 0 0
+    return 1
   fi
 
   # Create lens log directory
@@ -4752,9 +4785,16 @@ run_lens() {
       greenfield_write_current_backlog_snapshot "$current_backlog_file" "$lens_local_dir" "$FORGE_REPO_SLUG" || true
       iteration_vars="${vars}|CURRENT_BACKLOG=@${current_backlog_file}"
       if $LOCAL_MODE; then
-        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")"
+        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")" || prompt_rc=$?
       else
-        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")"
+        prompt="$(compose_prompt "$base_file" "$lens_file" "$iteration_vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED")" || prompt_rc=$?
+      fi
+      if (( prompt_rc != 0 )); then
+        log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
+        printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+        set_stop_reason "$SUMMARY_FILE" "prompt-render-failed" || true
+        exit_status="prompt-render-failed"
+        break
       fi
     fi
 
@@ -5012,7 +5052,8 @@ run_lens() {
   if [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
       && "$exit_status" != "auth-expired" && "$exit_status" != "model-unavailable" \
       && "$exit_status" != "budget-exhausted" && "$exit_status" != "agent-refused" \
-      && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" ]]; then
+      && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" \
+      && "$exit_status" != "prompt-render-failed" ]]; then
     mark_lens_completed "$lens_entry"
   fi
 
@@ -5032,6 +5073,7 @@ run_lens() {
   fi
 
   log_info "[$domain/$lens_id] Finished after $iteration iteration(s), $lens_issues issue(s)"
+  [[ "$exit_status" != "prompt-render-failed" ]]
 }
 
 # --- Phase execution state ---
@@ -5101,6 +5143,13 @@ fi
 if [[ "$RUN_ROUNDS_RC" -eq 0 ]]; then
   run_rounds "$ROUNDS" LENS_LIST
   RUN_ROUNDS_RC=$?
+fi
+# A late parent signal must also disable every post-round agent phase.
+if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+  RUN_ROUNDS_RC="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+fi
+if (( RUN_ROUNDS_RC != 0 )) && [[ "${REPOLENS_FINAL_STATE:-finished}" == "finished" ]]; then
+  REPOLENS_FINAL_STATE="failed"
 fi
 
 # --- Polish ranking (post-rounds, pre-verifier) ---
@@ -5242,8 +5291,10 @@ if ! $LOCAL_MODE && { [[ "$MODE" == branch-review ]] || [[ -f "$LOG_BASE/final/m
   if ! reconcile_summary_filing "$SUMMARY_FILE" "$_verified_issues" "$MAX_ISSUES" \
       || (( _filing_count_rc != 0 )); then
     log_warn "Filing: unable to reconcile verified issue counts"
-    REPOLENS_FINAL_STATE="failed"
-    set_stop_reason "$SUMMARY_FILE" "filing-accounting-failed"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
+      REPOLENS_FINAL_STATE="failed"
+      set_stop_reason "$SUMMARY_FILE" "filing-accounting-failed"
+    fi
     RUN_ROUNDS_RC=1
   fi
   unset _verified_issues _filing_count_rc

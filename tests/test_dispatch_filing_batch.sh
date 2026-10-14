@@ -467,28 +467,31 @@ done
 
 echo "=== Lifecycle integration: real parallel mixed governed outcomes ==="
 if python3 "$_REPOLENS_SCOPE_HELPER" probe 2>/dev/null; then
-  RUN_LOG="$FILING_FIXTURE/real-parallel"
-  mkdir -p "$RUN_LOG/final/filed"
-  export LOG_BASE="$RUN_LOG"
-  write_manifest_n "$RUN_LOG/final/manifest.json" 2
-  CALLBACK_LOG="$FILING_FIXTURE/real-parallel.log"
-  : > "$CALLBACK_LOG"
-  (
-    export PARALLEL=true
-    real_parallel_callback() {
-      local run_id="$1" cluster="$2"
-      if [[ "$cluster" == cluster-1 ]]; then
-        printf 'VERIFICATION_FAILED: governed fixture rejection\n' > "$LOG_BASE/final/filed/$cluster.failed"
-        return 1
-      fi
-      test_stub_filing_callback "$run_id" "$cluster"
-    }
-    _FILING_AGENT_CALLBACK=real_parallel_callback
-    dispatch_filing_batch real-parallel
-  ) > "$FILING_FIXTURE/real-parallel.out" 2>&1
-  status=$?
-  assert_success "real parallel callback rejection remains a governed result" "$status"
-  assert_contains "real parallel batch records both terminal outcomes" "Filed: 1, Verification-failed: 1" "$(cat "$FILING_FIXTURE/real-parallel.out")"
+  # One slot forces collection of the rejection before the next launch.
+  for filing_parallelism in 1 8; do
+    RUN_LOG="$FILING_FIXTURE/real-parallel-$filing_parallelism"
+    mkdir -p "$RUN_LOG/final/filed"
+    export LOG_BASE="$RUN_LOG"
+    write_manifest_n "$RUN_LOG/final/manifest.json" 2
+    CALLBACK_LOG="$FILING_FIXTURE/real-parallel-$filing_parallelism.log"
+    : > "$CALLBACK_LOG"
+    (
+      export PARALLEL=true MAX_PARALLEL="$filing_parallelism"
+      real_parallel_callback() {
+        local run_id="$1" cluster="$2"
+        if [[ "$cluster" == cluster-1 ]]; then
+          printf 'VERIFICATION_FAILED: governed fixture rejection\n' > "$LOG_BASE/final/filed/$cluster.failed"
+          return 1
+        fi
+        test_stub_filing_callback "$run_id" "$cluster"
+      }
+      _FILING_AGENT_CALLBACK=real_parallel_callback
+      dispatch_filing_batch real-parallel
+    ) > "$FILING_FIXTURE/real-parallel-$filing_parallelism.out" 2>&1
+    status=$?
+    assert_success "real parallel callback rejection remains a governed result" "$status"
+    assert_contains "real parallel batch records both terminal outcomes" "Filed: 1, Verification-failed: 1" "$(cat "$FILING_FIXTURE/real-parallel-$filing_parallelism.out")"
+  done
 else
   echo "  SKIP: real parallel filing requires delegated cgroup v2"
 fi

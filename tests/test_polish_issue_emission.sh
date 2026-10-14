@@ -555,8 +555,8 @@ echo "Test 11: polish scope criterion honors a persisted task-hours value restor
 reset_emission_run "task-hours-resume-run"
 printf '6\n' > "$LOG_BASE/task-hours"
 unset TASK_HOURS
-# This hand-restore mirrors the real --resume logic in repolens.sh:1096-1100;
-# the end-to-end restore path is covered by tests/test_task_hours.sh (issue #424).
+# This isolated renderer check complements the real CLI resume-to-emission
+# regression in tests/test_polish_resume_task_hours.sh.
 TASK_HOURS="$(cat "$LOG_BASE/task-hours")"
 export TASK_HOURS
 _polish_render_issue_body "$hours_group" "$TMPDIR/body-resume.md" "$RUN_ID" "ranked.json"

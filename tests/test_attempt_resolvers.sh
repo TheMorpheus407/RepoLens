@@ -18,9 +18,9 @@
 #   - resolve_run_exit_code   (repolens.sh) — maps the resolved run state to the
 #                             process exit code that BOTH attempts.json.exit_code
 #                             and the exit ladder use, so they can never drift.
-#   - resolve_why_stopped     (repolens.sh) — prefers summary.json.stopped_reason
-#                             and, when empty, falls back to whichever abort
-#                             sentinel is on disk (or interrupted-<signal>).
+#   - resolve_why_stopped     (repolens.sh) — interruption takes precedence;
+#                             otherwise prefer summary.json.stopped_reason and,
+#                             when empty, fall back to abort sentinels or memory.
 #
 # WHY THIS FILE EXISTS (gap analysis vs. the #375 tests already in the tree):
 #   tests/test_attempts_stop_reason.sh drives repolens.sh end-to-end and only
@@ -131,6 +131,7 @@ reset_state() {
         "$LOG_BASE/.agent-no-progress-abort" \
         "$LOG_BASE/.systemic-failure-abort" \
         "$SUMMARY_FILE"
+  ROUNDS_FAILURE_REASON=""
   REPOLENS_FINAL_STATE="finished"
   REPOLENS_INTERRUPT_EXIT_CODE="130"
   RUN_ROUNDS_RC="0"
@@ -263,6 +264,16 @@ assert_eq "stopped_reason takes precedence over a co-present abort sentinel" \
   "rate-limited" "$(resolve_why_stopped)"
 
 echo ""
+# Infrastructure can fail before any callback or diagnostic write exists.
+reset_state
+RUN_ROUNDS_RC=1
+assert_eq "round infrastructure failure has an attempt reason without diagnostics" \
+  "run-execution-failed" "$(resolve_why_stopped)"
+reset_state
+RUN_ROUNDS_RC=37
+assert_eq "any failed round preserves a nonempty generic fallback" \
+  "run-execution-failed" "$(resolve_why_stopped)"
+
 echo "resolve_why_stopped: sentinel fallback ladder (empty stopped_reason)"
 
 reset_state
@@ -314,14 +325,40 @@ REPOLENS_INTERRUPT_EXIT_CODE="137"
 assert_eq "interrupted + an unmapped code -> 'interrupted-sigint' (default arm)" \
   "interrupted-sigint" "$(resolve_why_stopped)"
 
-# A present sentinel is preferred over the interrupted classification (sentinel
-# branches are checked before the interrupted branch in resolve_why_stopped).
+# Signal diagnostics must agree with the interrupted terminal state and exit,
+# even when another failure overlaps or persistence is unavailable.
 reset_state
 REPOLENS_FINAL_STATE="interrupted"
 REPOLENS_INTERRUPT_EXIT_CODE="143"
 : > "$LOG_BASE/.rate-limit-abort"
-assert_eq "an abort sentinel wins over the interrupted classification" \
-  "rate-limit" "$(resolve_why_stopped)"
+assert_eq "interruption wins over a concurrent abort sentinel" \
+  "interrupted-sigterm" "$(resolve_why_stopped)"
+for SIGNAL_EXIT in 129 130 143; do
+  for COMPETING_REASON in prompt-render-failed rate-limited; do
+    for SUMMARY_STATE in writable unavailable; do
+      reset_state
+      REPOLENS_FINAL_STATE=interrupted
+      REPOLENS_INTERRUPT_EXIT_CODE="$SIGNAL_EXIT"
+      expected_signal=interrupted-sigint
+      case "$SIGNAL_EXIT" in
+        129) expected_signal=interrupted-sighup ;;
+        143) expected_signal=interrupted-sigterm ;;
+      esac
+      printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+      : > "$LOG_BASE/.rate-limit-abort"
+      if [[ "$SUMMARY_STATE" == writable ]]; then
+        write_summary_reason "$COMPETING_REASON"
+      else
+        mkdir -p "$SUMMARY_FILE"
+      fi
+      assert_eq "signal reason survives $COMPETING_REASON/$SUMMARY_STATE ($SIGNAL_EXIT)" \
+        "$expected_signal" "$(resolve_why_stopped)"
+      assert_eq "signal exit survives $COMPETING_REASON/$SUMMARY_STATE ($SIGNAL_EXIT)" \
+        "$SIGNAL_EXIT" "$(resolve_run_exit_code)"
+      if [[ -d "$SUMMARY_FILE" ]]; then rmdir "$SUMMARY_FILE"; fi
+    done
+  done
+done
 
 echo ""
 echo "resolve_why_stopped: clean run yields an empty why_stopped"
@@ -329,6 +366,73 @@ echo "resolve_why_stopped: clean run yields an empty why_stopped"
 reset_state
 assert_eq "no stopped_reason, no sentinel, not interrupted -> empty string" \
   "" "$(resolve_why_stopped)"
+
+reset_state
+ROUNDS_FAILURE_REASON="lens-execution-failed"
+RUN_ROUNDS_RC=1
+assert_eq "unpersisted callback failure retains attempt detail" \
+  "lens-execution-failed" "$(resolve_why_stopped)"
+assert_eq "unpersisted callback failure keeps nonzero process exit" \
+  "1" "$(resolve_run_exit_code)"
+REPOLENS_FINAL_STATE=interrupted
+REPOLENS_INTERRUPT_EXIT_CODE=143
+assert_eq "signal reason precedes in-memory callback fallback" \
+  "interrupted-sigterm" "$(resolve_why_stopped)"
+assert_eq "signal exit precedes callback error" "143" "$(resolve_run_exit_code)"
+reset_state
+ROUNDS_FAILURE_REASON="prompt-render-failed"
+: > "$LOG_BASE/.rate-limit-abort"
+assert_eq "rate-limit reason precedes in-memory prompt fallback" \
+  "rate-limit" "$(resolve_why_stopped)"
+assert_eq "rate-limit exit precedes callback error" "3" "$(resolve_run_exit_code)"
+
+# Exercise a real round collector after its parallel signal trap has fired.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/rounds.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/summary.sh"
+# shellcheck disable=SC2329 # Sourced driver callbacks.
+log_info() { :; }
+# shellcheck disable=SC2329
+log_warn() { :; }
+# shellcheck disable=SC2329
+init_parallel() { return 0; }
+# shellcheck disable=SC2329
+spawn_lens() { return 0; }
+# shellcheck disable=SC2329
+wait_all() {
+  REPOLENS_FINAL_STATE=interrupted
+  REPOLENS_INTERRUPT_EXIT_CODE="$SIGNAL_EXIT"
+  if [[ "$COMPETING_REASON" == prompt-render-failed ]]; then
+    printf '%s\n' "$COMPETING_REASON" > "$LOG_BASE/.systemic-failure-abort"
+  fi
+  return 42
+}
+PARALLEL=true
+LOCAL_MODE=false
+RESUME_RUN_ID=signal-probe
+RUN_ID=signal-probe
+LENSES=(security/injection)
+for SCOPE_FAILURE in 0 1; do
+  for COMPETING_REASON in none prompt-render-failed; do
+    for SIGNAL_EXIT in 130 143; do
+      reset_state
+      _REPOLENS_SCOPE_FAILED="$SCOPE_FAILURE"
+      write_summary_reason ""
+      run_rounds 1 LENSES
+      RUN_ROUNDS_RC=$?
+      expected_signal=interrupted-sigint
+      if [[ "$SIGNAL_EXIT" == 143 ]]; then expected_signal=interrupted-sigterm; fi
+      assert_eq "collector preserves persisted signal reason ($SIGNAL_EXIT)" \
+        "$expected_signal" "$(resolve_why_stopped)"
+      assert_eq "collector preserves summary signal reason ($SIGNAL_EXIT, scope failure $SCOPE_FAILURE)" \
+        "$expected_signal" "$(jq -r .stopped_reason "$SUMMARY_FILE")"
+      assert_eq "collector preserves signal exit ($SIGNAL_EXIT)" \
+        "$SIGNAL_EXIT" "$(resolve_run_exit_code)"
+    done
+  done
+done
+_REPOLENS_SCOPE_FAILED=0
 
 echo ""
 echo "Results: $PASS/$TOTAL passed, $FAIL failed"
