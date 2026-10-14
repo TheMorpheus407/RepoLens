@@ -112,15 +112,23 @@ for mode in audit greenfield; do
       check test ! -e "$LOG_BASE/.systemic-failure-abort"
       check test -s "$LOG_BASE/.completed"
       check json_matches '.state == "finished-empty"' "$LOG_BASE/status.json"
-      # Retry also clears a prompt error if its companion marker was lost.
-      jq '.stopped_reason = "prompt-render-failed"' "$LOG_BASE/summary.json" > "$LOG_BASE/seed.json"
-      mv "$LOG_BASE/seed.json" "$LOG_BASE/summary.json"
-      env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
-        REPOLENS_LENS_HEARTBEAT_INTERVAL=0 REPOLENS_STATUS_INTERVAL=1 \
-        bash "$SCRIPT_DIR/repolens.sh" --project "$SCRIPT_DIR" --agent codex --yes \
-          "${args[@]}" > "$LOG_BASE/resume-marker-lost.out" 2>&1
-      check test "$?" -eq 0
-      check json_matches '.stopped_reason == null' "$LOG_BASE/summary.json"
+      # Old attempt diagnostics must not keep a clean explicit retry resumable.
+      # shellcheck source=/dev/null
+      source "$SCRIPT_DIR/lib/clean.sh"
+      retry_is_complete() { ! _clean_is_incomplete "$1"; }
+      for previous_reason in prompt-render-failed lens-execution-failed \
+          interrupted-sighup interrupted-sigint interrupted-sigterm process-scope-cleanup-failed; do
+        jq --arg reason "$previous_reason" '.stopped_reason = $reason' "$LOG_BASE/summary.json" > "$LOG_BASE/seed.json"
+        mv "$LOG_BASE/seed.json" "$LOG_BASE/summary.json"
+        env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
+          REPOLENS_LENS_HEARTBEAT_INTERVAL=0 REPOLENS_STATUS_INTERVAL=1 \
+          bash "$SCRIPT_DIR/repolens.sh" --project "$SCRIPT_DIR" --agent codex --yes \
+            "${args[@]}" > "$LOG_BASE/resume-marker-lost-$previous_reason.out" 2>&1
+        check test "$?" -eq 0
+        check json_matches '.stopped_reason == null' "$LOG_BASE/summary.json"
+        check json_matches '.[-1].why_stopped == ""' "$LOG_BASE/attempts.json"
+        check retry_is_complete "$LOG_BASE"
+      done
     fi
   done
 done

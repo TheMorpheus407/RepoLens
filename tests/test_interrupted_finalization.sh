@@ -144,7 +144,7 @@ for SIGNAL in HUP INT TERM; do
         repeated|filing-signal) interrupt_parent ;;
         filing-failure)
           expected_state=failed expected_exit=1 expected_reason=filing-accounting-failed
-          if [[ "$storage" == unavailable ]]; then expected_reason=""; fi
+          if [[ "$storage" == unavailable ]]; then expected_reason=run-execution-failed; fi
           ;;
       esac
       if [[ "$row" == filing-* || "$row" == during-accounting ]]; then

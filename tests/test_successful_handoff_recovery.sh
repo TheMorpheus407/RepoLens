@@ -306,5 +306,77 @@ check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 2
 check test "$(stat -c '%y' "$LOG_BASE/rounds/round-2/.completed")" = "$final_marker_before"
 check test "$(stat -c '%y' "$LOG_BASE/rounds/round-2/digest.md")" = "$final_digest_before"
 check test -f "$LOG_BASE/.rounds/round-2.completed"
+# The actual parallel TERM/INT traps also apply during saved-result recovery,
+# even though no callback is launched on that shortcut.
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/lib/parallel.sh"
+parallel_preflight() { _REPOLENS_SCOPE_READY=1; return 0; }
+eval "$(declare -f _rounds_meta_restore_success | sed '1s/_rounds_meta_restore_success/saved_restore_success/')"
+eval "$(declare -f _rounds_repair_completion | sed '1s/_rounds_repair_completion/saved_repair_completion/')"
+eval "$(declare -f run_agent | sed '1s/run_agent/saved_recovery_agent/')"
+run_agent() {
+  local META_OUTPUT=normal
+  if [[ "${CURRENT_ROUND_INDEX:-}" == 2 ]]; then META_OUTPUT="$recovery_output"; fi
+  saved_recovery_agent "$@"
+}
+_rounds_meta_restore_success() {
+  local result=0
+  saved_restore_success "$@" || result=$?
+  if [[ "$recovery_armed" == true && "$recovery_moment" == restore && "$1" == "$recovery_target" && "$result" == 0 ]]; then
+    kill -s "$recovery_signal" "$BASHPID"
+  fi
+  return "$result"
+}
+_rounds_repair_completion() {
+  local result=0
+  if [[ "$recovery_armed" == true && "${REPOLENS_FINAL_STATE:-}" == interrupted ]]; then
+    repairs_after_signal=$((repairs_after_signal + 1))
+  fi
+  saved_repair_completion "$@" || result=$?
+  if [[ "$recovery_armed" == true && "$recovery_moment" == repair && "$1" == "$recovery_round" && "$result" == 0 ]]; then
+    kill -s "$recovery_signal" "$BASHPID"
+  fi
+  return "$result"
+}
+for recovery_signal in INT TERM; do
+  for recovery_output in normal saturated; do
+    for recovery_moment in restore repair; do
+      reset_case "recover-$recovery_signal-$recovery_output-$recovery_moment"
+      recovery_armed=false
+      run_rounds 3 LENSES
+      check test "$?" -eq 0
+      recovery_round=2
+      recovery_target="$LOG_BASE/rounds/round-2"
+      calls_before="$(wc -l < "$LOG_BASE/meta-calls")"
+      lenses_before="$(wc -l < "$LOG_BASE/lens-calls")"
+      init_parallel "$LOG_BASE/.semaphore" 1
+      check test "$?" -eq 0
+      repairs_after_signal=0 recovery_armed=true
+      run_rounds 3 LENSES
+      recovery_rc=$?
+      check test "$recovery_rc" -ne 0
+      check test "$REPOLENS_FINAL_STATE" = interrupted
+      if [[ "$recovery_signal" == INT ]]; then recovery_exit=130; else recovery_exit=143; fi
+      check test "$REPOLENS_INTERRUPT_EXIT_CODE" -eq "$recovery_exit"
+      check test "$repairs_after_signal" -eq 0
+      check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq "$calls_before"
+      check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq "$lenses_before"
+      check test "$completed_lenses_file" = "$LOG_BASE/.completed"
+    done
+  done
+  # Final rounds have no meta proof, but their repaired barrier can be interrupted.
+  reset_case "recover-final-$recovery_signal"
+  recovery_armed=false recovery_output=normal
+  run_rounds 3 LENSES
+  check test "$?" -eq 0
+  recovery_round=3 recovery_moment=repair repairs_after_signal=0
+  init_parallel "$LOG_BASE/.semaphore" 1
+  recovery_armed=true
+  run_rounds 3 LENSES
+  check test "$?" -ne 0
+  check test "$REPOLENS_FINAL_STATE" = interrupted
+  check test "$repairs_after_signal" -eq 0
+done
+trap - INT TERM
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

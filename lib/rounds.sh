@@ -2481,6 +2481,9 @@ run_rounds() {
   local dispatch_path dispatched_lenses_output dispatched_custom_output dispatched_generic_output
   local round_custom_lenses_dir dispatch_has_entries abort_reason
 
+  # shellcheck disable=SC2034 # sem_acquire reads this dynamically scoped policy.
+  local _REPOLENS_STOP_ON_CALLBACK_ERROR=1
+
   if [[ ! "$rounds_total" =~ ^[1-9][0-9]*$ ]]; then
     log_warn "Invalid rounds_total: $rounds_total"
     return 2
@@ -2571,9 +2574,17 @@ run_rounds() {
       if (( round < rounds_total )); then
         _rounds_meta_restore_success "$current_round_dir"
         round_rc=$?
+        if abort_reason="$(_rounds_agent_abort_reason)"; then
+          set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          return 1
+        fi
         if (( round_rc == 2 )); then return 1; fi
         if (( round_rc == 0 )); then
           _rounds_repair_completion "$round" || return $?
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+            return 1
+          fi
           if [[ "${META_ORCH_SATURATED:-0}" == 1 ]]; then
             log_info "[round $round] Investigation saturated; skipping remaining rounds"
             break
@@ -2583,6 +2594,10 @@ run_rounds() {
         fi
       elif is_round_completed "$round"; then
         _rounds_repair_completion "$round" || return $?
+        if abort_reason="$(_rounds_agent_abort_reason)"; then
+          set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          return 1
+        fi
         log_info "[round $round/$rounds_total] Skipping completed round"
         continue
       fi
@@ -2797,4 +2812,9 @@ run_rounds() {
       break
     fi
   done
+  if abort_reason="$(_rounds_agent_abort_reason)"; then
+    set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+    return 1
+  fi
+  return 0
 }

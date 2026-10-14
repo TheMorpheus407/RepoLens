@@ -264,6 +264,16 @@ assert_eq "stopped_reason takes precedence over a co-present abort sentinel" \
   "rate-limited" "$(resolve_why_stopped)"
 
 echo ""
+# Infrastructure can fail before any callback or diagnostic write exists.
+reset_state
+RUN_ROUNDS_RC=1
+assert_eq "round infrastructure failure has an attempt reason without diagnostics" \
+  "run-execution-failed" "$(resolve_why_stopped)"
+reset_state
+RUN_ROUNDS_RC=37
+assert_eq "any failed round preserves a nonempty generic fallback" \
+  "run-execution-failed" "$(resolve_why_stopped)"
+
 echo "resolve_why_stopped: sentinel fallback ladder (empty stopped_reason)"
 
 reset_state

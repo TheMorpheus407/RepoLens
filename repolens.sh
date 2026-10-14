@@ -1977,7 +1977,11 @@ resolve_why_stopped() {
     printf 'systemic-failure'
     return 0
   fi
-  printf '%s' "${ROUNDS_FAILURE_REASON:-}"
+  reason="${ROUNDS_FAILURE_REASON:-}"
+  if [[ -z "$reason" && "${RUN_ROUNDS_RC:-0}" -ne 0 ]]; then
+    reason="run-execution-failed"
+  fi
+  printf '%s' "$reason"
 }
 
 # Recover child sleep interruption or quota state, retaining a newer parent
@@ -2646,7 +2650,7 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
 fi
 # A failed marker write must not leave an old execution error on a successful retry.
 if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
-    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed)$ ]]; then
+    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|process-scope-cleanup-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
@@ -5139,6 +5143,10 @@ fi
 if [[ "$RUN_ROUNDS_RC" -eq 0 ]]; then
   run_rounds "$ROUNDS" LENS_LIST
   RUN_ROUNDS_RC=$?
+fi
+# A late parent signal must also disable every post-round agent phase.
+if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+  RUN_ROUNDS_RC="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 fi
 if (( RUN_ROUNDS_RC != 0 )) && [[ "${REPOLENS_FINAL_STATE:-finished}" == "finished" ]]; then
   REPOLENS_FINAL_STATE="failed"

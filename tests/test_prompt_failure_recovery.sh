@@ -108,18 +108,37 @@ for legacy in none primary legacy both; do
   check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 3
   check test "$completed_lenses_file" = "$LOG_BASE/.completed"
 done
-# sem_acquire can reap a failed sibling before a slot opens. Do not dispatch again.
+# A sibling reaped during capacity acquisition must stop a lens round before
+# another callback is launched. Exercise the driver's policy with real sem_acquire.
 (
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/parallel.sh"
-  _REPOLENS_SCOPE_FAILED=0
-  _REPOLENS_WAIT_RC=0
-  _REPOLENS_SEM_DIR="$TEST_DIR/semaphore"
-  _REPOLENS_MAX_PARALLEL=1
-  mkdir -p "$_REPOLENS_SEM_DIR"
+  PARALLEL=true
+  LOG_BASE="$TEST_DIR/capacity"
+  mkdir -p "$LOG_BASE"
+  completed_lenses_file="$LOG_BASE/.completed"
+  : > "$completed_lenses_file"
+  SLOT_LAUNCHES=0
+  init_parallel() {
+    _REPOLENS_SCOPE_FAILED=0
+    _REPOLENS_WAIT_RC=0
+    _REPOLENS_SEM_DIR="$1"
+    _REPOLENS_MAX_PARALLEL="$2"
+    mkdir -p "$_REPOLENS_SEM_DIR"
+  }
   _parallel_poll_once() { _REPOLENS_WAIT_RC=42; return 0; }
-  sem_acquire
+  spawn_lens() {
+    sem_acquire || return 1
+    SLOT_LAUNCHES=$((SLOT_LAUNCHES + 1))
+  }
+  run_rounds 2 LENSES
+  check test "$?" -ne 0
+  check test "$SLOT_LAUNCHES" -eq 0
+  check test ! -e "$LOG_BASE/rounds/round-1/digest.md"
+  check test ! -e "$LOG_BASE/rounds/round-1/.completed"
+  check test "$completed_lenses_file" = "$LOG_BASE/.completed"
+  (( failed == 0 ))
 )
-check test "$?" -ne 0
+check test "$?" -eq 0
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

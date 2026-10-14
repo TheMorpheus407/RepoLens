@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Scope callback fail-fast behavior to lens rounds, preserving governed filing batches. Clear previous interruption diagnostics on explicit resume, stop interrupted saved-handoff recovery, and retain a run-failure reason when diagnostics cannot be saved (#438).
+
 - Preserve the current parent interruption through final rate-limit resolution and filing-accounting errors, including signals during diagnostic I/O; recover child sleep signals only when the parent has no interruption.
 
 - Retire an older accepted handoff before running newly pending lenses so interruption cannot reuse stale selection or saturation on the next resume (review of #438).
