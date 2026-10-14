@@ -38,6 +38,10 @@ cat > "$TEST_DIR/bin/awk" <<'AWK'
 #!/usr/bin/env bash
 set -uo pipefail
 for arg in "$@"; do
+  if [[ "$arg" == "${DENY_LENS:-}" ]]; then
+    printf 'awk: %s: Permission denied\n' "$arg" >&2
+    exit 13
+  fi
   if [[ "$arg" == "${FAIL_LENS:-}" ]]; then
     printf 'Partial lens read.'
     exit 42
@@ -78,16 +82,17 @@ for template in "$TEST_DIR/missing-base.md" "$TEST_DIR/directory-base" "$SCRIPT_
 done
 unset FAIL_TEMPLATE
 # Lens read errors, including partial reads, must discard the entire prompt.
-printf "Unreadable lens\n" > "$TEST_DIR/unreadable-lens.md"
-chmod 000 "$TEST_DIR/unreadable-lens.md"
+# Inject permission denial so this case also works with read-bypass privileges.
+printf '%s\n' '---' 'id: unreadable-lens' '---' 'Unreadable lens' > "$TEST_DIR/unreadable-lens.md"
 for lens in "$TEST_DIR/missing-lens.md" "$TEST_DIR/unreadable-lens.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md"; do
+  if [[ "$lens" == "$TEST_DIR/unreadable-lens.md" ]]; then export DENY_LENS="$lens"; else unset DENY_LENS; fi
   if [[ "$lens" == "$SCRIPT_DIR/prompts/lenses/security/injection.md" ]]; then export FAIL_LENS="$lens"; else unset FAIL_LENS; fi
   rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/audit.md" "$lens" '' '' audit)"
   render_rc=$?
   check test "$render_rc" -ne 0
   check test -z "$rendered"
 done
-unset FAIL_LENS
+unset FAIL_LENS DENY_LENS
 printf 'Plan a small command-line audit tool.\n' > "$TEST_DIR/spec.md"
 
 for failure_source in base lens; do
