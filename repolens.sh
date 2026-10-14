@@ -5189,11 +5189,12 @@ fi
 # Multi-round runs finish by consolidating round findings into a schema-checked
 # manifest under logs/<run-id>/final/manifest.json. Single-round runs keep the
 # legacy direct-filing/local-output behavior.
-if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]] || { [[ "$MODE" == "branch-review" ]] && ! $LOCAL_MODE; }; }; then
+if [[ "$RUN_ROUNDS_RC" -eq 0 && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]] || { [[ "$MODE" == "branch-review" ]] && ! $LOCAL_MODE; }; }; then
   log_info "Synthesizer: consolidating multi-round findings"
   if run_synthesizer "$RUN_ID"; then
     log_info "Synthesizer: manifest.json promoted"
-    if ! $LOCAL_MODE; then
+    # A returning parallel signal trap may have fired during synthesis.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] && ! $LOCAL_MODE; then
       log_info "Filing: dispatching synthesized manifest"
       filing_output=""
       if filing_output="$(dispatch_filing_batch "$RUN_ID" 2>&1)"; then
@@ -5231,8 +5232,10 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
 
         if (( filing_failed > 0 || filing_missing > 0 )); then
           log_warn "Filing: incomplete batch (failed=$filing_failed, dedup=$filing_dedup, missing=$filing_missing)"
-          REPOLENS_FINAL_STATE="failed"
-          set_stop_reason "$SUMMARY_FILE" "filing-failed"
+          if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+            REPOLENS_FINAL_STATE="failed"
+            set_stop_reason "$SUMMARY_FILE" "filing-failed"
+          fi
           RUN_ROUNDS_RC=1
         else
           if (( filing_deferred > 0 )); then
@@ -5250,8 +5253,10 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
           [[ -n "$filing_line" ]] && log_warn "Filing: $filing_line"
         done <<< "$filing_output"
         log_warn "Filing: failed to dispatch synthesized manifest"
-        REPOLENS_FINAL_STATE="failed"
-        set_stop_reason "$SUMMARY_FILE" "filing-failed"
+        if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+          REPOLENS_FINAL_STATE="failed"
+          set_stop_reason "$SUMMARY_FILE" "filing-failed"
+        fi
         RUN_ROUNDS_RC=1
       fi
     fi
@@ -5274,7 +5279,7 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}"
         log_warn "Synthesizer: failed to produce a valid manifest"
         ;;
     esac
-    if [[ "$synth_rc" -ne 3 ]]; then
+    if [[ "$synth_rc" -ne 3 && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
       REPOLENS_FINAL_STATE="failed"
       set_stop_reason "$SUMMARY_FILE" "synthesizer-failed"
     fi
