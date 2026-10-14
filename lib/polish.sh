@@ -447,10 +447,14 @@ _polish_issue_budget_available() {
 # run_polish_issue_emission [run_id] [top_n]
 #   Reads logs/<run-id>/polish/ranked-suggestions.json and emits one grouped
 #   polish issue per lens, containing that lens's ranked top-N suggestions.
+#   Stops on parent interruption with its signal exit code. A successful
+#   in-flight create still records its receipt/count before stopping the batch.
 run_polish_issue_emission() {
   local run_id="${1:-${RUN_ID:-}}" top_n="${2:-${REPOLENS_POLISH_TOP_N:-3}}"
   local base_dir polish_dir ranked_file groups_file filed_dir group_json
   local emitted=0 forge_rc=0 emission_rc=0
+
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
   if [[ -z "$run_id" ]]; then
     _polish_log_warn "Polish issue emission: missing RUN_ID"
@@ -461,7 +465,10 @@ run_polish_issue_emission() {
     return 1
   fi
 
-  base_dir="$(_polish_run_base "$run_id")" || return 1
+  base_dir="$(_polish_run_base "$run_id")" || {
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return 1
+  }
   polish_dir="$base_dir/polish"
   ranked_file="$polish_dir/ranked-suggestions.json"
   filed_dir="$polish_dir/filed"
@@ -472,16 +479,24 @@ run_polish_issue_emission() {
     return 1
   fi
 
-  mkdir -p "$filed_dir" || return 1
+  mkdir -p "$filed_dir" || {
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return 1
+  }
 
   if ! _polish_build_issue_groups "$ranked_file" "$top_n" > "$groups_file"; then
     rm -f "$groups_file"
     _polish_log_warn "Polish issue emission: failed to group ranked suggestions"
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   fi
 
   while IFS= read -r group_json || [[ -n "$group_json" ]]; do
     [[ -n "$group_json" ]] || continue
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      emission_rc="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      break
+    fi
 
     if ! _polish_issue_budget_available; then
       _polish_log_info "Polish issue emission: global issue budget exhausted (${GLOBAL_ISSUES_CREATED:-0}/${MAX_ISSUES:-})"
@@ -511,12 +526,23 @@ run_polish_issue_emission() {
       emission_rc=1
       break
     fi
+    # A returning parent trap may have run while rendering the shortlist.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$tmp_body"
+      emission_rc="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      break
+    fi
     mv "$tmp_body" "$body_file" || {
       rm -f "$tmp_body"
       emission_rc=1
       break
     }
 
+    # A signal deferred during promotion must stop local receipts too.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      emission_rc="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      break
+    fi
     if ${LOCAL_MODE:-false}; then
       issue_url="local:$body_file"
     else
@@ -531,6 +557,11 @@ run_polish_issue_emission() {
         break
       fi
 
+      # Recheck at the external mutation boundary after all preparation.
+      if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+        emission_rc="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+        break
+      fi
       issue_url="$(forge_issue_create "$FORGE_REPO_SLUG" "$title" "$body_file" "$label" "enhancement")"
       forge_rc=$?
       if (( forge_rc != 0 )); then
@@ -554,6 +585,9 @@ run_polish_issue_emission() {
   done < "$groups_file"
 
   rm -f "$groups_file"
+  # Covers empty batches, the last in-flight create, and operation failures.
+  # Successful creates have already retained their receipt/count above.
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if (( emission_rc != 0 )); then
     return "$emission_rc"
   fi

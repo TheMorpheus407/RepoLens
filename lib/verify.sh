@@ -196,9 +196,11 @@ validate_verification_manifest() {
 #                     AGENT_TIMEOUT_SECS, AGENT_KILL_GRACE_SECS.
 #
 #   Returns 0 on success (verification.json promoted or no findings to verify),
-#   non-zero on dispatch / validation failure.
+#   non-zero on dispatch / validation failure or parent interruption (signal
+#   exit code). Rechecks cancellation after preparation before agent admission.
 run_verifier() {
   local run_id="${1:-}"
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if [[ -z "$run_id" ]]; then
     echo "run_verifier: missing run_id" >&2
     return 2
@@ -229,6 +231,7 @@ run_verifier() {
 
   mkdir -p "$final_dir" || {
     echo "run_verifier: cannot create final dir: $final_dir" >&2
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   }
 
@@ -243,6 +246,8 @@ run_verifier() {
   if [[ -d "$rounds_dir" ]]; then
     total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
   fi
+  # Enumeration can finish after a parent signal, including with no findings.
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
   # Zero findings → no verifier work needed. Write an empty array as the
   # canonical sentinel so the synthesizer sees an explicit "verifier ran,
@@ -252,13 +257,20 @@ run_verifier() {
     if ! printf '[]\n' > "$candidate"; then
       echo "run_verifier: failed to write empty verification.json" >&2
       rm -f "$candidate"
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1
+    fi
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$candidate"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     fi
     if ! mv "$candidate" "$final_dir/verification.json"; then
       echo "run_verifier: failed to promote empty verification.json" >&2
       rm -f "$candidate"
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1
     fi
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 0
   fi
 
@@ -285,6 +297,7 @@ run_verifier() {
 
   prompt_text="$(compose_prompt "$verifier_template" "$verifier_template" "$vars")" || {
     echo "run_verifier: prompt composition failed" >&2
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   }
 
@@ -294,9 +307,13 @@ run_verifier() {
   # via a callback function. Mirrors the _FILING_AGENT_CALLBACK pattern used
   # by lib/filing.sh and makes verifier tests possible without real agent
   # invocations (per CLAUDE.md::Tests, real models are forbidden in tests).
+  # Prompt composition can return successfully after a parent signal.
+  # Neither the test callback nor the real model may start after cancellation.
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if [[ -n "${_VERIFIER_AGENT_CALLBACK:-}" ]] && declare -F "${_VERIFIER_AGENT_CALLBACK}" >/dev/null 2>&1; then
     agent_output="$("${_VERIFIER_AGENT_CALLBACK}" "$run_id" "$prompt_text")" || {
       echo "run_verifier: verifier callback failed" >&2
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1
     }
   else
@@ -304,10 +321,12 @@ run_verifier() {
     local envelope_path="$transcript_path.envelope.json"
     run_agent "$agent" "$prompt_text" "$project_path" "${AGENT_TIMEOUT_SECS:-}" "${AGENT_KILL_GRACE_SECS:-30}" "$envelope_path" > "$transcript_path" 2>&1 || agent_rc=$?
     agent_output="$(cat "$transcript_path" 2>/dev/null || true)"
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     if declare -F handle_agent_failure_in_phase >/dev/null 2>&1; then
       local phase_rc
       handle_agent_failure_in_phase "verifier" "$transcript_path" "$agent_rc" "$envelope_path" "run_verifier"
       phase_rc=$?
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       if (( phase_rc != 0 )); then
         return "$phase_rc"
       fi
@@ -317,11 +336,13 @@ run_verifier() {
     fi
   fi
 
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   printf '%s\n' "$agent_output" > "$transcript_path" 2>/dev/null || true
 
   local extracted
   extracted="$(_verify_extract_json_array "$agent_output")" || {
     echo "run_verifier: agent output did not contain a JSON array" >&2
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   }
 
@@ -329,20 +350,28 @@ run_verifier() {
   if ! printf '%s\n' "$extracted" > "$candidate"; then
     echo "run_verifier: failed to write candidate manifest" >&2
     rm -f "$candidate"
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   fi
 
   if ! validate_verification_manifest "$candidate"; then
     rm -f "$candidate"
     rm -f "$final_dir/verification.json"
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   fi
 
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    rm -f "$candidate"
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   if ! mv "$candidate" "$final_dir/verification.json"; then
     echo "run_verifier: failed to promote verification.json" >&2
     rm -f "$candidate"
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   fi
 
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   return 0
 }
