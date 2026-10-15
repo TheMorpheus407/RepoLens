@@ -1029,6 +1029,8 @@ A run that completed in a single attempt prints no such note. The note reflects 
 
 HUP, INT, and TERM remain effective during final summary rendering and result persistence. RepoLens reconciles the current attempt and latest-result pointer before committing the outcome. Immediately before terminal notification, it freezes that outcome and ignores those signals through the remaining notification, resume message, and cleanup, keeping the recorded attempt and process exit consistent.
 
+During early finalization, cancellation stops optional receipt checks, deduplication and artifact generation at safe boundaries. An in-flight operation can finish before cancellation is observed. A cancelled receipt recount keeps the previous summary counts; resume rechecks receipts and regenerates deferred artifacts. Interrupted output may therefore contain an older accounting snapshot or incomplete deduplication and review artifacts.
+
 ## Post-audit validation
 
 Cheap models (a local LLM, MiniMax via `opencode`, and similar) can scan a large repo affordably, but they emit a lot of false positives. `--validate` splits the work: run the heavy `DONE×3` lens scan with a cheap **"Radar"** agent, then pay a flagship **"Filter"** agent only for a fast pass that re-reads the cited code and drops the false positives — instead of running the whole expensive scan on the flagship.

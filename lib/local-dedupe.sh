@@ -148,6 +148,7 @@ _local_dedupe_mark_file() {
 #   is ever invoked.
 dedupe_local_markdown() {
   local output_dir="${1:-}"
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
   if [[ -z "$output_dir" ]]; then
     echo "dedupe_local_markdown: no output dir given; skipping" >&2
@@ -196,6 +197,10 @@ dedupe_local_markdown() {
     rm -rf "$tmpdir"
     return 1
   fi
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    rm -rf "$tmpdir"
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
 
   # 2. Slurp the JSONL into the JSON array the grouping helper expects. Array
   #    index i <-> i-th file in sorted find order (deterministic).
@@ -213,6 +218,10 @@ dedupe_local_markdown() {
     rm -rf "$tmpdir"
     return 1
   fi
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    rm -rf "$tmpdir"
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
 
   if [[ -z "$groups_jsonl" ]]; then
     echo "dedupe_local_markdown: no duplicate findings under $output_dir" >&2
@@ -224,6 +233,10 @@ dedupe_local_markdown() {
   local group canon_idx canon_md canon_rel contrib_idx_json m dup_md
   local arb tsv clens cdomain cmd crel groups_marked=0
   while IFS= read -r group; do
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -rf "$tmpdir"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
     [[ -n "$group" ]] || continue
     canon_idx="$(jq -r '.canonical_idx' <<<"$group")" || continue
     canon_md="$(jq -r --argjson k "$canon_idx" '.[$k].markdown_path // ""' "$manifest")"
@@ -237,6 +250,7 @@ dedupe_local_markdown() {
 
     # 4a. Mark each non-canonical file: status: duplicate + duplicate_of link.
     while IFS= read -r m; do
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
       [[ -n "$m" ]] || continue
       dup_md="$(jq -r --argjson k "$m" '.[$k].markdown_path // ""' "$manifest")"
       [[ -n "$dup_md" && -f "$dup_md" ]] || continue
@@ -246,6 +260,11 @@ dedupe_local_markdown() {
         echo "dedupe_local_markdown: failed to mark duplicate $dup_md" >&2
       fi
     done < <(jq -r '.[]' <<<"$contrib_idx_json")
+
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -rf "$tmpdir"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
 
     # 4b. Build the sorted also_reported_by: YAML list + annotate the canonical.
     arb='also_reported_by:'

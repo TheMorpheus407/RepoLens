@@ -5342,10 +5342,16 @@ _install_finalization_signal_handlers
 
 # Reconcile on failed dispatch too: an earlier cluster may have been created
 # before a later failure. Replacing the snapshot makes resumed filing idempotent.
-if ! $LOCAL_MODE && { [[ "$MODE" == branch-review ]] || [[ -f "$LOG_BASE/final/manifest.json" ]]; }; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] && ! $LOCAL_MODE \
+    && { [[ "$MODE" == branch-review ]] || [[ -f "$LOG_BASE/final/manifest.json" ]]; }; then
   _filing_count_rc=0
-  _verified_issues="$(filing_verified_issue_count "$RUN_ID")" || _filing_count_rc=$?
-  if ! reconcile_summary_filing "$SUMMARY_FILE" "$_verified_issues" "$MAX_ISSUES" \
+  # Keep receipt traversal in the signal-receiving parent. A subshell cannot
+  # observe a returning parent trap and would continue issuing remote reads.
+  _filing_count_file="$LOG_BASE/.final-filing-count.$BASHPID"
+  filing_verified_issue_count "$RUN_ID" > "$_filing_count_file" || _filing_count_rc=$?
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    log_info "Filing: recount interrupted; retaining previous summary counts"
+  elif ! reconcile_summary_filing "$SUMMARY_FILE" "$(cat "$_filing_count_file")" "$MAX_ISSUES" \
       || (( _filing_count_rc != 0 )); then
     log_warn "Filing: unable to reconcile verified issue counts"
     if [[ "${REPOLENS_FINAL_STATE:-finished}" != "interrupted" ]]; then
@@ -5354,15 +5360,18 @@ if ! $LOCAL_MODE && { [[ "$MODE" == branch-review ]] || [[ -f "$LOG_BASE/final/m
     fi
     RUN_ROUNDS_RC=1
   fi
-  unset _verified_issues _filing_count_rc
+  rm -f "$_filing_count_file"
+  unset _filing_count_file _filing_count_rc
 fi
 # Emit deduped forge-warning rollup so the operator still sees the suppressed
 # total (issue #246). Parallel workers carry their own _FORGE_WARN_SEEN map and
 # their counts don't cross fork boundaries — what we report here is what the
 # parent process accumulated (baseline calls plus anything that ran serially).
-if declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 && (( ${#_FORGE_WARN_SEEN[@]} > 0 )); then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+    && declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 && (( ${#_FORGE_WARN_SEEN[@]} > 0 )); then
   log_info "Forge warning rollup (deduped):"
   while IFS= read -r _rollup_key; do
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
     log_info "  ${_rollup_key} — ${_FORGE_WARN_SEEN[$_rollup_key]} times"
   done < <(printf '%s\n' "${!_FORGE_WARN_SEEN[@]}" | LC_ALL=C sort)
   unset _rollup_key
@@ -5375,7 +5384,8 @@ fi
 # separately (sibling issue). Non-fatal, mirroring the verifier/synthesizer/
 # triage precedent: the registry is a convenience index, not a gate, so a failure
 # warns and never flips the run's final state or return code.
-if ! $LOCAL_MODE && [[ -f "$LOG_BASE/final/manifest.json" ]]; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+    && ! $LOCAL_MODE && [[ -f "$LOG_BASE/final/manifest.json" ]]; then
   if build_finding_registry "$RUN_ID"; then
     log_info "Finding registry: findings.jsonl + findings.csv written"
   else
@@ -5392,9 +5402,12 @@ finalize_summary "$SUMMARY_FILE"
 # marking files IN PLACE (never deleting). Deterministic, idempotent, model-free.
 # Non-fatal, mirroring the verifier / synthesizer / triage precedent: a failure
 # warns and NEVER touches REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
-if $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+    && $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
   if dedupe_local_markdown "$OUTPUT_DIR"; then
     log_info "Local dedupe: reconciled duplicate markdown findings under $OUTPUT_DIR"
+  elif [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    log_info "Local dedupe: interrupted; remaining work deferred to resume"
   else
     log_warn "Local dedupe: failed (findings left un-deduped)"
   fi
@@ -5406,7 +5419,8 @@ fi
 # verifier precedent: a render failure logs a warning and NEVER touches
 # REPOLENS_FINAL_STATE or RUN_ROUNDS_RC. No HUMAN_REVIEW.md is written when the
 # flag is off or no findings.jsonl exists.
-if [[ "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]]; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
+    && "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]]; then
   if render_human_review_digest "$RUN_ID"; then
     log_info "Human review: HUMAN_REVIEW.md written"
   else
@@ -5417,7 +5431,9 @@ if [[ "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" 
   # helper is pure (returns the string); log_info owns the emission so the
   # log_*-under-set -u trap stays out of the library. Gated by the same block,
   # so it only fires when --human-review is active. Non-fatal.
-  log_info "$(human_review_heldback_summary "$RUN_ID")"
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+    log_info "$(human_review_heldback_summary "$RUN_ID")"
+  fi
 fi
 
 # --- Human-triage artifacts (non-fatal) ---
@@ -5430,12 +5446,13 @@ fi
 # (warn + continue), matching the verifier/synthesizer/human-review precedent; none
 # of these touch REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
 TRIAGE_FINDINGS="$LOG_BASE/final/findings.jsonl"
-if [[ -s "$TRIAGE_FINDINGS" ]]; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && -s "$TRIAGE_FINDINGS" ]]; then
   for _triage_spec in \
     "generate_todo_md:TODO.md" \
     "generate_summary_md:SUMMARY.md" \
     "generate_needs_review_md:NEEDS_REVIEW.md" \
     "generate_duplicates_md:DUPLICATES.md"; do
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
     _triage_fn="${_triage_spec%%:*}"
     _triage_out="$LOG_BASE/final/${_triage_spec##*:}"
     if "$_triage_fn" "$TRIAGE_FINDINGS" "$_triage_out"; then
@@ -5446,7 +5463,7 @@ if [[ -s "$TRIAGE_FINDINGS" ]]; then
   done
   unset _triage_spec _triage_fn _triage_out
 else
-  log_info "Triage artifacts: no finding registry at $TRIAGE_FINDINGS; skipping"
+  log_info "Triage artifacts: interrupted or no finding registry at $TRIAGE_FINDINGS; skipping"
 fi
 
 # --- Local-mode finding registry (non-fatal) ---
@@ -5459,8 +5476,11 @@ fi
 # findings.jsonl + findings.csv. Non-fatal, mirroring the verifier/synthesizer/
 # triage precedent: a failure warns and NEVER flips REPOLENS_FINAL_STATE or
 # RUN_ROUNDS_RC.
-if $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
-  if branch_scope_filter_directory "$OUTPUT_DIR" && build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+    && $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
+  if branch_scope_filter_directory "$OUTPUT_DIR" \
+      && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+      && build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
     log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
   else
     log_warn "Finding registry: build failed (findings index not produced)"
