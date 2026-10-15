@@ -242,6 +242,8 @@ setup_scenario() {
 
 # Concatenate the run log and the captured stderr so an assertion is agnostic to
 # which sink the implementer routes the warn through.
+# Consumers must drain this stream: an early grep -q exit can SIGPIPE cat while
+# it writes the second file, making a successful match fail under pipefail.
 scenario_observed() {
   cat "$SCEN_LOG_FILE" "$SCEN_STDERR" 2>/dev/null
 }
@@ -266,7 +268,7 @@ count="$(count_dry_run_issues "$SCEN_OUTPUT" 2>"$SCEN_STDERR")"
 unset REPOLENS_MIN_SEVERITY
 
 assert_eq "mismatched finding is kept (frontmatter high meets min low)" "1" "$count"
-if scenario_observed | grep -iq 'mismatch'; then
+if scenario_observed | grep -i 'mismatch' >/dev/null; then
   pass_with "title/frontmatter disagreement surfaces a non-fatal 'mismatch' warning"
 else
   fail_with "title/frontmatter disagreement surfaces a non-fatal 'mismatch' warning" \
@@ -293,7 +295,7 @@ count="$(count_dry_run_issues "$SCEN_OUTPUT" 2>"$SCEN_STDERR")"
 unset REPOLENS_MIN_SEVERITY
 
 assert_eq "agreeing finding is kept" "1" "$count"
-if scenario_observed | grep -iq 'mismatch'; then
+if scenario_observed | grep -i 'mismatch' >/dev/null; then
   fail_with "agreeing title/frontmatter emits no mismatch warning" \
     "Unexpected 'mismatch' warning for an agreeing finding"
 else
@@ -348,7 +350,7 @@ count="$(count_dry_run_issues "$SCEN_OUTPUT" 2>"$SCEN_STDERR")"
 unset REPOLENS_MIN_SEVERITY
 
 assert_eq "mismatched finding below min-severity is dropped on its frontmatter value" "0" "$count"
-if scenario_observed | grep -iq 'mismatch'; then
+if scenario_observed | grep -i 'mismatch' >/dev/null; then
   pass_with "a dropped finding still surfaces its title/frontmatter mismatch warning"
 else
   fail_with "a dropped finding still surfaces its title/frontmatter mismatch warning" \
@@ -382,7 +384,7 @@ count="$(count_dry_run_issues "$SCEN_OUTPUT" 2>"$SCEN_STDERR")"
 unset REPOLENS_MIN_SEVERITY
 
 assert_eq "informative-warn finding is kept (frontmatter high meets min low)" "1" "$count"
-mismatch_line="$(scenario_observed | grep -i 'mismatch' | head -1)"
+mismatch_line="$(scenario_observed | grep -i 'mismatch' | sed -n '1p')"
 if [[ "$mismatch_line" == *high* ]]; then
   pass_with "mismatch warning names the authoritative frontmatter severity (high)"
 else
