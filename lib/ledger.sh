@@ -266,6 +266,8 @@ _ledger_resolve_finding_type() {
 #   - synthesized status="duplicate" remains duplicate for report exclusion.
 #   - markdown_path is the absolute path of the first existing source finding
 #     file, else null (so links work from reports under final/).
+#     Relative paths use PROJECT_PATH, the synthesizer's working directory,
+#     falling back to the caller's directory for standalone library use.
 #     Source files are only checked for existence, never read.
 #   - also_reported_by passes through when it is a non-empty array, with
 #     relative Markdown links made absolute for reports under final/.
@@ -293,7 +295,9 @@ build_findings_jsonl_from_manifest() {
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
-  local count i entry domain lens title raw_sev sev vstatus status id raw_type ftype cx md source_path
+  local count i entry domain lens title raw_sev sev vstatus status id raw_type ftype cx md source_path source_base
+  source_base="${PROJECT_PATH:-$PWD}"
+  [[ "$source_base" == /* ]] || source_base="$PWD/$source_base"
   count="$(jq 'length' "$manifest")" || { rm -f "$tmp"; return 1; }
   for (( i = 0; i < count; i++ )); do
     entry="$(jq -c --argjson i "$i" '.[$i]' "$manifest")" || { rm -f "$tmp"; return 1; }
@@ -326,12 +330,9 @@ build_findings_jsonl_from_manifest() {
     fi
     md=""
     while IFS= read -r -d '' source_path; do
+      [[ "$source_path" == /* ]] || source_path="$source_base/$source_path"
       if [[ -f "$source_path" ]]; then
         md="$source_path"
-        if [[ "$md" != /* ]]; then
-          md="$(cd -- "$(dirname -- "$source_path")" && printf '%s/%s' "$PWD" "${source_path##*/}")" \
-            || { rm -f "$tmp"; return 1; }
-        fi
         break
       fi
     done < <(jq -j '.source_finding_paths[]? | ., "\u0000"' <<<"$entry")
@@ -339,7 +340,7 @@ build_findings_jsonl_from_manifest() {
     jq -cn \
       --argjson entry "$entry" \
       --arg id "$id" --arg severity "$sev" --arg status "$status" --arg ftype "$ftype" \
-      --arg md "$md" --arg complexity "$cx" --arg source_base "$PWD" '
+      --arg md "$md" --arg complexity "$cx" --arg source_base "$source_base" '
       {
         id: $id,
         title: ($entry.title // ""),

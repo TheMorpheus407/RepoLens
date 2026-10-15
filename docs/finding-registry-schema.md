@@ -25,6 +25,9 @@ It is built from the existing finding outputs; it does not replace them.
   reading source contents. Relative contributor Markdown links are also made
   absolute so they resolve from `DUPLICATES.md` under `final/`. The original
   manifest and `source_finding_paths` remain unchanged.
+  Relative source and contributor paths resolve from `--project`, where the
+  synthesizer runs, even when RepoLens is launched from another directory.
+  Standalone library callers without `PROJECT_PATH` use their current directory.
 - **Other `--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
   (`lib/template.sh`, LOCAL MODE OVERRIDE block, ~line 521). The builder reads
   that frontmatter and emits one normalized record per file. It preserves local
