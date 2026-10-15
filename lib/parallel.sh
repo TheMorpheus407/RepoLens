@@ -197,6 +197,11 @@ _cleanup_children() {
     log_warn "Cleanup already in progress; forcing owned scopes to SIGKILL."
     return 0
   fi
+  # A returning signal trap must not erase metadata while setup or polling
+  # still consumes it. The parent drains scopes at the bounded boundary.
+  if [[ "${_REPOLENS_LIFECYCLE_BUSY:-0}" == 1 ]]; then
+    return 0
+  fi
   _REPOLENS_CLEANUP_IN_PROGRESS=1
   if [[ ! "$grace" =~ ^[0-9]+$ ]]; then
     log_warn "Invalid REPOLENS_CLEANUP_GRACE='$grace'; using default 5s."
@@ -407,14 +412,31 @@ _repolens_emit_heartbeat() {
 spawn_lens() {
   local lens_id="$1" callback="$2"
   shift 2
-  local index runtime nonce server ready child gate deadline enrollment_path enrollment_fd ready_fd go_fd
-  local scope_owner="$BASHPID"
   (( _REPOLENS_SCOPE_READY == 1 && _REPOLENS_SCOPE_FAILED == 0 )) || {
     log_warn "Parallel callback refused: process-scope capability was not established."
     return 1
   }
   sem_acquire || return 1
   _parallel_agent_abort_pending && return 1
+  # Dynamically scoped: traps defer cleanup until setup has enrolled the child.
+  local _REPOLENS_LIFECYCLE_BUSY=1 rc=0
+  # Keep this call out of a conditional: callbacks may enable errexit.
+  _spawn_lens_setup "$lens_id" "$callback" ${1+"$@"}
+  rc=$?
+  _REPOLENS_LIFECYCLE_BUSY=0
+  if _parallel_agent_abort_pending; then
+    _cleanup_children || true
+    return 1
+  fi
+  return "$rc"
+}
+
+# Prepare and enroll a gated child; only the parent may authorize GO.
+_spawn_lens_setup() {
+  local lens_id="$1" callback="$2"
+  shift 2
+  local index runtime nonce server ready child gate deadline enrollment_path enrollment_fd ready_fd go_fd
+  local scope_owner="$BASHPID"
   runtime="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/repolens-scope.XXXXXXXX")" || return 1
   nonce="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
   mkfifo -m 600 "$runtime/ready" "$runtime/go" || return 1
@@ -477,15 +499,7 @@ spawn_lens() {
   _REPOLENS_CHILD_STARTED_AT[index]="$(date +%s)"
   sem_token_create "$lens_id" "$child" || { eval "exec ${ready_fd}>&- ${go_fd}>&-"; _scope_terminal_failure "$index"; return 1; }
   # The parent and child each retain independent copies of the FIFO FDs.
-  if ! (
-    IFS= read -r -t 5 ready <&"$ready_fd" || exit 1
-    [[ "$ready" == "$nonce $child" ]] || exit 1
-    builtin printf '%s ENROLL\n' "$nonce" >&"$go_fd"
-    IFS= read -r -t 5 ready <&"$ready_fd" || exit 1
-    [[ "$ready" == "$nonce $child ENROLLED" ]] || exit 1
-    _scope_call "$index" enroll "$child" >/dev/null || exit 1
-    printf '%s GO\n' "$nonce" >&"$go_fd"
-  ); then
+  if ! _spawn_lens_enroll; then
     eval "exec ${ready_fd}>&- ${go_fd}>&-"
     # No callback has been released. The bounded gate self-exits without signals.
     _scope_terminal_failure "$index"
@@ -498,8 +512,26 @@ spawn_lens() {
     _REPOLENS_CHILD_PIDS[index]=""
     return 1
   fi
+  # Cleanup may run normally now: the enrolled child is tracked, and remains
+  # gated until this parent's final cancellation check and GO write.
+  _REPOLENS_LIFECYCLE_BUSY=0
+  if _parallel_agent_abort_pending; then
+    eval "exec ${ready_fd}>&- ${go_fd}>&-"
+    return 1
+  fi
+  builtin printf '%s GO\n' "$nonce" >&"$go_fd"
   eval "exec ${ready_fd}>&- ${go_fd}>&-"
   return 0
+}
+
+# Uses setup's dynamically scoped descriptors in the signal-receiving parent.
+_spawn_lens_enroll() {
+  IFS= read -r -t 5 ready <&"$ready_fd" || return 1
+  [[ "$ready" == "$nonce $child" ]] || return 1
+  builtin printf '%s ENROLL\n' "$nonce" >&"$go_fd"
+  IFS= read -r -t 5 ready <&"$ready_fd" || return 1
+  [[ "$ready" == "$nonce $child ENROLLED" ]] || return 1
+  _scope_call "$index" enroll "$child" >/dev/null
 }
 
 # wait_batch_complete <barrier_dir> [timeout_seconds]

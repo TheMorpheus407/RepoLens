@@ -5234,11 +5234,13 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "${REPOLENS_FINAL_STATE:-finished}" != interrupt
     # A returning parallel signal trap may have fired during synthesis.
     if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] && ! $LOCAL_MODE; then
       log_info "Filing: dispatching synthesized manifest"
-      filing_output=""
-      if filing_output="$(dispatch_filing_batch "$RUN_ID" 2>&1)"; then
+      # Keep dispatcher state and owned workers in the signal-receiving parent.
+      # A command substitution would hide cancellation from its admission loop.
+      filing_output_file="$LOG_BASE/final/filing-output.log"
+      if dispatch_filing_batch "$RUN_ID" > "$filing_output_file" 2>&1; then
         while IFS= read -r filing_line; do
           [[ -n "$filing_line" ]] && log_info "Filing: $filing_line"
-        done <<< "$filing_output"
+        done < "$filing_output_file"
 
         filing_missing=0
         filing_failed=0
@@ -5289,7 +5291,7 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "${REPOLENS_FINAL_STATE:-finished}" != interrupt
       else
         while IFS= read -r filing_line; do
           [[ -n "$filing_line" ]] && log_warn "Filing: $filing_line"
-        done <<< "$filing_output"
+        done < "$filing_output_file"
         log_warn "Filing: failed to dispatch synthesized manifest"
         if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
           REPOLENS_FINAL_STATE="failed"

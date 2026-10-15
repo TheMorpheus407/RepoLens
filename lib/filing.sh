@@ -39,6 +39,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/branch-scope.sh"
 # shellcheck source=lib/locking.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/locking.sh"
 
+# Sourceable callers may use the filing governor without the parallel library.
+_filing_cancelled() {
+  [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]
+}
+
 # Reserve a possible creation under a shared run lock, immediately before POST.
 # Attempts survive ambiguous failures and cap changes. Comments never enter this
 # budget. Return 2 for deferral, 1 for an accounting/reservation failure.
@@ -533,8 +538,8 @@ _filing_action_reference_candidates() {
 #   Lookup failures are cached for the pass and fail closed. Dedup precedes
 #   budget reservation. Verified readback writes .done; failure writes .failed.
 #
-#   Failures NEVER fail the overall run — cross-link actions are best-effort.
-#   They are logged to stderr and counted in the run's diagnostics only.
+#   Ordinary action failures are best-effort and logged to stderr. Parent
+#   cancellation stops admission and makes the enclosing dispatch fail.
 #
 #   Required globals: FORGE_REPO (or REPO_OWNER+REPO_NAME).
 #   Optional globals: REPOLENS_REOPEN_LABEL (defaults "repolens:reopen-candidate").
@@ -543,6 +548,7 @@ _filing_action_reference_candidates() {
 #   (<cid>.failed present, no <cid>.url) are skipped; deferred parents without
 #   a .url defer their actions, avoiding references to a non-existent issue.
 _filing_cross_link_enact() {
+  _filing_cancelled && return 1
   local run_id="${1:-}"
   local log_base manifest preserved_actions verification filed_dir cross_dir
   log_base="$(_filing_log_base "$run_id")"
@@ -622,6 +628,7 @@ _filing_cross_link_enact() {
   local evidence reason target response readback title new_number reconcile_done body_json reserve_rc action_citations
   local open_issues duplicate open_issues_status=unfetched
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
+    _filing_cancelled && return 1
     [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || continue
     [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || continue
     case "${CROSS_LINK_MODE:-off}:$action_type" in
@@ -762,6 +769,7 @@ _filing_cross_link_enact() {
         continue
       fi
     fi
+    _filing_cancelled && return 1
     # Atomic permanent reservation: failures/crashes require reconciliation.
     if (( ! reconcile_done )); then
       if [[ "$action_type" == reopen-suggestion ]]; then
@@ -782,6 +790,14 @@ _filing_cross_link_enact() {
     body_file="$cross_dir/$key.body.md"
     jq -jr . <<< "$body_json" > "$body_file" || {
       echo "_filing_cross_link_enact: cannot write body file for $key" >&2
+      if _filing_cancelled; then
+        # No POST was attempted by this pass. Preserve older receipts that
+        # still require reconciliation, but release a fresh unsent action.
+        if (( ! reconcile_done )); then
+          rm -f "$cross_dir/$key.attempted" "$body_file"
+        fi
+        return 1
+      fi
       continue
     }
 
@@ -795,6 +811,11 @@ _filing_cross_link_enact() {
           if (( reconcile_done )); then
             response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
           else
+            if _filing_cancelled; then
+              # This reservation belongs to an action that never reached POST.
+              rm -f "$cross_dir/$key.attempted" "$body_file"
+              return 1
+            fi
             response="$(forge_issue_comment_once "$forge_repo" "$issue_number" "$body_file" 2>>"$cross_dir/$key.log")" || rc=$?
             printf '%s\n' "$response" > "$cross_dir/$key.created-response"
           fi
@@ -825,6 +846,10 @@ _filing_cross_link_enact() {
           if (( reconcile_done )); then
             response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
           else
+            if _filing_cancelled; then
+              rm -f "$cross_dir/$key.attempted" "$body_file" "$banner_file"
+              return 1
+            fi
             response="$(forge_issue_create_once "$forge_repo" "$title" "$banner_file" 2>>"$cross_dir/$key.log")" || rc=$?
             printf '%s\n' "$response" > "$cross_dir/$key.created-response"
           fi
@@ -875,8 +900,9 @@ _filing_cross_link_enact() {
 #     0  on completion (whether or not individual callbacks succeeded;
 #        callback failures are reflected in the absence of .url/.failed
 #        markers and counted in the aggregate output).
-#     1  on infrastructure failure: invalid manifest, failed process-scope
-#        initialization/launch/cleanup, or a missing callback outcome.
+#     1  on parent cancellation or infrastructure failure: invalid manifest,
+#        failed process-scope initialization/launch/cleanup, or a missing
+#        callback outcome.
 #
 #   Aggregate output on stdout:
 #     Filed: X, Verification-failed: Y, Skipped-existing: Z
@@ -896,6 +922,7 @@ _filing_cross_link_enact() {
 #                         Function name invoked per cluster. Defaults to
 #                         _filing_real_agent. Tests inject a stub.
 dispatch_filing_batch() {
+  _filing_cancelled && return 1
   local run_id="${1:-}"
   if [[ -z "$run_id" ]]; then
     echo "dispatch_filing_batch: missing run_id" >&2
@@ -947,9 +974,10 @@ dispatch_filing_batch() {
       echo "dispatch_filing_batch: cannot create filed dir: $filed_dir" >&2
       return 1
     }
-    if [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
+    if ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
       _filing_cross_link_enact "$run_id" || true
     fi
+    _filing_cancelled && return 1
     printf 'Filed: 0, Verification-failed: 0, Skipped-existing: 0\n'
     return 0
   fi
@@ -1028,8 +1056,7 @@ dispatch_filing_batch() {
         done
         wait_all || wait_rc=$?
         if [[ "${_REPOLENS_SCOPE_FAILED:-0}" == 1 ]]; then
-          # The caller captures dispatcher output in a subshell, so globals do
-          # not propagate; this exit status must preserve terminal scope failure.
+          # Preserve terminal scope failure in the dispatcher result.
           echo "dispatch_filing_batch: terminal process-scope cleanup failure" >&2
           dispatch_rc=1
           if declare -F _cleanup_children >/dev/null 2>&1; then
@@ -1048,6 +1075,7 @@ dispatch_filing_batch() {
     else
       # Sequential defaults and pre-run fallback never probe or launch scopes.
       for cid in "${to_dispatch[@]}"; do
+        if _filing_cancelled; then dispatch_rc=1; break; fi
         dispatched_count=$((dispatched_count + 1))
         if ! "$callback" "$run_id" "$cid"; then
           if [[ ! -e "$filed_dir/$cid.failed" ]]; then
@@ -1058,6 +1086,7 @@ dispatch_filing_batch() {
         fi
       done
     fi
+    _filing_cancelled && dispatch_rc=1
     # Only undispatched reservations are released; live/failed scopes retain
     # their own diagnostics and locks until their lifecycle is reconciled.
     for pending in "${to_dispatch[@]:$dispatched_count}"; do
@@ -1078,9 +1107,10 @@ dispatch_filing_batch() {
   done
 
   # Cross-links run only after lifecycle infrastructure settled successfully.
-  if (( dispatch_rc == 0 )) && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
+  if (( dispatch_rc == 0 )) && ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
     _filing_cross_link_enact "$run_id" || true
   fi
+  _filing_cancelled && dispatch_rc=1
 
   printf 'Filed: %d, Verification-failed: %d, Skipped-existing: %d\n' \
     "$filed" "$vfailed" "$skipped_existing"
