@@ -75,9 +75,11 @@ chmod +x "$TEST_DIR/bin/"*
 export PATH="$TEST_DIR/bin:$PATH"
 passed=0
 failed=0
+# Run one assertion, accumulate its result, and print failures for the runner.
 check() {
   if "$@"; then passed=$((passed + 1)); else failed=$((failed + 1)); printf 'FAIL: %s\n' "$*"; fi
 }
+# Accept only JSON matching the supplied jq predicate; suppress query output.
 json_matches() { jq -e "$@" >/dev/null; }
 # A failed base read must return no partial prompt, including an actual missing file.
 # shellcheck source=/dev/null
@@ -135,6 +137,7 @@ check test "$?" -ne 0
 check test -z "$rendered"
 # Remove the required spec after the first existence check, immediately before
 # the read gate. DEBUG tracing makes the race deterministic without sleeps.
+# DEBUG callback: delete only the test spec when composition reaches its gate.
 vanish_spec_at_gate() {
   if [[ "$1" == "[[ -n \"\$spec_file\" && "* ]]; then
     rm -f "$TEST_DIR/vanishing-spec.md"

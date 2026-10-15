@@ -21,6 +21,12 @@ repolens.sh --project <empty git repo> --agent codex --mode <mode> \
 after stripping inherently variable fields (run IDs, timestamps, absolute
 paths — see normalization rules in the test file header).
 
+The test pins the current epoch used for pricing freshness to the pricing
+file's `updated_at` date. Pricing warnings therefore cannot appear solely
+because the calendar advances; real date parsing and formatted timestamps
+remain available. `test_pricing_freshness.sh` separately verifies the warning
+and its 60/61-day boundary using the real clock.
+
 `bugreport` is intentionally absent: its default `--rounds` is 3, not 1,
 so it falls outside the single-pass backward-compat contract.
 

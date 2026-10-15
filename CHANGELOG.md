@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Stop prompt composition on failed spec, explicit file-backed context, or remote-execution partial reads, including a required greenfield spec that disappears during composition; discard partial content and leave failed dispatches resumable (repolens-r5-p1-4).
 
+- Keep default-round dry-run baselines independent of calendar-driven pricing warnings by pinning the test pricing clock; retain the production freshness checks.
+
 - Preserve fallback finding metadata, types and IDs when local report directories are supplied with trailing slashes or through a symlinked root, including nested dispatch findings.
 
 - Keep completion receipts per full lens dispatch so different role, focus, anchor, or exclusion investigations of the same lens run and resume independently; isolate their captures, local findings and heartbeats, serialize long receipt writes, propagate receipt persistence failures, allocate captures portably on macOS, and retire stale canonical heartbeats from older attributed runs (repolens-r5-p1-1).
