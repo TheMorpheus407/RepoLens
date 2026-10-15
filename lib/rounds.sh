@@ -462,12 +462,12 @@ run_meta_orchestrator() {
 # Exact bytes, including envelope absence, bind the proof to one accepted call.
 # Use the saved result's Git context, independent of the invocation directory.
 _rounds_meta_result_fingerprint() {
-  local dir="$1" output_hash envelope_hash="absent"
+  local dir="$1" hash_context="${2:-$1}" output_hash envelope_hash="absent"
   [[ -f "$dir/meta-orchestrator-output.txt" ]] || return 1
-  output_hash="$(git -C "$dir" hash-object --stdin < "$dir/meta-orchestrator-output.txt")" || return 1
+  output_hash="$(git -C "$hash_context" hash-object --stdin < "$dir/meta-orchestrator-output.txt")" || return 1
   if [[ -e "$dir/meta-orchestrator-output.txt.envelope.json" ]]; then
     [[ -f "$dir/meta-orchestrator-output.txt.envelope.json" ]] || return 1
-    envelope_hash="$(git -C "$dir" hash-object --stdin < "$dir/meta-orchestrator-output.txt.envelope.json")" || return 1
+    envelope_hash="$(git -C "$hash_context" hash-object --stdin < "$dir/meta-orchestrator-output.txt.envelope.json")" || return 1
   fi
   jq -cn --arg output "$output_hash" --arg envelope "$envelope_hash" \
     '{version:1, output:$output, envelope:$envelope}'
@@ -485,15 +485,37 @@ _rounds_meta_certify_success() {
   fi
 }
 
-# Return 1 for absent/invalid proof; 2 for a verified result that cannot be
-# installed. Matching artifacts retain their bytes and modification times.
+# Return 1 for absent/invalid proof; 2 when verification or installation cannot
+# finish. Matching artifacts retain their bytes and modification times.
 _rounds_meta_restore_success() {
-  local dir="$1" fingerprint staging rc=0 name
+  local dir="$1" fingerprint staging="" rc=0 name legacy_format
   META_ORCH_SATURATED=0
+  [[ -f "$dir/meta-orchestrator-success.json" ]] || return 1
   fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 1
-  jq -e --argjson expected "$fingerprint" '. == $expected' \
-    "$dir/meta-orchestrator-success.json" >/dev/null 2>&1 || return 1
-  staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
+  if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
+      "$dir/meta-orchestrator-success.json" >/dev/null 2>&1; then
+    # Older v1 proofs used the invocation repository's object format. Verify
+    # their exact bytes in that format without rewriting accepted certificates.
+    legacy_format="$(jq -er --argjson expected "$fingerprint" '
+      select((.output | length) != ($expected.output | length)) | .output | strings |
+      if test("^[0-9a-f]{40}$") then "sha1"
+      elif test("^[0-9a-f]{64}$") then "sha256" else empty end' \
+      "$dir/meta-orchestrator-success.json" 2>/dev/null)" || return 1
+    staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
+    if ! git init -q --bare --template= --object-format="$legacy_format" "$staging/hash-context" \
+        || ! fingerprint="$(_rounds_meta_result_fingerprint "$dir" "$staging/hash-context")"; then
+      rm -rf "$staging"
+      return 2
+    fi
+    if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
+        "$dir/meta-orchestrator-success.json" >/dev/null 2>&1; then
+      rm -rf "$staging"
+      return 1
+    fi
+  fi
+  if [[ -z "$staging" ]]; then
+    staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
+  fi
   if _rounds_meta_no_fresh_angles "$dir/meta-orchestrator-output.txt"; then
     _rounds_meta_write_no_fresh_dispatch "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
     META_ORCH_SATURATED=1

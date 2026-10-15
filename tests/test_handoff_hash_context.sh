@@ -99,5 +99,72 @@ for storage in plain sha1 sha256; do
     check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 1
   done
 done
+
+# Pre-upgrade certificates used the invocation repository, even when storage
+# used another format. Reproduce those certificates with Git, independently of
+# the production fingerprint helper, and resume through the real driver.
+for storage in plain sha1 sha256; do
+  legacy_context=sha256
+  if [[ "$storage" == sha256 ]]; then legacy_context=sha1; fi
+  for envelope in absent present; do
+    printf 'Legacy case: storage=%s invocation=%s envelope=%s\n' "$storage" "$legacy_context" "$envelope"
+    LOG_BASE="$TEST_DIR/$storage/legacy-$envelope"
+    SUMMARY_FILE="$LOG_BASE/summary.json"
+    completed_lenses_file="$LOG_BASE/.completed"
+    mkdir -p "$LOG_BASE/.rounds/round-1.completed"
+    cd "$TEST_DIR/$legacy_context"
+    first_rc=0
+    run_rounds 2 LENSES || first_rc=$?
+    check test "$first_rc" -ne 0
+    round_dir="$LOG_BASE/rounds/round-1"
+    output_hash="$(git hash-object --stdin < "$round_dir/meta-orchestrator-output.txt")"
+    envelope_hash=absent
+    if [[ "$envelope" == present ]]; then
+      envelope_hash="$(git hash-object --stdin < "$round_dir/meta-orchestrator-output.txt.envelope.json")"
+    fi
+    jq -cn --arg output "$output_hash" --arg envelope "$envelope_hash" \
+      '{version:1, output:$output, envelope:$envelope}' > "$round_dir/meta-orchestrator-success.json"
+    saved_proof="$(cat "$round_dir/meta-orchestrator-success.json")"
+    rmdir "$LOG_BASE/.rounds/round-1.completed"
+    # Inability to build the verification context must keep accepted work
+    # pending rather than spend another model call or overwrite its proof.
+    git() {
+      if [[ "${1:-}" == init ]]; then return 1; fi
+      command git "$@"
+    }
+    restore_rc=0
+    run_rounds 2 LENSES || restore_rc=$?
+    check test "$restore_rc" -ne 0
+    check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 1
+    check test "$(cat "$round_dir/meta-orchestrator-success.json")" = "$saved_proof"
+    unset -f git
+    resume_rc=0
+    run_rounds 2 LENSES || resume_rc=$?
+    check test "$resume_rc" -eq 0
+    check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 1
+    check test "$(cat "$round_dir/meta-orchestrator-success.json")" = "$saved_proof"
+    check test -f "$LOG_BASE/.rounds/round-1.completed"
+    check test ! -e "$LOG_BASE/rounds/round-2/digest.md"
+    cd "$TEST_DIR/plain"
+    check _rounds_meta_restore_success "$round_dir"
+
+    # Legacy compatibility still binds both exact files and envelope absence.
+    printf '\n' >> "$round_dir/meta-orchestrator-output.txt"
+    restore_rc=0
+    _rounds_meta_restore_success "$round_dir" || restore_rc=$?
+    check test "$restore_rc" -ne 0
+    printf 'NO_FRESH_ANGLES\n' > "$round_dir/meta-orchestrator-output.txt"
+    printf '{}\n' > "$round_dir/meta-orchestrator-output.txt.envelope.json"
+    restore_rc=0
+    _rounds_meta_restore_success "$round_dir" || restore_rc=$?
+    check test "$restore_rc" -ne 0
+    if [[ "$envelope" == present ]]; then
+      rm "$round_dir/meta-orchestrator-output.txt.envelope.json"
+      restore_rc=0
+      _rounds_meta_restore_success "$round_dir" || restore_rc=$?
+      check test "$restore_rc" -ne 0
+    fi
+  done
+done
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 [[ "$failed" -eq 0 ]]
