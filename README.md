@@ -1033,6 +1033,8 @@ During early finalization, cancellation stops optional receipt checks, deduplica
 
 Local finalization rebuilds the finding registry after deduplication, before rendering review artifacts. The first successful resume regenerates `TODO.md`, `SUMMARY.md`, `NEEDS_REVIEW.md` and `DUPLICATES.md` under `logs/<run-id>/final/` for non-empty findings, plus `HUMAN_REVIEW.md` when opted in. Registry records retain the duplicate marks from local markdown so duplicates stay out of actionable lists. Artifact write failures warn without failing the run.
 
+When multiple records share a finding ID, the registry retains a non-duplicate record in preference to a marked duplicate. The human-review digest excludes duplicates from its five review buckets and caps, with an explicit excluded count and provenance links when duplicates exist. Its surfaced and held-back counts cover eligible findings; adding excluded duplicates gives the full registry total. If a local registry rebuild fails, review artifacts are left unchanged until a successful rebuild, so an older registry cannot generate new stale reports.
+
 ## Post-audit validation
 
 Cheap models (a local LLM, MiniMax via `opencode`, and similar) can scan a large repo affordably, but they emit a lot of false positives. `--validate` splits the work: run the heavy `DONE×3` lens scan with a cheap **"Radar"** agent, then pay a flagship **"Filter"** agent only for a fast pass that re-reads the cited code and drops the false positives — instead of running the whole expensive scan on the flagship.

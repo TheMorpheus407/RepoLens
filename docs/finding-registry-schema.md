@@ -23,6 +23,12 @@ It is built from the existing finding outputs; it does not replace them.
   dedupe's `status: duplicate` marks and uses their relative `duplicate_of` links
   to reconstruct `also_reported_by` contributors on the canonical records.
 
+The registry collapses identical IDs to one record, preferring a non-duplicate
+record over a marked duplicate while preserving the ID's first position.
+Otherwise the first record wins (manifest before local). The human-review digest
+excludes marked duplicates from review buckets and accounts for them separately;
+the registry retains those records when their IDs differ from the canonical ID.
+
 Because the registry is derived, several fields below are **added or derived by
 the builder** and are present in neither upstream source (notably `id`,
 `confidence`, `primary_location`, `status`, `type`, `duplicate_group`,

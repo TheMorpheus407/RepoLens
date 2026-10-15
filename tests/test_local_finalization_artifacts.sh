@@ -40,6 +40,8 @@ run_finalization() (
   MAX_ISSUES=1 REPOLENS_DEGENERATE_THRESHOLD=90 CURSOR_IDE_ACTIVE=true
   REPOLENS_CURSOR_IDE_CTL_LOG="$LOG_BASE/control.ndjson"
   if [[ "$scenario" == registry-failure ]]; then build_finding_registry() { return 1; }; fi
+  # Exercise a real pre-promotion failure with an already-published registry.
+  if [[ "$scenario" == stale-registry-failure ]]; then validate_findings_jsonl() { return 1; }; fi
   if [[ "$scenario" == digest-failure ]]; then render_human_review_digest() { return 1; }; fi
   # shellcheck source=/dev/null
   source <(sed -n '/^# --- Finalize ---/,$p' "$REPO/repolens.sh")
@@ -51,7 +53,7 @@ check() {
     failed=$((failed + 1))
   fi
 }
-for scenario in fresh absent-HUP absent-INT absent-TERM stale-HUP stale-INT stale-TERM empty registry-failure digest-failure; do
+for scenario in fresh absent-HUP absent-INT absent-TERM stale-HUP stale-INT stale-TERM empty same-lens-first same-lens-last registry-failure stale-registry-failure digest-failure; do
   for HUMAN_REVIEW in true false; do
     # Digest opt-out needs fresh and resumed coverage; other cases share the path.
     [[ "$HUMAN_REVIEW" == true || "$scenario" == fresh || "$scenario" == absent-TERM ]] || continue
@@ -62,14 +64,19 @@ for scenario in fresh absent-HUP absent-INT absent-TERM stale-HUP stale-INT stal
     init_summary "$SUMMARY_FILE" local "$FIXTURE" audit mock
     if [[ "$scenario" != empty ]]; then
       for n in 1 2; do
-        mkdir -p "$OUTPUT_DIR/security/probe-$n"
-        cat > "$OUTPUT_DIR/security/probe-$n/001-finding.md" <<EOF
+        lens="probe-$n" filename=001-finding.md severity=high
+        if [[ "$scenario" == same-lens-* ]]; then
+          lens=probe filename="00$n-finding.md" severity=medium
+          if [[ "$scenario-$n" == same-lens-first-1 || "$scenario-$n" == same-lens-last-2 ]]; then severity=high; fi
+        fi
+        mkdir -p "$OUTPUT_DIR/security/$lens"
+        cat > "$OUTPUT_DIR/security/$lens/$filename" <<EOF
 ---
 title: "Unsafe access to shared state"
-severity: high
+severity: $severity
 type: reliability-bug
 domain: security
-lens: probe-$n
+lens: $lens
 ---
 Shared state access at src/state.sh:12 needs synchronization.
 EOF
@@ -81,7 +88,7 @@ EOF
     fi
     attempts_begin "$LOG_BASE"
     SIGNAL=NONE
-    [[ "$scenario" != absent-* && "$scenario" != stale-* ]] || SIGNAL="${scenario##*-}"
+    case "$scenario" in absent-*|stale-HUP|stale-INT|stale-TERM) SIGNAL="${scenario##*-}" ;; esac
     rc=0
     run_finalization > "$LOG_BASE/first.log" 2>&1 || rc=$?
     if [[ "$SIGNAL" != NONE ]]; then
@@ -110,32 +117,42 @@ EOF
     check test "$rc" -eq 0
     check jq -e '.status | startswith("finished")' "${LOG_BASE%/*}/latest-result.json"
     check test ! -e "$LOG_BASE/.attempt-start"
-    if [[ "$scenario" == registry-failure ]]; then
+    if [[ "$scenario" == stale-registry-failure ]]; then
+      check jq -se 'length == 2 and all(.status == "new")' "$LOG_BASE/final/findings.jsonl"
+      check test ! -e "$LOG_BASE/final/HUMAN_REVIEW.md"
+    elif [[ "$scenario" == registry-failure ]]; then
       check test ! -e "$LOG_BASE/final/findings.jsonl"
       check test ! -e "$LOG_BASE/final/HUMAN_REVIEW.md"
     else
       check test -f "$LOG_BASE/final/findings.csv"
       if [[ "$scenario" == empty ]]; then
         check test ! -s "$LOG_BASE/final/findings.jsonl"
+      elif [[ "$scenario" == same-lens-* ]]; then
+        canonical=001-finding.md
+        [[ "$scenario" != same-lens-last ]] || canonical=002-finding.md
+        check jq -se --arg path "$OUTPUT_DIR/security/probe/$canonical" 'length == 1 and .[0].status == "new" and .[0].severity == "high" and .[0].markdown_path == $path and (.[0].also_reported_by | length) == 1' "$LOG_BASE/final/findings.jsonl"
+        check test "$(wc -l < "$LOG_BASE/final/findings.csv")" -eq 2
       else
         check jq -se 'length == 2 and (map(select(.status == "duplicate")) | length) == 1' "$LOG_BASE/final/findings.jsonl"
         check jq -se 'map(select(.status == "new")) | length == 1 and (.[0].also_reported_by | length) == 1' "$LOG_BASE/final/findings.jsonl"
       fi
       if [[ "$HUMAN_REVIEW" == true && "$scenario" != digest-failure ]]; then
         check test -s "$LOG_BASE/final/HUMAN_REVIEW.md"
-        if [[ "$scenario" != empty ]]; then check rg -q 'Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md"; fi
+        if [[ "$scenario" != empty ]]; then
+          check test "$(rg -c '^### .*Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq 1
+        fi
       else
         check test ! -e "$LOG_BASE/final/HUMAN_REVIEW.md"
       fi
     fi
     for artifact in TODO SUMMARY NEEDS_REVIEW DUPLICATES; do
-      if [[ "$scenario" == empty || "$scenario" == registry-failure ]]; then
+      if [[ "$scenario" == empty || "$scenario" == registry-failure || "$scenario" == stale-registry-failure ]]; then
         check test ! -e "$LOG_BASE/final/$artifact.md"
       else
         check test -s "$LOG_BASE/final/$artifact.md"
       fi
     done
-    if [[ "$scenario" != empty && "$scenario" != registry-failure ]]; then
+    if [[ "$scenario" != empty && "$scenario" != registry-failure && "$scenario" != stale-registry-failure ]]; then
       check rg -q 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md"
       check rg -q 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md"
       check test "$(rg -c 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md")" -eq 1

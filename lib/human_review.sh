@@ -71,6 +71,7 @@ _human_review_security_domains() {
 #   and produces this same shape). Pure; never errors.
 _human_review_empty_buckets() {
   jq -n '{
+    "registry_count": 0, "excluded_duplicates": 0,
     "top_critical_high":              {"cap": 10,   "count": 0, "items": []},
     "top_medium_security":            {"cap": 25,   "count": 0, "items": []},
     "test_quality":                   {"cap": null, "count": 0, "items": []},
@@ -81,8 +82,10 @@ _human_review_empty_buckets() {
 
 # human_review_bucketize <findings_jsonl_path>
 #   Reads the JSON-Lines finding registry and prints a single deterministic JSON
-#   object to stdout partitioning EVERY finding into 5 priority-ordered buckets,
-#   first-match-wins, no double-counting. Writes nothing; invokes no model.
+#   object to stdout partitioning every NON-DUPLICATE finding into 5 priority-
+#   ordered buckets, first-match-wins, no double-counting. registry_count and
+#   excluded_duplicates account for the full registry; duplicates consume no
+#   bucket capacity. Writes nothing; invokes no model.
 #
 #   BUCKET SHAPE (research §5 D1 — the only shape satisfying BOTH the cap AC and
 #   the "surplus not silently dropped" AC):
@@ -152,7 +155,9 @@ human_review_bucketize() {
            elif ($t == "external-dependency" or $t == "cve" or $t == "dependency") then "external-dependency"
            else "" end;
 
-       ( map(
+       length as $registry_count
+       | (map(select(.status == "duplicate")) | length) as $excluded
+       | ( map(select(.status != "duplicate")) | map(
            . as $r
            | ($r.severity // "" | tostring | ascii_downcase) as $sev
            | ({"critical": 3, "high": 2, "medium": 1, "low": 0}[$sev] // -1) as $rank
@@ -179,6 +184,8 @@ human_review_bucketize() {
            ([ $all[] | select(._bucket == $key) | del(._rank, ._conf, ._bucket) ]) as $items
            | {"cap": $cap, "count": ($items | length), "items": $items};
          {
+           "registry_count": $registry_count,
+           "excluded_duplicates": $excluded,
            "top_critical_high":              bk("top_critical_high"; 10),
            "top_medium_security":            bk("top_medium_security"; 25),
            "test_quality":                   bk("test_quality"; null),
@@ -263,11 +270,13 @@ render_human_review_digest() {
 
   mkdir -p -- "$final_dir" 2>/dev/null || return 1
   tmp="$out.tmp.$$"
+  local has_duplicate_report=false
+  [[ ! -f "$final_dir/DUPLICATES.md" ]] || has_duplicate_report=true
 
   # Bucketize is a total function (always rc 0, always one valid JSON object),
   # so the pipeline's exit status is determined solely by the jq renderer.
   if human_review_bucketize "$findings" \
-    | jq -r --arg run_id "$run_id" --arg ph "—" '
+    | jq -r --arg run_id "$run_id" --arg ph "—" --argjson has_duplicate_report "$has_duplicate_report" '
         def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
 
         # One finding -> a bullet-list block. Severity drives the heading; the
@@ -340,9 +349,17 @@ render_human_review_digest() {
 
         ( [ .top_critical_high.count, .top_medium_security.count, .test_quality.count,
             .not_actionable_without_scanner.count, .remainder.count ] | add ) as $total
+        | (.excluded_duplicates // 0) as $excluded
         | "# Human Review — " + $run_id + "\n\n"
           + "Curated, prioritized digest of the finding registry — "
           + ($total | tostring) + " finding(s) across 5 buckets.\n\n"
+          + (if $excluded > 0 then
+               (.registry_count | tostring) + " registry findings: "
+               + ($total | tostring) + " eligible, " + ($excluded | tostring)
+               + " duplicates excluded. Full provenance: [findings.jsonl](findings.jsonl)."
+               + (if $has_duplicate_report then " Duplicate groups: [DUPLICATES.md](DUPLICATES.md)." else "" end)
+               + "\n\n"
+             else "" end)
           + (if $total == 0 then "_No findings to review._\n\n" else "" end)
           + section(.top_critical_high; "Top Critical / High") + "\n"
           + section(.top_medium_security; "Top Medium Security") + "\n"
@@ -372,7 +389,10 @@ render_human_review_digest() {
 #                                                          uncapped own-sections)
 #     held_back = (c1 - shown1) + (c2 - shown2) + c5        (cap surplus + the whole
 #                                                          collapsed remainder)
-#     surfaced + held_back == c1+c2+c3+c4+c5 == total       (shown_i + held_i == c_i)
+#     surfaced + held_back == c1+c2+c3+c4+c5 == eligible total
+#     eligible total + excluded_duplicates == registry_count
+#   With duplicates, append explicit registry/exclusion counts to the line.
+#   Excluded duplicates are neither surfaced nor held back.
 #   The collapsed remainder counts as held-back (it is de-emphasized in the
 #   digest), matching the issue's worked example. `themes` is the count of
 #   distinct remainder `domain` groups (null/empty domain normalized to one group,
@@ -419,6 +439,10 @@ human_review_heldback_summary() {
            then ", remainder collapsed across " + ($themes | tostring) + " theme(s)"
            else ", no remainder" end)
         + ")"
+        + (if (.excluded_duplicates // 0) > 0 then
+             "; " + (.registry_count | tostring) + " registry findings, "
+             + (.excluded_duplicates | tostring) + " duplicates excluded"
+           else "" end)
     ' 2>/dev/null)" || msg=""
 
   # Defensive: if jq somehow yields nothing (it should not — bucketize is total),

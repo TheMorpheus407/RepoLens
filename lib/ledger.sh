@@ -733,7 +733,8 @@ _ledger_log_base() {
 #     and is a directory, ingest its `*.md` tree via
 #     build_findings_jsonl_from_local.
 #   The concatenation is then collapsed so each `id` appears once, keeping the
-#   FIRST occurrence (manifest-first tie-break — the manifest record carries the
+#   first NON-DUPLICATE occurrence, or the first duplicate if none is canonical.
+#   Ties retain input order (manifest-first — the manifest record carries the
 #   richer cross-run provenance: source_finding_paths passthrough and a
 #   cluster-seeded duplicate_group. Either order satisfies the AC, which mandates
 #   only that identical-id duplicates collapse). jq -s + reduce is single-pass
@@ -805,12 +806,18 @@ build_finding_registry() {
     rm -f "$l_tmp"
   fi
 
-  # Collapse identical-id lines, keeping the first occurrence (input order
-  # preserved). Empty candidate -> empty output (0 lines).
+  # A later canonical local record must replace an earlier marked duplicate
+  # sharing its id, or actionable reports lose the finding entirely. Preserve
+  # the first id's position and manifest-first precedence among equal statuses.
+  # Empty candidate -> empty output (0 lines).
   if ! jq -c -s '
         reduce .[] as $r ({seen: {}, out: []};
-          if (.seen[$r.id] // false) then .
-          else .seen[$r.id] = true | .out += [$r] end)
+          (.seen[$r.id] // null) as $pos
+          | if $pos == null then
+              .seen[$r.id] = (.out | length) | .out += [$r]
+            elif .out[$pos].status == "duplicate" and $r.status != "duplicate" then
+              .out[$pos] = $r
+            else . end)
         | .out[]' "$candidate" > "$deduped" 2>/dev/null; then
     echo "build_finding_registry: dedup pass failed" >&2
     rm -f "$candidate" "$deduped"

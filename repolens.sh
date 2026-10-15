@@ -5421,12 +5421,15 @@ fi
 # output dir stays pure md. Build after dedupe and before the digest/triage
 # consumers so fresh runs and the first successful resume render the current
 # local findings. Non-fatal: a failure warns and NEVER flips
-# REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
+# REPOLENS_FINAL_STATE or RUN_ROUNDS_RC. Consumers require this invocation's
+# successful rebuild; a failed pre-promotion write may leave an older index.
+_local_registry_ready=false
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
   if branch_scope_filter_directory "$OUTPUT_DIR" \
       && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
       && build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
+    _local_registry_ready=true
     log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
   else
     log_warn "Finding registry: build failed (findings index not produced)"
@@ -5440,7 +5443,8 @@ fi
 # REPOLENS_FINAL_STATE or RUN_ROUNDS_RC. No HUMAN_REVIEW.md is written when the
 # flag is off or no findings.jsonl exists.
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
-    && "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]]; then
+    && "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]] \
+    && { ! $LOCAL_MODE || $_local_registry_ready; }; then
   if render_human_review_digest "$RUN_ID"; then
     log_info "Human review: HUMAN_REVIEW.md written"
   else
@@ -5466,7 +5470,8 @@ fi
 # (warn + continue), matching the verifier/synthesizer/human-review precedent; none
 # of these touch REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
 TRIAGE_FINDINGS="$LOG_BASE/final/findings.jsonl"
-if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && -s "$TRIAGE_FINDINGS" ]]; then
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && -s "$TRIAGE_FINDINGS" ]] \
+    && { ! $LOCAL_MODE || $_local_registry_ready; }; then
   for _triage_spec in \
     "generate_todo_md:TODO.md" \
     "generate_summary_md:SUMMARY.md" \
@@ -5483,8 +5488,9 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && -s "$TRIAGE_FINDINGS
   done
   unset _triage_spec _triage_fn _triage_out
 else
-  log_info "Triage artifacts: interrupted or no finding registry at $TRIAGE_FINDINGS; skipping"
+  log_info "Triage artifacts: interrupted, unavailable current registry or no findings at $TRIAGE_FINDINGS; skipping"
 fi
+unset _local_registry_ready
 
 apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"
