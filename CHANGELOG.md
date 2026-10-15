@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Avoid SIGPIPE false failures in changelog mode checks when the document grows.
+
 - Reuse custom-lens IDs on resume without losing distinct same-category prompts or dispatch attributes; propagate materialization failures so requested investigations cannot disappear into a completed round, and clear the failure reason on retry. Atomic staging accepts long valid lens filenames (repolens-r2-p1-2, repolens-r2-p1-3).
 
 - Stop polish ranking, later shortlist posts/drafts and verifier admission after a parent interruption, including signals during rendering, body promotion or prompt preparation. Preserve successful in-flight issue receipts and signal exit codes through empty batches and failed operations (repolens-r2-p1-1).
