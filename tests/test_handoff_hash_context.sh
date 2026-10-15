@@ -166,5 +166,46 @@ for storage in plain sha1 sha256; do
     fi
   done
 done
+# Inherited repository variables must not replace storage or legacy contexts.
+# Keep exports scoped to the helper so callers retain their Git environment.
+with_inherited_git_context() (
+  export GIT_DIR="$TEST_DIR/${inherited_context:-$storage}/.git"
+  export GIT_WORK_TREE="$TEST_DIR/${inherited_context:-$storage}"
+  export GIT_COMMON_DIR="$GIT_DIR"
+  export GIT_INDEX_FILE="$GIT_DIR/index"
+  export GIT_OBJECT_DIRECTORY="$GIT_DIR/objects"
+  export GIT_ALTERNATE_OBJECT_DIRECTORIES="$TEST_DIR/$legacy_context/.git/objects"
+  "$@"
+)
+for storage in sha1 sha256; do
+  legacy_context=sha256
+  if [[ "$storage" == sha256 ]]; then legacy_context=sha1; fi
+  for envelope in absent present; do
+    printf 'Inherited Git case: storage=%s legacy=%s envelope=%s\n' "$storage" "$legacy_context" "$envelope"
+    LOG_BASE="$TEST_DIR/$storage/inherited-$envelope"
+    SUMMARY_FILE="$LOG_BASE/summary.json"
+    completed_lenses_file="$LOG_BASE/.completed"
+    mkdir -p "$LOG_BASE/.rounds/round-1.completed"
+    first_rc=0
+    run_rounds 2 LENSES || first_rc=$?
+    check test "$first_rc" -ne 0
+    round_dir="$LOG_BASE/rounds/round-1"
+    saved_fingerprint="$(_rounds_meta_result_fingerprint "$round_dir")"
+    # Explicit legacy context must win over all six inherited Git variables,
+    # and both output and envelope hashes must use that requested format.
+    legacy_fingerprint="$(_rounds_meta_result_fingerprint "$round_dir" "$TEST_DIR/$legacy_context")"
+    check test "$(with_inherited_git_context _rounds_meta_result_fingerprint "$round_dir" "$TEST_DIR/$legacy_context")" = "$legacy_fingerprint"
+    check test "$(inherited_context="$legacy_context" with_inherited_git_context _rounds_meta_result_fingerprint "$round_dir")" = "$saved_fingerprint"
+    printf '%s\n' "$legacy_fingerprint" > "$round_dir/meta-orchestrator-success.json"
+    rmdir "$LOG_BASE/.rounds/round-1.completed"
+    resume_rc=0
+    with_inherited_git_context run_rounds 2 LENSES || resume_rc=$?
+    check test "$resume_rc" -eq 0
+    check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 1
+    check test "$(cat "$round_dir/meta-orchestrator-success.json")" = "$legacy_fingerprint"
+    check test -f "$LOG_BASE/.rounds/round-1.completed"
+    check test ! -e "$LOG_BASE/rounds/round-2/digest.md"
+  done
+done
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 [[ "$failed" -eq 0 ]]

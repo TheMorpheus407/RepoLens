@@ -459,15 +459,23 @@ run_meta_orchestrator() {
   return 0
 }
 
+# Hash contexts are private to handoff verification, independent of the caller's
+# repository-location and object-storage environment. Keep the caller unchanged.
+_rounds_meta_git() (
+  unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE \
+    GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+  git "$@"
+)
+
 # Exact bytes, including envelope absence, bind the proof to one accepted call.
 # Use the saved result's Git context, independent of the invocation directory.
 _rounds_meta_result_fingerprint() {
   local dir="$1" hash_context="${2:-$1}" output_hash envelope_hash="absent"
   [[ -f "$dir/meta-orchestrator-output.txt" ]] || return 1
-  output_hash="$(git -C "$hash_context" hash-object --stdin < "$dir/meta-orchestrator-output.txt")" || return 1
+  output_hash="$(_rounds_meta_git -C "$hash_context" hash-object --stdin < "$dir/meta-orchestrator-output.txt")" || return 1
   if [[ -e "$dir/meta-orchestrator-output.txt.envelope.json" ]]; then
     [[ -f "$dir/meta-orchestrator-output.txt.envelope.json" ]] || return 1
-    envelope_hash="$(git -C "$hash_context" hash-object --stdin < "$dir/meta-orchestrator-output.txt.envelope.json")" || return 1
+    envelope_hash="$(_rounds_meta_git -C "$hash_context" hash-object --stdin < "$dir/meta-orchestrator-output.txt.envelope.json")" || return 1
   fi
   jq -cn --arg output "$output_hash" --arg envelope "$envelope_hash" \
     '{version:1, output:$output, envelope:$envelope}'
@@ -502,7 +510,7 @@ _rounds_meta_restore_success() {
       elif test("^[0-9a-f]{64}$") then "sha256" else empty end' \
       "$dir/meta-orchestrator-success.json" 2>/dev/null)" || return 1
     staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
-    if ! git init -q --bare --template= --object-format="$legacy_format" "$staging/hash-context" \
+    if ! _rounds_meta_git init -q --bare --template= --object-format="$legacy_format" "$staging/hash-context" \
         || ! fingerprint="$(_rounds_meta_result_fingerprint "$dir" "$staging/hash-context")"; then
       rm -rf "$staging"
       return 2
