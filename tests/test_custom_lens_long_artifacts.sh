@@ -31,8 +31,8 @@ check() {
   if "$@"; then passed=$((passed + 1));
   else failed=$((failed + 1)); printf 'FAIL: %s\n' "$*"; fi
 }
-# Existing normal filenames remain compatible.
-check test "$(_sem_token_path custom/r2-retry)" = "$_REPOLENS_SEM_DIR/custom_r2-retry.token"
+# Transformed names use a collision-resistant namespace; heartbeats keep theirs.
+check test "$(_sem_token_path custom/r2-retry)" = "$_REPOLENS_SEM_DIR/escaped+$(sha256_text custom/r2-retry).token"
 check test "$(lens_heartbeat_path custom r2-retry)" = "$HEARTBEAT_DIR/custom__r2-retry.json"
 for tail in a b; do
   lens_id="r2-$(printf '%0248d' 0 | tr '0' a)$tail"
@@ -93,9 +93,9 @@ check sem_token_remove "$other_tuple"
 check test -f "$unicode_token"
 check sem_token_remove "$tuple"
 check test ! -e "$unicode_token"
-# Existing short multibyte filenames remain compatible, and the helper's byte
-# counting locale must not leak into its caller.
-check test "$(_sem_token_path custom/試)" = "$_REPOLENS_SEM_DIR/custom_試.token"
+# Short multibyte dispatch IDs are also hashed; the helper's byte counting
+# locale must not leak into its caller.
+check test "$(_sem_token_path custom/試)" = "$_REPOLENS_SEM_DIR/escaped+$(sha256_text custom/試).token"
 check test "$LC_ALL" = C.UTF-8
 LC_ALL=C sem_token_create "$tuple" 555
 check sem_token_remove "$tuple"
