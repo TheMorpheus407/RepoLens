@@ -46,7 +46,9 @@ for fault in find-empty find-partial sort-empty sort-partial; do
         ;;
       sort-*)
         sort() {
-          if [[ "$fault" == sort-partial ]]; then command sort "$@"; fi
+          if [[ "$fault" == sort-partial ]]; then
+            command sort "$@" | head -z -n 1
+          fi
           return 1
         }
         ;;
