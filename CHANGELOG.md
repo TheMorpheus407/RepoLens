@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Keep saved meta-handoff fingerprints independent of the invocation directory's Git object format, avoiding repeated model calls when resuming from a SHA-256 repository (repolens-r3-p1-1).
+
 - Check cancellation between local registry JSON assembly and duplicate grouping, preserving the previous complete output and the accepted signal's exit code.
 
 - Restore local duplicate marks to actionable registry records when title edits or current similarity thresholds no longer place them with their live canonical. Reuse transitive grouping, preserve markdown evidence, and omit unsupported contributor claims.

@@ -460,13 +460,14 @@ run_meta_orchestrator() {
 }
 
 # Exact bytes, including envelope absence, bind the proof to one accepted call.
+# Use the saved result's Git context, independent of the invocation directory.
 _rounds_meta_result_fingerprint() {
   local dir="$1" output_hash envelope_hash="absent"
   [[ -f "$dir/meta-orchestrator-output.txt" ]] || return 1
-  output_hash="$(git hash-object --stdin < "$dir/meta-orchestrator-output.txt")" || return 1
+  output_hash="$(git -C "$dir" hash-object --stdin < "$dir/meta-orchestrator-output.txt")" || return 1
   if [[ -e "$dir/meta-orchestrator-output.txt.envelope.json" ]]; then
     [[ -f "$dir/meta-orchestrator-output.txt.envelope.json" ]] || return 1
-    envelope_hash="$(git hash-object --stdin < "$dir/meta-orchestrator-output.txt.envelope.json")" || return 1
+    envelope_hash="$(git -C "$dir" hash-object --stdin < "$dir/meta-orchestrator-output.txt.envelope.json")" || return 1
   fi
   jq -cn --arg output "$output_hash" --arg envelope "$envelope_hash" \
     '{version:1, output:$output, envelope:$envelope}'
