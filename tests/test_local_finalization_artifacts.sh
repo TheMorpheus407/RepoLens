@@ -139,7 +139,7 @@ EOF
       if [[ "$HUMAN_REVIEW" == true && "$scenario" != digest-failure ]]; then
         check test -s "$LOG_BASE/final/HUMAN_REVIEW.md"
         if [[ "$scenario" != empty ]]; then
-          check test "$(rg -c '^### .*Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq 1
+          check test "$(grep -cE '^### .*Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq 1
         fi
       else
         check test ! -e "$LOG_BASE/final/HUMAN_REVIEW.md"
@@ -153,10 +153,10 @@ EOF
       fi
     done
     if [[ "$scenario" != empty && "$scenario" != registry-failure && "$scenario" != stale-registry-failure ]]; then
-      check rg -q 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md"
-      check rg -q 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md"
-      check test "$(rg -c 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md")" -eq 1
-      check test "$(rg -c 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md")" -eq 1
+      check grep -qE 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md"
+      check grep -qE 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md"
+      check test "$(grep -cE 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md")" -eq 1
+      check test "$(grep -cE 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md")" -eq 1
     fi
     cases=$((cases + 1))
   done

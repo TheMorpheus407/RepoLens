@@ -78,7 +78,7 @@ for scenario in missing missing-link invalid filtered self chain cycle outside f
       # The higher severity makes the out-of-scope file canonical.
       sed -i 's/severity: high/severity: critical/' "$b"
       dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
-      check rg -q '^status: duplicate$' "$a"
+      check grep -qE '^status: duplicate$' "$a"
       printf '["src/live.sh"]\n' > "$FIXTURE/$scenario/scope.json"
       MODE=branch-review BRANCH_SCOPE_FILE="$FIXTURE/$scenario/scope.json" \
         branch_scope_filter_directory "$OUTPUT_DIR"
@@ -92,7 +92,7 @@ for scenario in missing missing-link invalid filtered self chain cycle outside f
   if [[ "$scenario" == missing ]]; then
     # Successful singleton dedupe leaves the stale raw mark untouched.
     dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
-    check rg -q '^status: duplicate$' "$a"
+    check grep -qE '^status: duplicate$' "$a"
   fi
   before="$(sha256sum "$a")"
   build_finding_registry probe "$OUTPUT_DIR"
@@ -108,15 +108,15 @@ for scenario in missing missing-link invalid filtered self chain cycle outside f
   fi
   render_human_review_digest probe
   generate_todo_md "$findings" "$LOG_BASE/final/TODO.md"
-  check test "$(rg -c '^### .*Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq "$expected_new"
-  check rg -q 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md"
+  check test "$(grep -cE '^### .*Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq "$expected_new"
+  check grep -qE 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md"
   check test "$before" = "$(sha256sum "$a")"
   registry_before="$(sha256sum "$findings")"
   build_finding_registry probe "$OUTPUT_DIR"
   check test "$before" = "$(sha256sum "$a")"
   check test "$registry_before" = "$(sha256sum "$findings")"
   # CSV is a projection of these exact normalized statuses.
-  check test "$(tail -n +2 "$LOG_BASE/final/findings.csv" | rg -c ',"new",' || true)" -eq "$expected_new"
+  check test "$(tail -n +2 "$LOG_BASE/final/findings.csv" | grep -cE ',"new",' || true)" -eq "$expected_new"
 done
 printf 'Local duplicate recovery: %s checks, %s failures.\n' "$checks" "$failed"
 (( failed == 0 ))

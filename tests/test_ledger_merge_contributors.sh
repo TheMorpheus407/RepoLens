@@ -69,14 +69,14 @@ for scenario in mixed local plain; do
   generate_duplicates_md "$findings" "$LOG_BASE/final/DUPLICATES.md"
   if [[ "$scenario" == plain ]]; then
     check jq -se 'all(has("also_reported_by") | not)' "$findings"
-    check rg -q 'No duplicate groups' "$LOG_BASE/final/DUPLICATES.md"
+    check grep -qE 'No duplicate groups' "$LOG_BASE/final/DUPLICATES.md"
   else
     check jq -se --arg dir "$OUTPUT_DIR" 'map(select(.lens == "canonical")) | .[0].also_reported_by == [
       {domain:"security",lens:"contributor-a",markdown_path:($dir+"/002.md")},
       {domain:"security",lens:"contributor-b",markdown_path:($dir+"/004.md")} ]' "$findings"
-    check rg -q 'Shared state access' "$LOG_BASE/final/DUPLICATES.md"
-    check rg -q 'security/contributor-a' "$LOG_BASE/final/DUPLICATES.md"
-    check rg -q 'security/contributor-b' "$LOG_BASE/final/DUPLICATES.md"
+    check grep -qE 'Shared state access' "$LOG_BASE/final/DUPLICATES.md"
+    check grep -qE 'security/contributor-a' "$LOG_BASE/final/DUPLICATES.md"
+    check grep -qE 'security/contributor-b' "$LOG_BASE/final/DUPLICATES.md"
   fi
   check test "$(wc -l < "$LOG_BASE/final/findings.csv")" -eq "$(($(wc -l < "$findings") + 1))"
   before="$(sha256sum "$findings" "$LOG_BASE/final/findings.csv")"

@@ -32,7 +32,7 @@ check() {
     failed=$((failed + 1))
   fi
 }
-lacks() { ! rg -q "$@"; }
+lacks() { ! grep -qE "$@"; }
 # Exercise every bucket with eligible records and higher-ranking duplicates.
 # Duplicates would displace eligible records at both caps without the filter.
 jq -nc '
@@ -54,19 +54,19 @@ check jq -e '.registry_count == 84 and .excluded_duplicates == 42
   and ([ (.top_critical_high,.top_medium_security,.test_quality,.not_actionable_without_scanner,.remainder).items[] ]
        | length == 42 and all(.status == "new"))' "$FIXTURE/buckets.json"
 render_human_review_digest probe
-check test "$(rg -c '^### ' "$digest")" -eq 38
+check test "$(grep -cE '^### ' "$digest")" -eq 38
 check lacks '^### .*DUPLICATE' "$digest"
-check rg -q '12 total, showing 10, 2 more' "$digest"
-check rg -q '27 total, showing 25, 2 more' "$digest"
-check rg -q '84 registry findings: 42 eligible, 42 duplicates excluded' "$digest"
-check rg -Fq '[findings.jsonl](findings.jsonl)' "$digest"
+check grep -qE '12 total, showing 10, 2 more' "$digest"
+check grep -qE '27 total, showing 25, 2 more' "$digest"
+check grep -qE '84 registry findings: 42 eligible, 42 duplicates excluded' "$digest"
+check grep -Fq '[findings.jsonl](findings.jsonl)' "$digest"
 # A provenance link must only appear when the report actually exists.
 check lacks '\[DUPLICATES.md\]' "$digest"
 summary="$(human_review_heldback_summary probe)"
 check test "$summary" = 'Human review: 42 findings, 37 surfaced, 5 held back (critical/high +2, medium-security +2, remainder collapsed across 1 theme(s)); 84 registry findings, 42 duplicates excluded'
 : > "$LOG_BASE/final/DUPLICATES.md"
 render_human_review_digest probe
-check rg -Fq '[DUPLICATES.md](DUPLICATES.md)' "$digest"
+check grep -Fq '[DUPLICATES.md](DUPLICATES.md)' "$digest"
 check test "$(sha256sum "$findings")" = "$before"
 
 # A duplicate-only registry has zero eligible/held-back entries, with provenance.
@@ -75,15 +75,15 @@ human_review_bucketize "$findings" > "$FIXTURE/buckets.json"
 check jq -e '.registry_count == 42 and .excluded_duplicates == 42
   and ([.top_critical_high,.top_medium_security,.test_quality,.not_actionable_without_scanner,.remainder] | all(.count == 0))' "$FIXTURE/buckets.json"
 render_human_review_digest probe
-check rg -q '42 registry findings: 0 eligible, 42 duplicates excluded' "$digest"
-check rg -q 'No findings to review' "$digest"
+check grep -qE '42 registry findings: 0 eligible, 42 duplicates excluded' "$digest"
+check grep -qE 'No findings to review' "$digest"
 check lacks '^### ' "$digest"
 check test "$(human_review_heldback_summary probe)" = 'Human review: 0 findings, 0 surfaced, 0 held back (critical/high +0, medium-security +0, no remainder); 42 registry findings, 42 duplicates excluded'
 
 # Without duplicates, retain the established digest/header and log strings.
 cat "$FIXTURE/eligible.jsonl" > "$findings"
 render_human_review_digest probe
-check rg -Fq '42 finding(s) across 5 buckets' "$digest"
+check grep -Fq '42 finding(s) across 5 buckets' "$digest"
 check lacks 'duplicates excluded' "$digest"
 check test "$(human_review_heldback_summary probe)" = 'Human review: 42 findings, 37 surfaced, 5 held back (critical/high +2, medium-security +2, remainder collapsed across 1 theme(s))'
 : > "$findings"
