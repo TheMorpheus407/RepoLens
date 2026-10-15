@@ -54,6 +54,13 @@ jq() {
   case "$hook:$*" in
     filtered:*findings_filtered*) interrupt_once ;;
     summary:'. '*) interrupt_once ;;
+    signal-cycle:'. '*) interrupt_once ;;
+    signal-cycle:*'.started_at //'* )
+      if [[ -e "$LOG_BASE/cycle-middle" && ! -e "$LOG_BASE/cycle-end" ]]; then
+        : > "$LOG_BASE/cycle-end"
+        kill -s "$SIGNAL" "$SIGNAL_PARENT_PID"
+      fi
+      ;;
     history:*'if type == "array" then length else'*) interrupt_once ;;
     pointer:*'.started_at //'* ) interrupt_once ;;
     cursor:*'--arg kind run_complete'* ) interrupt_once ;;
@@ -76,6 +83,18 @@ jq() {
     write-failure:*'--argjson attempt_id'* ) return 1 ;;
   esac
   command jq "$@"
+}
+# Start interrupted, change the signal after the loop snapshot, then restore it
+# during pointer serialization. Equal signal codes must not hide a stale reason.
+eval "$(declare -f resolve_run_exit_code | sed '1s/resolve_run_exit_code/original_resolve_run_exit_code/')"
+resolve_run_exit_code() {
+  if [[ "$hook" == signal-cycle && ! -e "$LOG_BASE/cycle-middle" ]]; then
+    : > "$LOG_BASE/cycle-middle"
+    middle_signal=TERM
+    if [[ "$SIGNAL" == TERM ]]; then middle_signal=INT; fi
+    kill -s "$middle_signal" "$SIGNAL_PARENT_PID"
+  fi
+  original_resolve_run_exit_code
 }
 # Exercise interruption after an append has reached disk, too.
 mv() {
@@ -114,7 +133,7 @@ for SIGNAL in INT TERM HUP; do
   expected_signal=130
   case "$SIGNAL" in TERM) expected_signal=143 ;; HUP) expected_signal=129 ;; esac
   for prior in 0 1; do
-    for hook in filtered time summary history pointer cursor attempt attempt-move before-freeze reconcile terminal cleanup write-failure count-failure corrupt non-array clean; do
+    for hook in filtered time summary history pointer cursor attempt attempt-move before-freeze reconcile signal-cycle terminal cleanup write-failure count-failure corrupt non-array clean; do
       if [[ "$hook" == history && "$prior" == 0 ]]; then continue; fi
       # Optional case selection makes each before/after failure reproducible.
       if [[ -n "${REPOLENS_LATE_TEST_HOOK:-}" && "$hook" != "$REPOLENS_LATE_TEST_HOOK" ]]; then continue; fi
@@ -194,6 +213,10 @@ for SIGNAL in INT TERM HUP; do
         *)
           check grep -q 'resume hint' "$LOG_BASE/output"
           check command jq -e 'last.why_stopped | startswith("interrupted-sig")' "$LOG_BASE/attempts.json" >/dev/null
+          expected_reason="interrupted-sig${SIGNAL,,}"
+          check command jq -e --arg reason "$expected_reason" 'last.why_stopped == $reason' "$LOG_BASE/attempts.json"
+          check command jq -e --arg reason "$expected_reason" '.stopped_reason == $reason' "$SUMMARY_FILE"
+          if [[ "$hook" == signal-cycle ]]; then check test -e "$LOG_BASE/cycle-end"; fi
           ;;
       esac
     done

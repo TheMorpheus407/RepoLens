@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reconcile every accepted finalization signal, including sequences that return to the original signal, so attempt stop reasons agree with the summary and exit code.
+
 - Preserve HUP/INT/TERM outcomes through final rendering and result persistence, reconciling one attempt entry and the latest-result pointer before freezing the outcome for a single Cursor completion event and process exit. Continuation notices reflect persisted history, including after write failures (repolens-r2-p1-4).
 
 - Stop before lens dispatch when heartbeat path hashing fails, keeping the lens pending without writing temporary files outside the run directory. Disabled heartbeats skip path hashing.
