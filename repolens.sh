@@ -4575,7 +4575,7 @@ run_lens() {
   retire_legacy_lens_heartbeat "$domain" "$lens_id" || return 1
 
   # Check resume
-  if is_lens_completed "$lens_entry"; then
+  if is_lens_completed "$lens_tuple"; then
     log_info "[$domain/$lens_id] Skipping (already completed in previous run)"
     return 0
   fi
@@ -5090,7 +5090,7 @@ run_lens() {
       && "$exit_status" != "budget-exhausted" && "$exit_status" != "agent-refused" \
       && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" \
       && "$exit_status" != "prompt-render-failed" ]]; then
-    mark_lens_completed "$lens_entry"
+    mark_lens_completed "$lens_tuple"
   fi
 
   # Compress this lens's forensic iteration captures, keeping the most recent

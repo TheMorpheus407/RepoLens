@@ -46,9 +46,9 @@ run_agent() {
 run_lens() {
   local canonical role focus anchor exclude
   _rounds_meta_tuple_parse "$1" canonical role focus anchor exclude
-  if ! grep -qxF "$canonical" "$completed_lenses_file" 2>/dev/null; then
+  if ! grep -qxF "$1" "$completed_lenses_file" 2>/dev/null; then
     printf '%s\n' "$CURRENT_ROUND_INDEX:$1" >> "$LOG_BASE/lens-calls"
-    printf '%s\n' "$canonical" >> "$completed_lenses_file"
+    printf '%s\n' "$1" >> "$completed_lenses_file"
   fi
 }
 build_round_digest() { mkdir -p "$1"; printf 'digest\n' > "$1/digest.md"; }
@@ -96,7 +96,7 @@ for META_OUTPUT in normal saturated; do
       check grep -Fq '|deep|' "$LOG_BASE/lens-calls"
       check grep -q 'Follow up' "${HYPOTHESES_TO_VERIFY_FILE:-missing}"
       final_digest_before="$(stat -c '%y' "$LOG_BASE/rounds/round-2/digest.md")"
-      # Attributed dispatch completion must compare canonical IDs on another retry.
+      # Attributed dispatch completion must compare full tuples on another retry.
       run_rounds 2 LENSES
       check test "$?" -eq 0
       check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 1
@@ -285,9 +285,14 @@ run_rounds 2 LENSES
 check test "$?" -eq 0
 check test "$(wc -l < "$LOG_BASE/meta-calls")" -eq 1
 
-# Canonical identity checks preserve escaped context on the callback tuple.
-completion_probe="$TEST_DIR/canonical-completed"
+# Full dispatch identity preserves escaped context and plain legacy receipts.
+completion_probe="$TEST_DIR/dispatch-completed"
 printf 'security/injection\n' > "$completion_probe"
+check _rounds_all_lenses_completed "$completion_probe" security/injection
+if _rounds_all_lenses_completed "$completion_probe" 'security/injection|deep|pipes\|context|a|b'; then
+  check false
+else check true; fi
+printf '%s\n' 'security/injection|deep|pipes\|context|a|b' >> "$completion_probe"
 check _rounds_all_lenses_completed "$completion_probe" 'security/injection|deep|pipes\|context|a|b'
 
 reset_case final-marker-write-failure

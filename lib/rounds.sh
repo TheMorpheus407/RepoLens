@@ -140,13 +140,13 @@ _rounds_restore_completed_lenses_file() {
 _rounds_all_lenses_completed() {
   local completion_file="$1"
   shift
-  local lens_entry canonical role focus anchor exclude
+  local lens_entry
 
   [[ -n "$completion_file" && -f "$completion_file" ]] || return 1
 
   for lens_entry in "$@"; do
-    _rounds_meta_tuple_parse "$lens_entry" canonical role focus anchor exclude
-    grep -qxF "$canonical" "$completion_file" 2>/dev/null || return 1
+    # Receipts bind the full dispatch, including its role/focus/anchor/exclusions.
+    grep -qxF "$lens_entry" "$completion_file" 2>/dev/null || return 1
   done
 
   return 0
@@ -2356,7 +2356,7 @@ _rounds_record_skipped_lenses() {
     entry_part="${skip_entry%%|*}"
     skip_domain="${entry_part%%/*}"
     skip_lens="${entry_part#*/}"
-    if ! is_lens_completed "$entry_part"; then
+    if ! is_lens_completed "$skip_entry"; then
       record_lens "$SUMMARY_FILE" "$skip_domain" "$skip_lens" 0 "skipped" 0 0
     fi
   done
