@@ -1062,6 +1062,7 @@ _rounds_meta_custom_focus_body() {
 _rounds_meta_write_custom_lens() {
   local custom_lenses_dir="$1" payload="$2" index="$3" reserved_entries="${4:-}"
   local category base_slug slug lens_dir lens_file focus_body lens_content saved_content tmp_file
+  local role focus anchor exclude dispatch_attributes=""
   local round_prefix="" collision_suffix=2
 
   category="$(_rounds_meta_custom_category_from_payload "$payload")" || return 1
@@ -1074,6 +1075,10 @@ _rounds_meta_write_custom_lens() {
   lens_dir="$custom_lenses_dir/custom"
   mkdir -p "$lens_dir" || return 1
   focus_body="$(_rounds_meta_custom_focus_body "$payload")" || return 1
+  _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
+  if [[ -n "$role$focus$anchor$exclude" ]]; then
+    dispatch_attributes="$(jq -cn --args '$ARGS.positional' -- "$role" "$focus" "$anchor" "$exclude")" || return 1
+  fi
 
   while :; do
     lens_file="$lens_dir/$slug.md"
@@ -1083,13 +1088,16 @@ _rounds_meta_write_custom_lens() {
       printf 'domain: custom\n'
       printf 'name: Custom %s\n' "$slug"
       printf 'role: meta-orchestrator custom follow-up\n'
+      if [[ -n "$dispatch_attributes" ]]; then
+        printf 'dispatch_attributes: %s\n' "$dispatch_attributes"
+      fi
       printf -- '---\n'
       printf '## Your Expert Focus\n\n'
       printf 'Category: %s\n\n' "$category"
       if [[ -n "$focus_body" ]]; then printf '%s\n' "$focus_body"; fi
     )" || return 1
     if [[ ! -e "$lens_file" && ! -L "$lens_file" ]]; then break; fi
-    if [[ " $reserved_entries " != *" custom/$slug "* ]]; then
+    if [[ -f "$lens_file" && ! -L "$lens_file" && " $reserved_entries " != *" custom/$slug "* ]]; then
       saved_content="$(cat "$lens_file")" || return 1
       if [[ "$saved_content" == "$lens_content" ]]; then
         printf 'custom/%s\n' "$slug"
@@ -1102,7 +1110,7 @@ _rounds_meta_write_custom_lens() {
 
   # Failed writes must not leave a truncated canonical file that changes the
   # next attempt's collision suffix.
-  tmp_file="$(mktemp "$lens_file.tmp.XXXXXX")" || return 1
+  tmp_file="$(mktemp "$lens_dir/.custom-lens.XXXXXX")" || return 1
   if ! printf '%s\n' "$lens_content" > "$tmp_file" || ! mv -f -- "$tmp_file" "$lens_file"; then
     rm -f -- "$tmp_file"
     return 1
@@ -1139,6 +1147,17 @@ _rounds_meta_custom_attrs_from_payload() {
   printf -v "$focus_var" '%s' "$_attr_focus"
   printf -v "$anchor_var" '%s' "$_attr_anchor"
   printf -v "$exclude_var" '%s' "$_attr_exclude"
+}
+
+# Identity includes all prompt inputs, with normalized header attributes and
+# extracted body. JSON preserves field boundaries even with pipes or newlines.
+_rounds_meta_custom_identity() {
+  local payload="$1" category focus_body role focus anchor exclude
+  category="$(_rounds_meta_custom_category_from_payload "$payload")" || return 1
+  [[ -n "$category" ]] || return 1
+  focus_body="$(_rounds_meta_custom_focus_body "$payload")" || return 1
+  _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
+  jq -cn --args '$ARGS.positional' -- "$category" "$focus_body" "$role" "$focus" "$anchor" "$exclude"
 }
 
 _rounds_meta_dispatch_custom_entries() {
@@ -1269,7 +1288,7 @@ _rounds_meta_extract_hypotheses() {
 
 _rounds_meta_parse_output() {
   local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
-  local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_category
+  local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_identity
   local lens_attrs lens_dispatch_line generic_attrs generic_dispatch_line stripped attr_body
   local role focus anchor exclude missed_angle dedup_key
   local in_custom=0 in_fence=0
@@ -1291,9 +1310,9 @@ _rounds_meta_parse_output() {
     fi
 
     if (( in_custom )) && (( in_fence == 0 )) && _rounds_meta_dispatch_boundary "$trimmed"; then
-      custom_category="$(_rounds_meta_custom_category_from_payload "$custom_payload")"
-      if [[ -n "$custom_category" && -z "${seen_custom[$custom_category]:-}" ]]; then
-        seen_custom["$custom_category"]=1
+      custom_identity="$(_rounds_meta_custom_identity "$custom_payload")" || return 1
+      if [[ -z "${seen_custom[$custom_identity]:-}" ]]; then
+        seen_custom["$custom_identity"]=1
         custom_payloads+=("$custom_payload")
       fi
       custom_payload=""
@@ -1390,9 +1409,9 @@ _rounds_meta_parse_output() {
     if (( in_fence )); then
       _rounds_meta_warn "Meta-orchestrator output reached EOF with an unclosed CUSTOM fence; flushing as-is."
     fi
-    custom_category="$(_rounds_meta_custom_category_from_payload "$custom_payload")"
-    if [[ -n "$custom_category" && -z "${seen_custom[$custom_category]:-}" ]]; then
-      seen_custom["$custom_category"]=1
+    custom_identity="$(_rounds_meta_custom_identity "$custom_payload")" || return 1
+    if [[ -z "${seen_custom[$custom_identity]:-}" ]]; then
+      seen_custom["$custom_identity"]=1
       custom_payloads+=("$custom_payload")
     fi
   fi

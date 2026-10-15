@@ -86,8 +86,10 @@ Draft prompt:
 Inspect another retry path.
 EOF
 CURRENT_ROUND_INDEX=2
-entries_first="$(_rounds_meta_dispatch_custom_entries "$FIXTURE/collisions.md" "$FIXTURE/collisions")"
-entries_again="$(_rounds_meta_dispatch_custom_entries "$FIXTURE/collisions.md" "$FIXTURE/collisions")"
+# Feed the raw model output through the production handoff parser first.
+_rounds_meta_parse_output "$FIXTURE/collisions.md" "$FIXTURE/dispatch.md" "$FIXTURE/hypotheses.md"
+entries_first="$(_rounds_meta_dispatch_custom_entries "$FIXTURE/dispatch.md" "$FIXTURE/collisions")"
+entries_again="$(_rounds_meta_dispatch_custom_entries "$FIXTURE/dispatch.md" "$FIXTURE/collisions")"
 test "$entries_first" = "$entries_again"
 test "$(find "$FIXTURE/collisions" -name '*.md' | wc -l)" -eq 3
 grep -q 'custom/r2-payment-retry-race-2|broader' <<< "$entries_first"

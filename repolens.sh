@@ -2650,7 +2650,7 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
 fi
 # A failed marker write must not leave an old execution error on a successful retry.
 if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
-    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|process-scope-cleanup-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
+    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|custom-lens-materialization-failed|process-scope-cleanup-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
