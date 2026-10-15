@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Bound semaphore filenames by bytes so custom dispatches with multibyte focus text remain usable in parallel rounds.
+
 - Retire legacy long-lens heartbeats when completed rounds skip their lens callbacks, and separate hashed semaphore keys from short caller-supplied IDs.
 
 - Retire legacy heartbeat files when resuming long lens IDs, and hash long custom-lens and bookkeeping filenames with standard SHA-256 tools so sequential runs do not require Python.

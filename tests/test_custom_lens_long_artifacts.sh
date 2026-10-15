@@ -65,5 +65,39 @@ check test -f "$long_token"
 check sem_token_remove "$long_id"
 # Sanitization cannot turn a literal reserved delimiter into a hashed key.
 check test "$(_sem_token_path "long+$(sha256_text "$long_id")")" != "$long_token"
+# Production dispatch tuples contain free-text attributes. Under a UTF-8
+# locale the sanitizer preserves Japanese letters, but NAME_MAX counts bytes.
+# shellcheck source=/dev/null
+source "$REPO/lib/rounds.sh"
+export LC_ALL=C.UTF-8
+focus="$(printf '%090d' 0 | tr '0' x)"
+focus="${focus//x/試}"
+check test "${#focus}" -eq 90
+printf 'CUSTOM: retry role=broader focus="%s"\nDraft prompt:\nInspect retries.\n' "$focus" > "$FIXTURE/unicode.md"
+_rounds_meta_parse_output "$FIXTURE/unicode.md" "$FIXTURE/unicode-dispatch.md" "$FIXTURE/unicode-hypotheses.md" "$REPO/prompts/lenses"
+CURRENT_ROUND_INDEX=2
+tuple="$(_rounds_meta_dispatch_custom_entries "$FIXTURE/unicode-dispatch.md" "$FIXTURE/unicode-lenses")"
+check test "${#tuple}" -lt 200
+unicode_token="$(_sem_token_path "$tuple")"
+check sem_token_create "$tuple" 333
+check test -f "$unicode_token"
+check grep -q '^pid=333$' "$unicode_token"
+check test "$(_sem_token_path "$tuple")" = "$unicode_token"
+# A different focus must retain independent bookkeeping and removal.
+other_tuple="$(_rounds_meta_tuple_serialize custom/r2-retry broader "${focus}別" "" "")"
+other_token="$(_sem_token_path "$other_tuple")"
+check test "$other_token" != "$unicode_token"
+check sem_token_create "$other_tuple" 444
+check grep -q '^pid=444$' "$other_token"
+check sem_token_remove "$other_tuple"
+check test -f "$unicode_token"
+check sem_token_remove "$tuple"
+check test ! -e "$unicode_token"
+# Existing short multibyte filenames remain compatible, and the helper's byte
+# counting locale must not leak into its caller.
+check test "$(_sem_token_path custom/試)" = "$_REPOLENS_SEM_DIR/custom_試.token"
+check test "$LC_ALL" = C.UTF-8
+LC_ALL=C sem_token_create "$tuple" 555
+check sem_token_remove "$tuple"
 printf '%s checks passed; %s failed.\n' "$passed" "$failed"
 test "$failed" -eq 0

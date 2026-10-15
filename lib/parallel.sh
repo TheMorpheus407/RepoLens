@@ -305,7 +305,9 @@ _sem_token_path() {
   token_id="${lens_id//[![:alnum:]_.-]/_}"
   [[ -n "$token_id" ]] || token_id="lens"
   # Leave room for the token extension and mktemp suffix without changing
-  # the canonical completion ID or ordinary token filenames.
+  # the canonical completion ID or ordinary token filenames. Count bytes after
+  # sanitization: UTF-8 letters can survive the caller's locale-aware pattern.
+  local LC_ALL=C
   if (( ${#token_id} > 200 )); then
     token_id="$(sha256_text "$lens_id")" || return 1
     # The + delimiter cannot occur in a sanitized short ID.
