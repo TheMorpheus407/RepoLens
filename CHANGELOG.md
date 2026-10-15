@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Generate triage reports before the opted-in human-review digest so fresh runs and resumes include the available duplicate-report link.
+
 - Preserve contributor evidence from colliding canonical registry records so duplicate reports retain every validated group while keeping the winning record's other fields.
 
 - Keep finalization guards compatible with the existing triage and forge-rollup regression checks while preserving cancellation checks, and describe generated reports without triggering the README draft-marker check.

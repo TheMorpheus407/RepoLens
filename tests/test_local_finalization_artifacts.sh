@@ -30,19 +30,26 @@ print_resume_hint() { :; }
 eval "$(declare -f dedupe_local_markdown | sed '1s/dedupe_local_markdown/original_dedupe/')"
 dedupe_local_markdown() {
   original_dedupe "$@" || return $?
-  if [[ "$SIGNAL" != NONE ]]; then kill -s "$SIGNAL" "$SIGNAL_PARENT_PID"; fi
+  if [[ "$SIGNAL" != NONE && "$scenario" != triage-* ]]; then kill -s "$SIGNAL" "$SIGNAL_PARENT_PID"; fi
+}
+eval "$(declare -f generate_duplicates_md | sed '1s/generate_duplicates_md/original_duplicates/')"
+generate_duplicates_md() {
+  original_duplicates "$@" || return $?
+  if [[ "$SIGNAL" != NONE && "$scenario" == triage-* ]]; then kill -s "$SIGNAL" "$SIGNAL_PARENT_PID"; fi
 }
 run_finalization() (
   SIGNAL_PARENT_PID="$BASHPID"
   REPOLENS_FINAL_STATE=finished REPOLENS_INTERRUPT_EXIT_CODE=130 RUN_ROUNDS_RC=0
   RUN_ID=20261015T000000Z-local MODE=audit AGENT=mock PARALLEL=false
   SCRIPT_DIR="${LOG_BASE%/logs/*}" LOCAL_MODE=true
+  [[ "$scenario" != remote ]] || LOCAL_MODE=false
   MAX_ISSUES=1 REPOLENS_DEGENERATE_THRESHOLD=90 CURSOR_IDE_ACTIVE=true
   REPOLENS_CURSOR_IDE_CTL_LOG="$LOG_BASE/control.ndjson"
   if [[ "$scenario" == registry-failure ]]; then build_finding_registry() { return 1; }; fi
   # Exercise a real pre-promotion failure with an already-published registry.
   if [[ "$scenario" == stale-registry-failure ]]; then validate_findings_jsonl() { return 1; }; fi
   if [[ "$scenario" == digest-failure ]]; then render_human_review_digest() { return 1; }; fi
+  if [[ "$scenario" == duplicate-report-failure ]]; then generate_duplicates_md() { return 1; }; fi
   # shellcheck source=/dev/null
   source <(sed -n '/^# --- Finalize ---/,$p' "$REPO/repolens.sh")
 )
@@ -53,7 +60,7 @@ check() {
     failed=$((failed + 1))
   fi
 }
-for scenario in fresh absent-HUP absent-INT absent-TERM stale-HUP stale-INT stale-TERM empty same-lens-first same-lens-last registry-failure stale-registry-failure digest-failure; do
+for scenario in fresh remote absent-HUP absent-INT absent-TERM stale-HUP stale-INT stale-TERM triage-HUP triage-INT triage-TERM empty same-lens-first same-lens-last registry-failure stale-registry-failure digest-failure duplicate-report-failure; do
   for HUMAN_REVIEW in true false; do
     # Digest opt-out needs fresh and resumed coverage; other cases share the path.
     [[ "$HUMAN_REVIEW" == true || "$scenario" == fresh || "$scenario" == absent-TERM ]] || continue
@@ -86,9 +93,15 @@ EOF
       build_finding_registry local "$OUTPUT_DIR"
       check jq -se 'length == 2 and all(.status == "new")' "$LOG_BASE/final/findings.jsonl"
     fi
+    # Non-local finalization consumes an already-produced registry when no
+    # manifest is present. Use the real writers to seed that shared path.
+    if [[ "$scenario" == remote ]]; then
+      original_dedupe "$OUTPUT_DIR"
+      build_finding_registry local "$OUTPUT_DIR"
+    fi
     attempts_begin "$LOG_BASE"
     SIGNAL=NONE
-    case "$scenario" in absent-*|stale-HUP|stale-INT|stale-TERM) SIGNAL="${scenario##*-}" ;; esac
+    case "$scenario" in absent-*|triage-*|stale-HUP|stale-INT|stale-TERM) SIGNAL="${scenario##*-}" ;; esac
     rc=0
     run_finalization > "$LOG_BASE/first.log" 2>&1 || rc=$?
     if [[ "$SIGNAL" != NONE ]]; then
@@ -97,10 +110,16 @@ EOF
       check test "$rc" -eq "$expected"
       check jq -e --argjson code "$expected" 'length == 1 and last.status == "interrupted" and last.exit_code == $code' "$LOG_BASE/attempts.json"
       for artifact in HUMAN_REVIEW TODO SUMMARY NEEDS_REVIEW DUPLICATES; do
-        check test ! -e "$LOG_BASE/final/$artifact.md"
+        if [[ "$scenario" == triage-* && "$artifact" != HUMAN_REVIEW ]]; then
+          check test -s "$LOG_BASE/final/$artifact.md"
+        else
+          check test ! -e "$LOG_BASE/final/$artifact.md"
+        fi
       done
       if [[ "$scenario" == absent-* ]]; then
         check test ! -e "$LOG_BASE/final/findings.jsonl"
+      elif [[ "$scenario" == triage-* ]]; then
+        check jq -se 'length == 2 and (map(select(.status == "duplicate")) | length) == 1' "$LOG_BASE/final/findings.jsonl"
       else
         check jq -se 'all(.status == "new")' "$LOG_BASE/final/findings.jsonl"
       fi
@@ -140,13 +159,23 @@ EOF
         check test -s "$LOG_BASE/final/HUMAN_REVIEW.md"
         if [[ "$scenario" != empty ]]; then
           check test "$(grep -cE '^### .*Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq 1
+          if [[ "$scenario" == duplicate-report-failure ]]; then
+            check test "$(grep -cF '[DUPLICATES.md](DUPLICATES.md)' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq 0
+            check grep -qF '[findings.jsonl](findings.jsonl)' "$LOG_BASE/final/HUMAN_REVIEW.md"
+          elif [[ "$scenario" == same-lens-* ]]; then
+            # Identical-ID collapse leaves no excluded duplicate row to link.
+            check test "$(grep -cF '[DUPLICATES.md](DUPLICATES.md)' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq 0
+          else
+            check grep -qF '[DUPLICATES.md](DUPLICATES.md)' "$LOG_BASE/final/HUMAN_REVIEW.md"
+          fi
         fi
       else
         check test ! -e "$LOG_BASE/final/HUMAN_REVIEW.md"
       fi
     fi
     for artifact in TODO SUMMARY NEEDS_REVIEW DUPLICATES; do
-      if [[ "$scenario" == empty || "$scenario" == registry-failure || "$scenario" == stale-registry-failure ]]; then
+      if [[ "$scenario" == empty || "$scenario" == registry-failure || "$scenario" == stale-registry-failure \
+          || ( "$scenario" == duplicate-report-failure && "$artifact" == DUPLICATES ) ]]; then
         check test ! -e "$LOG_BASE/final/$artifact.md"
       else
         check test -s "$LOG_BASE/final/$artifact.md"
@@ -154,9 +183,11 @@ EOF
     done
     if [[ "$scenario" != empty && "$scenario" != registry-failure && "$scenario" != stale-registry-failure ]]; then
       check grep -qE 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md"
-      check grep -qE 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md"
       check test "$(grep -cE 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md")" -eq 1
-      check test "$(grep -cE 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md")" -eq 1
+      if [[ "$scenario" != duplicate-report-failure ]]; then
+        check grep -qE 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md"
+        check test "$(grep -cE 'Unsafe access to shared state' "$LOG_BASE/final/DUPLICATES.md")" -eq 1
+      fi
     fi
     cases=$((cases + 1))
   done

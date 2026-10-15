@@ -5436,30 +5436,6 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
   fi
 fi
 
-# --- Human review digest (non-fatal) ---
-# When --human-review is set and the finding registry exists, render the curated
-# final/HUMAN_REVIEW.md from the bucketed findings. Non-fatal, matching the
-# verifier precedent: a render failure logs a warning and NEVER touches
-# REPOLENS_FINAL_STATE or RUN_ROUNDS_RC. No HUMAN_REVIEW.md is written when the
-# flag is off or no findings.jsonl exists.
-if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
-    && "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]] \
-    && { ! $LOCAL_MODE || $_local_registry_ready; }; then
-  if render_human_review_digest "$RUN_ID"; then
-    log_info "Human review: HUMAN_REVIEW.md written"
-  else
-    log_warn "Human review: failed to render HUMAN_REVIEW.md"
-  fi
-  # No silent truncation: one structured line reconciling the curated digest
-  # against the full registry (total / surfaced / held-back per bucket). The
-  # helper is pure (returns the string); log_info owns the emission so the
-  # log_*-under-set -u trap stays out of the library. Gated by the same block,
-  # so it only fires when --human-review is active. Non-fatal.
-  if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
-    log_info "$(human_review_heldback_summary "$RUN_ID")"
-  fi
-fi
-
 # --- Human-triage artifacts (non-fatal) ---
 # Render the four post-run triage Markdown files (TODO / SUMMARY / NEEDS_REVIEW /
 # DUPLICATES) from the finding registry into final/. Clean no-op when the registry
@@ -5490,6 +5466,32 @@ if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != inte
 else
   log_info "Triage artifacts: interrupted, unavailable current registry or no findings at $TRIAGE_FINDINGS; skipping"
 fi
+
+# --- Human review digest (non-fatal) ---
+# Render after triage so a newly generated duplicate report can be linked.
+# When --human-review is set and the finding registry exists, render the curated
+# final/HUMAN_REVIEW.md from the bucketed findings. Non-fatal, matching the
+# verifier precedent: a render failure logs a warning and NEVER touches
+# REPOLENS_FINAL_STATE or RUN_ROUNDS_RC. No HUMAN_REVIEW.md is written when the
+# flag is off or no findings.jsonl exists.
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
+    && "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]] \
+    && { ! $LOCAL_MODE || $_local_registry_ready; }; then
+  if render_human_review_digest "$RUN_ID"; then
+    log_info "Human review: HUMAN_REVIEW.md written"
+  else
+    log_warn "Human review: failed to render HUMAN_REVIEW.md"
+  fi
+  # No silent truncation: one structured line reconciling the curated digest
+  # against the full registry (total / surfaced / held-back per bucket). The
+  # helper is pure (returns the string); log_info owns the emission so the
+  # log_*-under-set -u trap stays out of the library. Gated by the same block,
+  # so it only fires when --human-review is active. Non-fatal.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+    log_info "$(human_review_heldback_summary "$RUN_ID")"
+  fi
+fi
+
 unset _local_registry_ready
 
 apply_rate_limit_abort_final_state || true

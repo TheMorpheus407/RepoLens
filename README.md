@@ -1035,6 +1035,8 @@ Local finalization rebuilds the finding registry after deduplication, before ren
 
 When multiple records share a finding ID, the registry retains a non-duplicate record in preference to a marked duplicate. The human-review digest excludes duplicates from its five review buckets and caps, with an explicit excluded count and provenance links when duplicates exist. Its surfaced and held-back counts cover eligible findings; adding excluded duplicates gives the full registry total. If a local registry rebuild fails, review artifacts are left unchanged until a successful rebuild, so an older registry cannot generate new stale reports.
 
+Triage reports are generated before the opted-in digest so it can link the available duplicate report on fresh runs and resumes. If that report cannot be written, the digest still links the full registry for provenance.
+
 Local duplicate marks require a direct link to a different, parsed non-duplicate finding in the current output tree. When that canonical is missing, filtered or invalid, the registry restores the remaining finding to `new` for review. Self-links, chains and cycles cannot validate duplicate marks. The original markdown annotations remain as evidence.
 
 ## Post-audit validation
