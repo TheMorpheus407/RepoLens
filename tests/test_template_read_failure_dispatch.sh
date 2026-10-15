@@ -24,7 +24,8 @@ trap 'rm -rf "$TEST_DIR" "${CASE_DIRS[@]}"' EXIT
 mkdir -p "$TEST_DIR/bin"
 REAL_CAT="$(command -v cat)"
 REAL_AWK="$(command -v awk)"
-export REAL_CAT REAL_AWK
+REAL_SED="$(command -v sed)"
+export REAL_CAT REAL_AWK REAL_SED
 cat > "$TEST_DIR/bin/cat" <<'CAT'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -49,6 +50,15 @@ for arg in "$@"; do
 done
 exec "$REAL_AWK" "$@"
 AWK
+cat > "$TEST_DIR/bin/sed" <<'SED'
+#!/usr/bin/env bash
+set -uo pipefail
+if [[ "${!#}" == "${FAIL_SPEC:-}" ]]; then
+  printf 'Partial spec read.'
+  exit 42
+fi
+exec "$REAL_SED" "$@"
+SED
 cat > "$TEST_DIR/bin/codex" <<'AGENT'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -95,16 +105,55 @@ done
 unset FAIL_LENS DENY_LENS
 printf 'Plan a small command-line audit tool.\n' > "$TEST_DIR/spec.md"
 
-for failure_source in base lens; do
+# repolens-r5-p1-4: every requested file-backed context is atomic.
+printf 'Actual nonempty branch delta\n' > "$TEST_DIR/context.md"
+for key in PRIOR_ROUND_DIGEST HYPOTHESES_TO_VERIFY BUG_REPORT TRIAGE_CONTEXT_PACK PRIOR_FINDING_ANCHOR CURRENT_BACKLOG VOICE_PROFILE SPEC_DIFF BRANCH_DIFF_SUMMARY; do
+  export FAIL_TEMPLATE="$TEST_DIR/context.md"
+  rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/audit.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" "$key=@$TEST_DIR/context.md" '' audit)"
+  check test "$?" -ne 0
+  check test -z "$rendered"
+  unset FAIL_TEMPLATE
+  rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/audit.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" "$key=@$TEST_DIR/missing-context.md" '' audit)"
+  check test "$?" -ne 0
+  check test -z "$rendered"
+done
+rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/branch-review.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" "BRANCH_DIFF_SUMMARY=@$TEST_DIR/context.md" '' branch-review)"
+check test "$?" -eq 0
+check grep -Fq 'Actual nonempty branch delta' <<< "$rendered"
+for mode in audit greenfield; do
+  export FAIL_SPEC="$TEST_DIR/spec.md"
+  rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/$mode.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" '' "$TEST_DIR/spec.md" "$mode")"
+  check test "$?" -ne 0
+  check test -z "$rendered"
+  unset FAIL_SPEC
+  rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/$mode.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" '' "$TEST_DIR/spec.md" "$mode")"
+  check test "$?" -eq 0
+  check grep -Fq 'Plan a small command-line audit tool.' <<< "$rendered"
+done
+rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/greenfield.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" '' "$TEST_DIR/missing-spec.md" greenfield)"
+check test "$?" -ne 0
+check test -z "$rendered"
+# Remote execution partials remain optional when absent. A failed read of an
+# existing partial must stop composition before dispatch.
+export FAIL_TEMPLATE="$SCRIPT_DIR/prompts/_base/_remote_execution.md"
+rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/deploy.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" 'REPOLENS_REMOTE_TARGET=ops@example.invalid|REPOLENS_DEPLOY_TARGET_KIND=server' '' deploy)"
+check test "$?" -ne 0
+check test -z "$rendered"
+unset FAIL_TEMPLATE
+
+for failure_source in base lens spec; do
 for mode in audit greenfield; do
   [[ "$failure_source" == lens && "$mode" == greenfield ]] && continue
+  [[ "$failure_source" == spec && "$mode" != greenfield ]] && continue
   for sink in local forge blocked-marker; do
     LOG_BASE="$(mktemp -d "$SCRIPT_DIR/logs/test-template-$mode-$sink.XXXXXX")" || exit 1
     CASE_DIRS+=("$LOG_BASE")
     RUN_ID="${LOG_BASE#"$SCRIPT_DIR/logs/"}"
-    unset FAIL_TEMPLATE FAIL_LENS
+    unset FAIL_TEMPLATE FAIL_LENS FAIL_SPEC
     if [[ "$failure_source" == base ]]; then
       export FAIL_TEMPLATE="$SCRIPT_DIR/prompts/_base/$mode.md"
+    elif [[ "$failure_source" == spec ]]; then
+      export FAIL_SPEC="$TEST_DIR/spec.md"
     else
       export FAIL_LENS="$SCRIPT_DIR/prompts/lenses/security/injection.md"
     fi
@@ -135,7 +184,7 @@ for mode in audit greenfield; do
     check json_matches '.state == "failed"' "$LOG_BASE/status.json"
     if [[ "$mode" == audit && "$sink" == local ]]; then
       # Once readable, the same run clears the abort and retries the lens.
-      unset FAIL_TEMPLATE FAIL_LENS
+      unset FAIL_TEMPLATE FAIL_LENS FAIL_SPEC
       env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
         REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \
         REPOLENS_LENS_HEARTBEAT_INTERVAL=0 REPOLENS_STATUS_INTERVAL=1 \

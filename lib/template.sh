@@ -61,7 +61,7 @@ _template_remote_execution_section() {
   partial="$root/prompts/_base/_remote_execution.md"
   [[ -f "$partial" ]] || return 0
 
-  section="$(cat "$partial")"
+  section="$(cat "$partial")" || return 1
   section="${section//\{\{REPOLENS_REMOTE_LABEL\}\}/$remote_label}"
   printf '%s' "$section"
 }
@@ -151,9 +151,8 @@ _template_resolve_file_backed_value() {
 
   if [[ "$value" == @* ]]; then
     path="${value#@}"
-    if [[ -n "$path" && -f "$path" ]]; then
-      cat "$path"
-    fi
+    [[ -n "$path" && -f "$path" ]] || return 1
+    cat "$path" || return 1
     return 0
   fi
 
@@ -257,7 +256,10 @@ compose_prompt() {
     [[ -n "$pair" ]] || continue
     key="${pair%%=*}"
     value="${pair#*=}"
-    value="$(_template_resolve_file_backed_value "$key" "$value")"
+    if ! value="$(_template_resolve_file_backed_value "$key" "$value")"; then
+      printf 'Unable to read file-backed prompt context: %s\n' "$key" >&2
+      return 1
+    fi
     prompt_vars["$key"]="$value"
   done
 
@@ -318,7 +320,7 @@ compose_prompt() {
   local remote_execution_section=""
   local server_investigation_section=""
   if _template_is_remote_server_deploy "$mode" "$deploy_target_kind" "$remote_target"; then
-    remote_execution_section="$(_template_remote_execution_section "$remote_label")"
+    remote_execution_section="$(_template_remote_execution_section "$remote_label")" || return 1
     server_investigation_section="$(_template_remote_server_investigation_section)"
   else
     server_investigation_section="$(_template_local_server_investigation_section)"
@@ -854,9 +856,16 @@ Read the source file using your file reading capabilities (cat, head, or equival
   # Step 8 (LAST): Build and insert spec section
   # Done last so spec content is never subject to variable substitution
   spec_section=""
+  if [[ "$mode" == greenfield && -n "$spec_file" && ! -f "$spec_file" ]]; then
+    printf 'Unable to read required specification: %s\n' "$spec_file" >&2
+    return 1
+  fi
   if [[ -n "$spec_file" && -f "$spec_file" ]]; then
     local spec_content spec_guidance=""
-    spec_content="$(read_spec_file "$spec_file")"
+    if ! spec_content="$(read_spec_file "$spec_file")"; then
+      printf 'Unable to read specification: %s\n' "$spec_file" >&2
+      return 1
+    fi
 
     # Escape XML-like tags to prevent prompt injection via tag breakout (issue #50)
     # An attacker-controlled spec file containing </spec> could close the content
