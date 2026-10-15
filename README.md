@@ -1037,7 +1037,7 @@ When multiple records share a finding ID, the registry retains a non-duplicate r
 
 Triage reports are generated before the opted-in digest so it can link the available duplicate report on fresh runs and resumes. The digest links the duplicate report only after successful generation in the current invocation. If writing or replacing that report fails, the previous file is preserved but its link is omitted; the digest still links the current full registry for provenance.
 
-Local duplicate marks require a direct link to a different, parsed non-duplicate finding in the current output tree. When that canonical is missing, filtered or invalid, the registry restores the remaining finding to `new` for review. Self-links, chains and cycles cannot validate duplicate marks. The original markdown annotations remain as evidence.
+Local duplicate marks require a direct link to a different, parsed non-duplicate finding in the same current deterministic group. Grouping uses the current output tree and similarity thresholds, including transitive matches. When that canonical is missing, filtered, invalid or no longer grouped with the finding after edits or threshold changes, the registry restores the finding to `new` for review. Self-links, chains and cycles cannot validate duplicate marks. The original markdown annotations remain as evidence.
 
 ## Post-audit validation
 

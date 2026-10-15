@@ -423,8 +423,8 @@ _ledger_frontmatter_scalar() {
 #   - severity is run through _ledger_severity_normalize ("Critical"->"critical").
 #   - confidence is null, primary_location is "", validation is {}.
 #   - status preserves a "duplicate" mark only with a direct duplicate_of link
-#     to a different, parsed non-duplicate in the current tree; otherwise it is
-#     "new", so stale marks cannot hide the last actionable representation.
+#     to a different, parsed non-duplicate in the same current deterministic
+#     group; otherwise it is "new", so stale marks cannot suppress review.
 #     Valid links reconstruct also_reported_by on canonical records.
 #
 #   jq owns all quoting/escaping: title/domain/lens/markdown_path are passed as
@@ -507,17 +507,49 @@ build_findings_jsonl_from_local() {
       }' >> "$tmp" || { rm -f "$tmp"; return 1; }
   done < <(find "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z)
 
+  # Reuse current connected components, including transitive matches and the
+  # operator's thresholds. A live old link alone cannot justify suppression
+  # after a title edit. Unmarked trees need no grouping during ingestion.
+  local components="$tmp.components" manifest="$tmp.manifest"
+  : > "$components" || { rm -f "$tmp"; return 1; }
+  if jq -se 'any(.[]; .status == "duplicate")' "$tmp" >/dev/null; then
+    if ! declare -F _synthesize_compute_duplicate_groups >/dev/null 2>&1; then
+      # shellcheck source=/dev/null
+      source "$(_ledger_repo_root)/lib/synthesize.sh"
+    fi
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$tmp" "$components"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+    if ! jq -s '.' "$tmp" > "$manifest" \
+        || ! _synthesize_compute_duplicate_groups "$manifest" > "$components"; then
+      rm -f "$tmp" "$components" "$manifest"
+      return 1
+    fi
+    rm -f "$manifest"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$tmp" "$components"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+  fi
+
   # The local dedupe pass stores canonical paths relative to output_dir. Resolve
   # only against records in this same tree; no referenced file is opened. Check
   # RAW statuses before normalization so self-links, chains and cycles cannot
-  # validate one another. Missing/filtered/invalid canonicals restore eligibility
-  # without modifying the markdown evidence. Only validated links contribute.
-  if ! jq -cs --arg dir "${dir%/}" '
-      (map({key: .markdown_path, value: .status}) | from_entries) as $raw_status
+  # validate one another. Missing/filtered/invalid or now-unrelated canonicals
+  # restore eligibility without modifying evidence. Only valid links contribute.
+  if ! jq -cs --arg dir "${dir%/}" --slurpfile groups "$components" '
+      . as $records
+      | (reduce $groups[] as $g ({};
+          reduce $g.member_indices[] as $i (.;
+            .[$records[$i].markdown_path] = $g.canonical_idx))) as $membership
+      | (map({key: .markdown_path, value: .status}) | from_entries) as $raw_status
       | map(
           ($dir + "/" + .__local_duplicate_of) as $target
           | if .status == "duplicate" and .__local_duplicate_of != ""
-              and $target != .markdown_path and $raw_status[$target] == "new" then .
+              and $target != .markdown_path and $raw_status[$target] == "new"
+              and $membership[.markdown_path] != null
+              and $membership[.markdown_path] == $membership[$target] then .
             else .status = "new" | .__local_duplicate_of = "" end)
       | (reduce .[] as $r ({};
         if $r.__local_duplicate_of == "" then .
@@ -530,10 +562,10 @@ build_findings_jsonl_from_local() {
         else . end
       | del(.__local_duplicate_of)
     ' "$tmp" > "$tmp.groups"; then
-    rm -f "$tmp" "$tmp.groups"
+    rm -f "$tmp" "$tmp.groups" "$components"
     return 1
   fi
-  rm -f "$tmp"
+  rm -f "$tmp" "$components"
   mv "$tmp.groups" "$out" || { rm -f "$tmp.groups"; return 1; }
 }
 

@@ -22,8 +22,10 @@ It is built from the existing finding outputs; it does not replace them.
   that frontmatter and emits one normalized record per file. It preserves local
   dedupe's `status: duplicate` marks only when their direct relative
   `duplicate_of` link identifies a different parsed record with a raw
-  non-duplicate status in the current tree. Missing, filtered or invalid
-  canonicals, self-links, chains and cycles restore the affected records to
+  non-duplicate status in the same current deterministic group. The builder
+  reuses current similarity thresholds and transitive connected components.
+  Missing, filtered, invalid or now-unrelated canonicals (including after title
+  edits or threshold changes), self-links, chains and cycles restore records to
   `new` in the registry. Markdown evidence remains unchanged. Only validated
   links reconstruct `also_reported_by` contributors on canonical records;
   referenced paths are never opened.
