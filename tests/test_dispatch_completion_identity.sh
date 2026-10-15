@@ -159,7 +159,7 @@ check test "$?" -ne 0
 if is_lens_completed "${ENTRIES[1]}"; then check false; else check true; fi
 check test "$(find "$HEARTBEAT_DIR" -name '*.json' | wc -l)" -eq 0
 check test "$(cat "$LOG_BASE/deeper.envelope-path")" != "$(cat "$LOG_BASE/broader.envelope-path")"
-check grep -qx DONE "$(cat "$LOG_BASE/deeper.envelope-path" | sed 's/\.envelope\.json$//')"
+check grep -qx DONE "$(sed 's/\.envelope\.json$//' "$LOG_BASE/deeper.envelope-path")"
 check grep -qx deeper "$(cat "$LOG_BASE/deeper.output-dir")/001-finding.md"
 check grep -qx broader "$(cat "$LOG_BASE/broader.output-dir")/001-finding.md"
 check test "$(find "$LOG_BASE/output" -name '*.envelope.json' | wc -l)" -eq 2
