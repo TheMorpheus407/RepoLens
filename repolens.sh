@@ -5109,7 +5109,12 @@ run_lens() {
   fi
 
   log_info "[$domain/$lens_id] Finished after $iteration iteration(s), $lens_issues issue(s)"
-  [[ "$exit_status" != "prompt-render-failed" ]]
+  # The callback is an independent failure channel when marker persistence fails.
+  case "$exit_status" in
+    prompt-render-failed|auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error)
+      return 1 ;;
+  esac
+  return 0
 }
 
 # --- Phase execution state ---
