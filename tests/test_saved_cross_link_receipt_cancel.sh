@@ -61,7 +61,7 @@ case_saved_receipt() (
   forge_issue_create_once() { printf 'UNEXPECTED POST\n' >> "$LOG_BASE/posts"; return 99; }
   cat() {
     command cat "$@" || return 1
-    if $cancel_enabled && [[ "$phase" == banner-* && "${1:-}" == "$cross.body.md" ]]; then
+    if $cancel_enabled && [[ "$phase" == banner-* && "${1:-}" == "$cross.body.md".reconcile.* ]]; then
       kill -TERM "$parent_pid"
       [[ "$phase" != banner-failure ]] || return 42
     fi

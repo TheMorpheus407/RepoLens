@@ -499,6 +499,7 @@ _filing_cross_link_fail() {
   if [[ -e "$done_file" || -L "$done_file" ]]; then
     # Reserve the already completed POST before any marker move, including crashes.
     : > "${done_file%.done}.attempted" || return 1
+    _filing_cancelled && return 1
     mv "$done_file" "${done_file%.done}.unverified-done" || return 1
   fi
   printf '%s\n' "$reason" > "$result_file"
@@ -571,7 +572,8 @@ _filing_action_reference_candidates() {
 #   the dispatcher does not repeat a POST.
 #
 #   Per-action state machine for each cross-link entry:
-#     1. <key>.done present     -> quarantine and re-attest saved response
+#     1. <key>.done present     -> preserve receipt and payload while re-attesting;
+#                                quarantine only a completed validation failure
 #     2. .failed or .attempted  -> SKIP (requires operator reconciliation)
 #     3. otherwise             -> verify evidence, adapter, target and body;
 #                                dedup new reopen suggestions against one
@@ -830,8 +832,14 @@ _filing_cross_link_enact() {
     fi
 
     body_file="$cross_dir/$key.body.md"
+    local reconcile_body_file="" reconcile_banner_file=""
+    if (( reconcile_done )); then
+      reconcile_body_file="$(mktemp "$body_file.reconcile.XXXXXX")" || return 1
+      body_file="$reconcile_body_file"
+    fi
     jq -jr . <<< "$body_json" > "$body_file" || {
       echo "_filing_cross_link_enact: cannot write body file for $key" >&2
+      [[ -z "$reconcile_body_file" ]] || rm -f "$reconcile_body_file"
       if _filing_cancelled; then
         # No POST was attempted by this pass. Preserve older receipts that
         # still require reconciliation, but release a fresh unsent action.
@@ -844,8 +852,10 @@ _filing_cross_link_enact() {
       continue
     }
 
-    if (( reconcile_done )) && _filing_cancelled; then return 1; fi
-    local reconcile_banner_file=""
+    if (( reconcile_done )) && _filing_cancelled; then
+      rm -f "$reconcile_body_file"
+      return 1
+    fi
     rc=0
     case "$action_type" in
       comment)
@@ -883,7 +893,10 @@ _filing_cross_link_enact() {
           # explicitly in the body.
           local banner_file="$cross_dir/$key.body.banner.md"
           if (( reconcile_done )); then
-            reconcile_banner_file="$(mktemp "$banner_file.reconcile.XXXXXX")" || return 1
+            reconcile_banner_file="$(mktemp "$banner_file.reconcile.XXXXXX")" || {
+              rm -f "$reconcile_body_file"
+              return 1
+            }
             banner_file="$reconcile_banner_file"
           fi
           {
@@ -892,8 +905,13 @@ _filing_cross_link_enact() {
             cat "$body_file" &&
             printf '\n\nLabel suggestion: %s\n' "\`$reopen_label\`"
           } > "$banner_file" || rc=1
-          if (( reconcile_done )) && _filing_cancelled; then
-            rm -f "$reconcile_banner_file"
+          if _filing_cancelled; then
+            if (( reconcile_done )); then
+              rm -f "$reconcile_body_file" "$reconcile_banner_file"
+            else
+              # Banner generation may have failed before the pre-POST check.
+              rm -f "$cross_dir/$key.attempted" "$body_file" "$banner_file"
+            fi
             return 1
           fi
           if (( rc == 0 )); then
@@ -925,15 +943,20 @@ _filing_cross_link_enact() {
         ;;
     esac
 
-    if [[ -n "$reconcile_banner_file" ]]; then
+    if (( reconcile_done )); then
       if _filing_cancelled; then
-        rm -f "$reconcile_banner_file"
+        rm -f "$reconcile_body_file" ${reconcile_banner_file:+"$reconcile_banner_file"}
         return 1
       fi
       if (( rc == 0 )); then
-        mv "$reconcile_banner_file" "$cross_dir/$key.body.banner.md" || rc=1
+        if [[ -n "$reconcile_banner_file" ]]; then
+          mv "$reconcile_banner_file" "$cross_dir/$key.body.banner.md" || rc=1
+        fi
+        if (( rc == 0 )); then
+          mv "$reconcile_body_file" "$cross_dir/$key.body.md" || rc=1
+        fi
       fi
-      rm -f "$reconcile_banner_file"
+      rm -f "$reconcile_body_file" ${reconcile_banner_file:+"$reconcile_banner_file"}
     fi
     if (( rc == 0 )); then
       printf '%s\n' "$readback" > "$cross_dir/$key.readback.json" || continue

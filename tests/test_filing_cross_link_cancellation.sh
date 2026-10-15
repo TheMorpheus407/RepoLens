@@ -21,7 +21,7 @@ source "$REPO/lib/filing.sh" || exit 1
 FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 PASS=0 FAIL=0
-for scenario in comment-body reopen-body comment-body-fail reopen-body-fail reconciled-comment-body-fail reconciled-reopen-body-fail reopen-banner comment-post reopen-post dispatch-full dispatch-empty ordinary-full ordinary-empty; do
+for scenario in comment-body reopen-body comment-body-fail reopen-body-fail reconciled-comment-body-fail reconciled-reopen-body-fail reopen-banner reopen-banner-fail comment-post reopen-post dispatch-full dispatch-empty ordinary-full ordinary-empty; do
   if (
     LOG_BASE="$FIXTURE/$scenario"
     cross_dir="$LOG_BASE/final/filed/cross-link"
@@ -71,8 +71,9 @@ for scenario in comment-body reopen-body comment-body-fail reopen-body-fail reco
     }
     cat() {
       command cat "$@" || return 1
-      if [[ "$cancel_enabled" == 1 && "$scenario" == reopen-banner && "$1" == "$cross_dir/$key.body.md" ]]; then
+      if [[ "$cancel_enabled" == 1 && "$scenario" == reopen-banner* && "$1" == "$cross_dir/$key.body.md" ]]; then
         kill -TERM "$parent_pid"
+        [[ "$scenario" != reopen-banner-fail ]] || return 1
       fi
     }
     case "$scenario" in
