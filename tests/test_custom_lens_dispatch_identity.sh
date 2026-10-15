@@ -57,15 +57,20 @@ check() {
   else failed=$((failed + 1)); printf 'FAIL: %s\n' "$*"; fi
 }
 # Each header attribute alone changes the prompt even with identical body text.
+for category in Retry 再試行; do
+case "$category" in
+  Retry) first_slug=retry; changed_slug=retry-2 ;;
+  *) first_slug=custom-1; changed_slug=custom-2 ;;
+esac
 for attribute in role focus anchor exclude body legacy; do
-  LOG_BASE="$FIXTURE/$attribute"
+  LOG_BASE="$FIXTURE/$category-$attribute"
   mkdir -p "$LOG_BASE"
   completed_lenses_file="$LOG_BASE/.completed"
   FAIL_SECOND_META=true
   case "$attribute" in
-    body) printf 'CUSTOM: Retry\nDraft prompt:\nInspect first path.\n' ;;
-    legacy) printf 'CUSTOM: Retry role=deeper\nDraft prompt:\nInspect retries.\n' ;;
-    *) printf 'CUSTOM: Retry %s=first\nDraft prompt:\nInspect retries.\n' "$attribute" ;;
+    body) printf 'CUSTOM: %s\nDraft prompt:\nInspect first path.\n' "$category" ;;
+    legacy) printf 'CUSTOM: %s role=deeper\nDraft prompt:\nInspect retries.\n' "$category" ;;
+    *) printf 'CUSTOM: %s %s=first\nDraft prompt:\nInspect retries.\n' "$category" "$attribute" ;;
   esac > "$META_FIXTURE"
   rc=0
   run_rounds 3 LENSES || rc=$?
@@ -74,23 +79,24 @@ for attribute in role focus anchor exclude body legacy; do
   # A missing proof forces production to regenerate round 1's handoff.
   rm "$LOG_BASE/rounds/round-1/meta-orchestrator-success.json"
   case "$attribute" in
-    body) printf 'CUSTOM: Retry\nDraft prompt:\nInspect second path.\n' > "$META_FIXTURE" ;;
+    body) printf 'CUSTOM: %s\nDraft prompt:\nInspect second path.\n' "$category" > "$META_FIXTURE" ;;
     legacy)
       # Pre-upgrade attributed lenses used this exact format, without metadata.
-      sed '/^dispatch_attributes:/d' "$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-retry.md" > "$FIXTURE/legacy.md"
-      mv "$FIXTURE/legacy.md" "$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-retry.md"
+      sed '/^dispatch_attributes:/d' "$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-$first_slug.md" > "$FIXTURE/legacy.md"
+      mv "$FIXTURE/legacy.md" "$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-$first_slug.md"
       ;;
-    *) printf 'CUSTOM: Retry %s=second\nDraft prompt:\nInspect retries.\n' "$attribute" > "$META_FIXTURE" ;;
+    *) printf 'CUSTOM: %s %s=second\nDraft prompt:\nInspect retries.\n' "$category" "$attribute" > "$META_FIXTURE" ;;
   esac
   FAIL_SECOND_META=false
   rc=0
   run_rounds 3 LENSES || rc=$?
   check test "$rc" -eq 0
   check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 3
-  check grep -q 'custom/r2-retry-2' "$LOG_BASE/lens-calls"
+  check grep -q "custom/r2-$changed_slug" "$LOG_BASE/lens-calls"
   run_rounds 3 LENSES || exit $?
   check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 3
-  printf 'Verified regenerated handoff for %s.\n' "$attribute"
+  printf 'Verified regenerated handoff for %s / %s.\n' "$category" "$attribute"
+done
 done
 # Same-category work survives production parsing at both boundary and EOF.
 LOG_BASE="$FIXTURE/variants"
@@ -135,5 +141,65 @@ check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 4
 CURRENT_ROUND_INDEX=2
 entries="$(_rounds_meta_dispatch_custom_entries "$LOG_BASE/rounds/round-1/dispatch.md" "$LOG_BASE/rounds/round-1/custom-lenses")"
 check test "${entries%%|*}" = custom/r2-retry-3
+# Categories without an ASCII slug must keep their identity after reordering.
+# The first pass also creates the legacy custom-N file format (no attributes).
+LOG_BASE="$FIXTURE/non-ascii"
+mkdir -p "$LOG_BASE"
+completed_lenses_file="$LOG_BASE/.completed"
+cat > "$META_FIXTURE" <<'EOF'
+CUSTOM: 再試行
+Draft prompt:
+Inspect retries.
+CUSTOM: 同時実行
+Draft prompt:
+Inspect concurrency.
+CUSTOM: !!!
+Draft prompt:
+Inspect punctuation-only categories.
+EOF
+run_rounds 2 LENSES || exit $?
+check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 4
+check test -f "$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-custom-1.md"
+check test -f "$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-custom-2.md"
+check test -f "$LOG_BASE/rounds/round-1/custom-lenses/custom/r2-custom-3.md"
+rm "$LOG_BASE/rounds/round-1/meta-orchestrator-success.json"
+cat > "$META_FIXTURE" <<'EOF'
+CUSTOM: !!!
+Draft prompt:
+Inspect punctuation-only categories.
+CUSTOM: 同時実行
+Draft prompt:
+Inspect concurrency.
+CUSTOM: 再試行
+Draft prompt:
+Inspect retries.
+EOF
+run_rounds 2 LENSES || exit $?
+check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 4
+run_rounds 2 LENSES || exit $?
+check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 4
+check test "$(find "$LOG_BASE/rounds/round-1/custom-lenses" -name '*.md' | wc -l)" -eq 3
+# A legacy suffix and a gap must not hide the remaining completed identities.
+saved_dir="$LOG_BASE/rounds/round-1/custom-lenses/custom"
+sed 's/r2-custom-3/r2-custom-3-2/g' "$saved_dir/r2-custom-3.md" > "$saved_dir/r2-custom-3-2.md"
+rm "$saved_dir/r2-custom-1.md" "$saved_dir/r2-custom-3.md"
+sed 's@custom/r2-custom-3$@custom/r2-custom-3-2@' "$LOG_BASE/.rounds/round-2.lenses.completed" > "$FIXTURE/completed"
+mv "$FIXTURE/completed" "$LOG_BASE/.rounds/round-2.lenses.completed"
+cat > "$META_FIXTURE" <<'EOF'
+CUSTOM: !!!
+Draft prompt:
+Inspect punctuation-only categories.
+CUSTOM: 同時実行
+Draft prompt:
+Inspect concurrency.
+EOF
+rm "$LOG_BASE/rounds/round-1/meta-orchestrator-success.json"
+run_rounds 2 LENSES || exit $?
+check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 4
+check test "$(find "$saved_dir" -name '*.md' | wc -l)" -eq 2
+# The fallback pool remains isolated to the destination round.
+CURRENT_ROUND_INDEX=3
+entry="$(_rounds_meta_write_custom_lens "${saved_dir%/custom}" $'CUSTOM: 同時実行\nDraft prompt:\nInspect concurrency.' 1)"
+check test "$entry" = custom/r3-custom-1
 printf '%s checks passed; %s failed.\n' "$passed" "$failed"
 test "$failed" -eq 0

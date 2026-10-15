@@ -1060,14 +1060,17 @@ _rounds_meta_custom_focus_body() {
 # Materialize a dispatch entry idempotently. Existing matching content belongs
 # to a prior attempt; IDs already claimed in this dispatch remain collisions.
 _rounds_meta_write_custom_lens() {
-  local custom_lenses_dir="$1" payload="$2" index="$3" reserved_entries="${4:-}"
+  local custom_lenses_dir="$1" payload="$2" reserved_entries="${4:-}"
   local category base_slug slug lens_dir lens_file focus_body lens_content saved_content tmp_file
   local role focus anchor exclude dispatch_attributes=""
   local round_prefix="" collision_suffix=2
+  local fallback=0 candidate_file candidate_slug candidate_index=0
+  local -a fallback_slugs=()
 
   category="$(_rounds_meta_custom_category_from_payload "$payload")" || return 1
   base_slug="$(_rounds_meta_slug "$category")"
-  [[ -n "$base_slug" ]] || base_slug="custom-$index"
+  # The third argument is a legacy dispatch index, never investigation identity.
+  if [[ -z "$base_slug" ]]; then base_slug="custom"; fallback=1; fi
   if [[ -n "${CURRENT_ROUND_INDEX:-}" && "$CURRENT_ROUND_INDEX" =~ ^[0-9]+$ ]]; then
     round_prefix="r${CURRENT_ROUND_INDEX}-"
   fi
@@ -1080,7 +1083,30 @@ _rounds_meta_write_custom_lens() {
     dispatch_attributes="$(jq -cn --args '$ARGS.positional' -- "$role" "$focus" "$anchor" "$exclude")" || return 1
   fi
 
+  if (( fallback )); then
+    # Search the entire legacy custom-N pool, including old collision suffixes,
+    # before allocating. A gap must not hide matching work at a higher index.
+    for candidate_file in "$lens_dir/${round_prefix}custom-"*.md; do
+      candidate_slug="${candidate_file##*/}"
+      candidate_slug="${candidate_slug%.md}"
+      if [[ "$candidate_slug" =~ ^${round_prefix}custom-[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+        fallback_slugs+=("$candidate_slug")
+      fi
+    done
+    slug="${round_prefix}custom-1"
+    while [[ -e "$lens_dir/$slug.md" || -L "$lens_dir/$slug.md" ]]; do
+      slug="${round_prefix}custom-${collision_suffix}"
+      collision_suffix=$((collision_suffix + 1))
+    done
+    fallback_slugs+=("$slug")
+  fi
+
   while :; do
+    if (( fallback )); then
+      (( candidate_index < ${#fallback_slugs[@]} )) || return 1
+      slug="${fallback_slugs[$candidate_index]}"
+      candidate_index=$((candidate_index + 1))
+    fi
     lens_file="$lens_dir/$slug.md"
     lens_content="$(
       printf -- '---\n'
@@ -1104,6 +1130,7 @@ _rounds_meta_write_custom_lens() {
         return 0
       fi
     fi
+    if (( fallback )); then continue; fi
     slug="${round_prefix}${base_slug}-${collision_suffix}"
     collision_suffix=$((collision_suffix + 1))
   done

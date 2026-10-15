@@ -18,7 +18,6 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
-payload=$'CUSTOM: Retry\nDraft prompt:\nInspect retries.'
 materialize() {
   timeout 2 bash -c '
     set -euo pipefail
@@ -32,8 +31,14 @@ check() {
   if "$@"; then passed=$((passed + 1));
   else failed=$((failed + 1)); printf 'FAIL: %s\n' "$*"; fi
 }
+for category in Retry 再試行; do
+  payload="$(printf 'CUSTOM: %s\nDraft prompt:\nInspect retries.' "$category")"
+  case "$category" in
+    Retry) expected=custom/r2-retry-2 ;;
+    *) expected=custom/r2-custom-2 ;;
+  esac
 for kind in symlink dangling directory fifo; do
-  dest="$FIXTURE/$kind"
+  dest="$FIXTURE/$category-$kind"
   mkdir -p "$dest/custom"
   first="$(materialize "$dest")"
   saved="$dest/$first.md"
@@ -47,7 +52,7 @@ for kind in symlink dangling directory fifo; do
   rc=0
   entry="$(materialize "$dest")" || rc=$?
   check test "$rc" -eq 0
-  check test "$entry" = custom/r2-retry-2
+  check test "$entry" = "$expected"
   # Changing a symlink target must not change the selected canonical prompt.
   printf 'Changed target content.\n' > "$dest/target.md"
   check test -f "$dest/$entry.md"
@@ -57,6 +62,7 @@ for kind in symlink dangling directory fifo; do
   fi
   again="$(materialize "$dest")" || again=failed
   check test "$again" = "$entry"
+done
 done
 printf '%s checks passed; %s failed.\n' "$passed" "$failed"
 test "$failed" -eq 0
