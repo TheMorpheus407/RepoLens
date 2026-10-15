@@ -18,6 +18,11 @@
 # Uses a file-based semaphore approach for controlling max concurrent processes.
 # Background child PIDs are tracked for cleanup on SIGINT/SIGTERM.
 
+if ! declare -F sha256_text >/dev/null 2>&1; then
+  # shellcheck source=lib/core.sh
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/core.sh"
+fi
+
 # shellcheck source=lib/process_scope.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/process_scope.sh"
 
@@ -302,7 +307,8 @@ _sem_token_path() {
   # Leave room for the token extension and mktemp suffix without changing
   # the canonical completion ID or ordinary token filenames.
   if (( ${#token_id} > 200 )); then
-    token_id="$(python3 -c 'import hashlib, sys; print("long-" + hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$lens_id")" || return 1
+    token_id="$(sha256_text "$lens_id")" || return 1
+    token_id="long-$token_id"
   fi
   printf '%s/%s.token\n' "$_REPOLENS_SEM_DIR" "$token_id"
 }

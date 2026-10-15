@@ -30,6 +30,27 @@ warn() {
   echo "WARN: $*" >&2
 }
 
+# sha256_text <value>
+#   Hash exact text without a trailing newline. Match the specification-artifact
+#   tool cascade; unavailable or failed tools must never yield a usable identity.
+sha256_text() {
+  local output
+  if command -v sha256sum >/dev/null 2>&1; then
+    output="$(printf '%s' "$1" | sha256sum)" || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    output="$(printf '%s' "$1" | shasum -a 256)" || return 1
+  elif command -v openssl >/dev/null 2>&1; then
+    output="$(printf '%s' "$1" | openssl dgst -sha256 -r)" || return 1
+  else
+    printf 'SHA-256 requires sha256sum, shasum, or openssl\n' >&2
+    return 1
+  fi
+  output="${output%%[[:space:]]*}"
+  output="${output,,}"
+  [[ "$output" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$output"
+}
+
 # severity_normalize <value>
 #   Canonicalizes structured severity values. Display-only title prefixes may
 #   remain uppercase, but data fields use critical|high|medium|low.

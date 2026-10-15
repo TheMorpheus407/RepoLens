@@ -3525,7 +3525,8 @@ lens_heartbeat_key() {
   # Reserve space for heartbeat/iteration extensions and atomic-write suffixes.
   # The JSON still reports the original canonical domain and lens ID.
   if (( ${#key} > 200 )); then
-    key="$(python3 -c 'import hashlib, sys; print("long-" + hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$key")" || return 1
+    key="$(sha256_text "$key")" || return 1
+    key="long-$key"
   fi
   printf '%s\n' "$key"
 }
@@ -3540,6 +3541,20 @@ lens_heartbeat_iteration_path() {
   local domain="$1" lens_id="$2" key
   key="$(lens_heartbeat_key "$domain" "$lens_id")" || return 1
   printf '%s/.%s.iteration\n' "$HEARTBEAT_DIR" "$key"
+}
+
+# Retire the previous unbounded paths before resuming a long lens, including
+# completed lenses and runs with heartbeats disabled. Ordinary keys stay intact.
+retire_legacy_lens_heartbeat() {
+  local domain="$1" lens_id="$2" legacy_key file
+  legacy_key="$(sanitize_heartbeat_component "$domain")__$(sanitize_heartbeat_component "$lens_id")"
+  (( ${#legacy_key} > 200 )) || return 0
+  for file in "$HEARTBEAT_DIR/$legacy_key.json" "$HEARTBEAT_DIR/$legacy_key.json.tmp."* \
+    "$HEARTBEAT_DIR/.$legacy_key.iteration" "$HEARTBEAT_DIR/.$legacy_key.iteration.tmp."*; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    rm -f -- "$file" || return 1
+  done
+  return 0
 }
 
 read_lens_heartbeat_iteration() {
@@ -4553,6 +4568,8 @@ run_lens() {
       lens_file="$base_file"
     fi
   fi
+
+  retire_legacy_lens_heartbeat "$domain" "$lens_id" || return 1
 
   # Check resume
   if is_lens_completed "$lens_entry"; then

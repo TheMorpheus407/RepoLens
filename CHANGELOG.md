@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Retire legacy heartbeat files when resuming long lens IDs, and hash long custom-lens and bookkeeping filenames with standard SHA-256 tools so sequential runs do not require Python.
+
 - Keep long custom-lens collision filenames within the destination filesystem limit while preserving existing valid IDs on resume; use bounded internal keys for their semaphore and heartbeat files.
 
 - Preserve custom investigation IDs when reordered categories have no ASCII slug, reusing matching legacy fallback IDs across numbering gaps.
