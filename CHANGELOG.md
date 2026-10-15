@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Stop prompt composition on failed spec, explicit file-backed context, or remote-execution partial reads; discard partial content and leave failed dispatches resumable (repolens-r5-p1-4).
+- Stop prompt composition on failed spec, explicit file-backed context, or remote-execution partial reads, including a required greenfield spec that disappears during composition; discard partial content and leave failed dispatches resumable (repolens-r5-p1-4).
 
 - Preserve fallback finding metadata, types and IDs when local report directories are supplied with trailing slashes or through a symlinked root, including nested dispatch findings.
 

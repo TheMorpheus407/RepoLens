@@ -55,6 +55,9 @@ _template_is_remote_server_deploy() {
   [[ "$mode" == "deploy" && "$target_kind" == "server" && -n "$remote_target" ]]
 }
 
+# _template_remote_execution_section <remote_label>
+#   Prints the optional remote template. Missing templates succeed with empty
+#   output; failed reads return nonzero without emitting partial content.
 _template_remote_execution_section() {
   local remote_label="$1" root partial section
   root="$(_template_repo_root)"
@@ -138,6 +141,9 @@ For remote server targets, every recommended command below is pre-wrapped for SS
 EOF
 }
 
+# _template_resolve_file_backed_value <key> <value>
+#   Resolves supported @file values, failing on missing files or read errors.
+#   Other values pass through. Callers must discard stdout on failure.
 _template_resolve_file_backed_value() {
   local key="$1" value="$2" path
 
@@ -199,6 +205,7 @@ _template_task_scope() {
 #   Large round context values may be passed as KEY=@/path/to/file for
 #   PRIOR_ROUND_DIGEST, HYPOTHESES_TO_VERIFY, and VOICE_PROFILE so markdown pipes and
 #   multi-line lists are never split by the pipe-delimited transport.
+#   Input read failures return nonzero without emitting a partial prompt.
 compose_prompt() {
   local base_file="$1" lens_file="$2" vars_string="$3"
   local spec_file="${4:-}" mode="${5:-audit}" max_issues="${6:-}" source_file="${7:-}"
@@ -860,7 +867,8 @@ Read the source file using your file reading capabilities (cat, head, or equival
     printf 'Unable to read required specification: %s\n' "$spec_file" >&2
     return 1
   fi
-  if [[ -n "$spec_file" && -f "$spec_file" ]]; then
+  # A required spec must still be read if it vanishes after the check above.
+  if [[ -n "$spec_file" && ( "$mode" == greenfield || -f "$spec_file" ) ]]; then
     local spec_content spec_guidance=""
     if ! spec_content="$(read_spec_file "$spec_file")"; then
       printf 'Unable to read specification: %s\n' "$spec_file" >&2
