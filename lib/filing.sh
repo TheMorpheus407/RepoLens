@@ -336,6 +336,7 @@ filing_verify_cluster_citations() {
 _filing_real_agent() {
   local run_id="$1" cluster_id="$2" log_base entry reason repo title body_file
   local open_issues duplicate created_url number readback label reserve_rc
+  _filing_cancelled && return 1
   log_base="$(_filing_log_base "$run_id")"
   local filed_dir="$log_base/final/filed"
   [[ "$cluster_id" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]] || return 1
@@ -377,12 +378,23 @@ _filing_real_agent() {
     return 1
   fi
   if [[ -e "$filed_dir/$cluster_id.url" ]]; then
+    local receipt_valid=1
     created_url="$(cat "$filed_dir/$cluster_id.url")"
     if [[ -L "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.request.json" ]] \
         || ! jq -e --argjson entry "$entry" '. == $entry' "$filed_dir/$cluster_id.request.json" >/dev/null 2>&1 \
         || ! number="$(forge_issue_number_from_url "$repo" "$created_url")" \
+        || _filing_cancelled \
         || ! readback="$(forge_issue_read_json "$repo" "$number")" \
         || ! _filing_readback_matches "$entry" "$created_url" "$number" "$readback"; then
+      receipt_valid=0
+    fi
+    # Cancellation is not evidence that a previously verified receipt is bad.
+    # Release only this invocation's governor so a normal resume can retry.
+    if _filing_cancelled; then
+      rmdir "$filed_dir/$cluster_id.governor"
+      return 1
+    fi
+    if (( receipt_valid == 0 )); then
       _filing_fail "$filed_dir" "$cluster_id" 'unattested or stale success marker; reconcile remote state before retry'
       return 1
     fi
@@ -462,6 +474,12 @@ _filing_readback_matches() {
 
 _filing_fail() {
   local filed_dir="$1" cluster_id="$2" reason="$3"
+  # Interrupted preflight helpers cannot invalidate a saved success receipt.
+  # This governor belongs to read-only reconciliation, so release it for resume.
+  if _filing_cancelled && [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
+    rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+    return 1
+  fi
   if [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
     mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url"
     : > "$filed_dir/$cluster_id.attempted"
@@ -1008,12 +1026,19 @@ dispatch_filing_batch() {
   local skipped_existing=0
   local age
 
+  # The sequential CLI signal handlers return during this read-only phase so
+  # cancellation can release the current governor and undispatched locks.
+  # Bash dynamic scope restores the flag on every return from this function.
+  local _REPOLENS_FILING_RECONCILING=1
   for cid in "${cluster_ids[@]}"; do
+    _filing_cancelled && break
     if [[ -e "$filed_dir/$cid.url" && "${_FILING_AGENT_CALLBACK:-_filing_real_agent}" == _filing_real_agent ]]; then
       _filing_real_agent "$run_id" "$cid" >/dev/null 2>&1 || {
+        _filing_cancelled && break
         _filing_fail "$filed_dir" "$cid" 'success marker could not be reconciled'
       }
     fi
+    _filing_cancelled && break
     if [[ -e "$filed_dir/$cid.url" ]]; then
       pre_existing_url["$cid"]=1
       skipped_existing=$((skipped_existing + 1))
@@ -1041,6 +1066,13 @@ dispatch_filing_batch() {
 
   local dispatch_rc=0 wait_rc=0 recorded_failure=0 dispatched_count=0 pending
   local callback="${_FILING_AGENT_CALLBACK:-_filing_real_agent}"
+  if _filing_cancelled; then
+    for pending in "${to_dispatch[@]}"; do
+      rm -f "$filed_dir/$pending.lock"
+    done
+    return 1
+  fi
+  _REPOLENS_FILING_RECONCILING=0
   if (( ${#to_dispatch[@]} > 0 )); then
     if ${PARALLEL:-false}; then
       if ! declare -F init_parallel >/dev/null 2>&1 \

@@ -2045,6 +2045,7 @@ apply_rate_limit_abort_final_state() {
 _handle_hangup() {
   REPOLENS_FINAL_STATE="interrupted"
   REPOLENS_INTERRUPT_EXIT_CODE=129
+  [[ "${_REPOLENS_FILING_RECONCILING:-0}" != 1 ]] || return 0
   print_resume_hint
   exit 129
 }
@@ -2052,6 +2053,7 @@ _handle_hangup() {
 _handle_interrupt() {
   REPOLENS_FINAL_STATE="interrupted"
   REPOLENS_INTERRUPT_EXIT_CODE=130
+  [[ "${_REPOLENS_FILING_RECONCILING:-0}" != 1 ]] || return 0
   print_resume_hint
   exit 130
 }
@@ -2059,6 +2061,7 @@ _handle_interrupt() {
 _handle_termination() {
   REPOLENS_FINAL_STATE="interrupted"
   REPOLENS_INTERRUPT_EXIT_CODE=143
+  [[ "${_REPOLENS_FILING_RECONCILING:-0}" != 1 ]] || return 0
   print_resume_hint
   exit 143
 }
