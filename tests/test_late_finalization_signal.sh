@@ -61,7 +61,11 @@ source "$REPO/lib/clean.sh"
 source "$REPO/lib/result_pointer.sh"
 # shellcheck source=/dev/null
 source "$REPO/lib/cursor_ide.sh"
-sed -n '/^# Resolve the process exit code/,$p' "$REPO/repolens.sh" > "$FIXTURE/tail.sh"
+{
+  # Use the production handler setup now installed before early artifact writes.
+  sed -n '/^_final_signal_generation=0/,/^_install_finalization_signal_handlers$/p' "$REPO/repolens.sh"
+  sed -n '/^# Resolve the process exit code/,$p' "$REPO/repolens.sh"
+} > "$FIXTURE/tail.sh"
 test -s "$FIXTURE/tail.sh"
 parallel_preflight() { _REPOLENS_SCOPE_READY=1; _REPOLENS_SCOPE_FAILED=0; }
 log_info() { :; }

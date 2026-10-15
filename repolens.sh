@@ -5328,6 +5328,18 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "${REPOLENS_FINAL_STATE:-finished}" != interrupt
 fi
 
 # --- Finalize ---
+# Install returning handlers before any final artifact or summary write.
+# At this point no lenses remain. Signals must reach attempt reconciliation
+# even when they arrive during early finalization persistence.
+_final_signal_generation=0
+_final_interrupt_exit_code=""
+_install_finalization_signal_handlers() {
+  trap '_final_interrupt_exit_code=129; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' HUP
+  trap '_final_interrupt_exit_code=130; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' INT
+  trap '_final_interrupt_exit_code=143; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' TERM
+}
+_install_finalization_signal_handlers
+
 # Reconcile on failed dispatch too: an earlier cluster may have been created
 # before a later failure. Replacing the snapshot makes resumed filing idempotent.
 if ! $LOCAL_MODE && { [[ "$MODE" == branch-review ]] || [[ -f "$LOG_BASE/final/manifest.json" ]]; }; then
@@ -5485,16 +5497,6 @@ case "$RUN_HEALTH" in
 esac
 
 # Resolve the process exit code after final presentation and durable writes.
-# At this point no lenses remain. HUP must return like INT/TERM so a signal
-# during presentation cannot bypass the attempt ledger and result publication.
-_final_signal_generation=0
-_final_interrupt_exit_code=""
-_install_finalization_signal_handlers() {
-  trap '_final_interrupt_exit_code=129; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' HUP
-  trap '_final_interrupt_exit_code=130; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' INT
-  trap '_final_interrupt_exit_code=143; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' TERM
-}
-_install_finalization_signal_handlers
 
 log_info "=============================="
 log_info "RepoLens run $RUN_ID complete"
