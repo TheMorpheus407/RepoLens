@@ -299,6 +299,11 @@ _sem_token_path() {
   local lens_id="$1" token_id
   token_id="${lens_id//[![:alnum:]_.-]/_}"
   [[ -n "$token_id" ]] || token_id="lens"
+  # Leave room for the token extension and mktemp suffix without changing
+  # the canonical completion ID or ordinary token filenames.
+  if (( ${#token_id} > 200 )); then
+    token_id="$(python3 -c 'import hashlib, sys; print("long-" + hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$lens_id")" || return 1
+  fi
   printf '%s/%s.token\n' "$_REPOLENS_SEM_DIR" "$token_id"
 }
 
@@ -307,7 +312,7 @@ _sem_token_path() {
 sem_token_create() {
   local lens_id="$1" token tmp
 
-  token="$(_sem_token_path "$lens_id")"
+  token="$(_sem_token_path "$lens_id")" || return 1
   tmp="$(mktemp "$_REPOLENS_SEM_DIR/.${token##*/}.XXXXXX")" || return 1
   {
     printf 'owner=%s\n' "${_REPOLENS_SEM_OWNER:-manual:$$}"
@@ -326,7 +331,9 @@ sem_token_create() {
 # sem_token_remove <lens_id>
 #   Remove the token file for this lens.
 sem_token_remove() {
-  rm -f "$(_sem_token_path "$1")"
+  local token
+  token="$(_sem_token_path "$1")" || return 1
+  rm -f "$token"
 }
 
 _format_elapsed() {

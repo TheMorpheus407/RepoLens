@@ -3518,20 +3518,28 @@ sanitize_heartbeat_component() {
 
 lens_heartbeat_key() {
   local domain="$1" lens_id="$2"
-  local safe_domain safe_lens_id
+  local safe_domain safe_lens_id key
   safe_domain="$(sanitize_heartbeat_component "$domain")"
   safe_lens_id="$(sanitize_heartbeat_component "$lens_id")"
-  printf '%s__%s\n' "$safe_domain" "$safe_lens_id"
+  key="${safe_domain}__${safe_lens_id}"
+  # Reserve space for heartbeat/iteration extensions and atomic-write suffixes.
+  # The JSON still reports the original canonical domain and lens ID.
+  if (( ${#key} > 200 )); then
+    key="$(python3 -c 'import hashlib, sys; print("long-" + hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$key")" || return 1
+  fi
+  printf '%s\n' "$key"
 }
 
 lens_heartbeat_path() {
-  local domain="$1" lens_id="$2"
-  printf '%s/%s.json\n' "$HEARTBEAT_DIR" "$(lens_heartbeat_key "$domain" "$lens_id")"
+  local domain="$1" lens_id="$2" key
+  key="$(lens_heartbeat_key "$domain" "$lens_id")" || return 1
+  printf '%s/%s.json\n' "$HEARTBEAT_DIR" "$key"
 }
 
 lens_heartbeat_iteration_path() {
-  local domain="$1" lens_id="$2"
-  printf '%s/.%s.iteration\n' "$HEARTBEAT_DIR" "$(lens_heartbeat_key "$domain" "$lens_id")"
+  local domain="$1" lens_id="$2" key
+  key="$(lens_heartbeat_key "$domain" "$lens_id")" || return 1
+  printf '%s/.%s.iteration\n' "$HEARTBEAT_DIR" "$key"
 }
 
 read_lens_heartbeat_iteration() {

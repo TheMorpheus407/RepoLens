@@ -1065,6 +1065,7 @@ _rounds_meta_write_custom_lens() {
   local role focus anchor exclude dispatch_attributes=""
   local round_prefix="" collision_suffix=2
   local fallback=0 candidate_file candidate_slug candidate_index=0
+  local name_max
   local -a fallback_slugs=()
 
   category="$(_rounds_meta_custom_category_from_payload "$payload")" || return 1
@@ -1077,6 +1078,8 @@ _rounds_meta_write_custom_lens() {
   slug="${round_prefix}${base_slug}"
   lens_dir="$custom_lenses_dir/custom"
   mkdir -p "$lens_dir" || return 1
+  name_max="$(getconf NAME_MAX "$lens_dir")" || return 1
+  [[ "$name_max" =~ ^[0-9]+$ ]] || return 1
   focus_body="$(_rounds_meta_custom_focus_body "$payload")" || return 1
   _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
   if [[ -n "$role$focus$anchor$exclude" ]]; then
@@ -1106,6 +1109,18 @@ _rounds_meta_write_custom_lens() {
       (( candidate_index < ${#fallback_slugs[@]} )) || return 1
       slug="${fallback_slugs[$candidate_index]}"
       candidate_index=$((candidate_index + 1))
+    fi
+    # Keep existing valid IDs, shortening only candidates that exceed the
+    # destination's filename limit. Hash the full candidate, including its
+    # collision suffix, so truncated categories and retries stay distinct.
+    if (( ${#slug} + 3 > name_max )); then
+      slug="$(python3 -c '
+import hashlib, sys
+slug = sys.argv[1]
+limit = int(sys.argv[2]) - len(".md")
+digest = hashlib.sha256(slug.encode("ascii")).hexdigest()[:32]
+print(slug[:limit - len(digest) - 1] + "-" + digest)
+' "$slug" "$name_max")" || return 1
     fi
     lens_file="$lens_dir/$slug.md"
     lens_content="$(
