@@ -474,6 +474,12 @@ _filing_readback_matches() {
 
 _filing_fail() {
   local filed_dir="$1" cluster_id="$2" reason="$3"
+  # Interrupted preflight helpers cannot invalidate a saved success receipt.
+  # This governor belongs to read-only reconciliation, so release it for resume.
+  if _filing_cancelled && [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
+    rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+    return 1
+  fi
   if [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
     mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url"
     : > "$filed_dir/$cluster_id.attempted"
@@ -1020,6 +1026,10 @@ dispatch_filing_batch() {
   local skipped_existing=0
   local age
 
+  # The sequential CLI signal handlers return during this read-only phase so
+  # cancellation can release the current governor and undispatched locks.
+  # Bash dynamic scope restores the flag on every return from this function.
+  local _REPOLENS_FILING_RECONCILING=1
   for cid in "${cluster_ids[@]}"; do
     _filing_cancelled && break
     if [[ -e "$filed_dir/$cid.url" && "${_FILING_AGENT_CALLBACK:-_filing_real_agent}" == _filing_real_agent ]]; then
@@ -1062,6 +1072,7 @@ dispatch_filing_batch() {
     done
     return 1
   fi
+  _REPOLENS_FILING_RECONCILING=0
   if (( ${#to_dispatch[@]} > 0 )); then
     if ${PARALLEL:-false}; then
       if ! declare -F init_parallel >/dev/null 2>&1 \

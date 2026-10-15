@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Stop receipt reconciliation after parent cancellation without quarantining saved success receipts or reading later issues (repolens-r4-p2-2).
+- Stop receipt reconciliation after parent cancellation, including sequential runs and interrupted preflight validation, without quarantining saved success receipts or reading later issues (repolens-r4-p2-2).
 
 - Keep semaphore reservations independent for short dispatch tuples whose punctuation sanitizes to the same filename (repolens-r4-p2-1).
 
