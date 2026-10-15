@@ -264,7 +264,8 @@ _ledger_resolve_finding_type() {
 #               owned by the dedupe agent (#316/#322/#335). cluster_id is a
 #               per-run, non-stable handle and must not be confused with id.
 #   - synthesized status="duplicate" remains duplicate for report exclusion.
-#   - markdown_path is the first existing source finding file, else null.
+#   - markdown_path is the absolute path of the first existing source finding
+#     file, else null (so links work from reports under final/).
 #     Source files are only checked for existence, never read.
 #   - also_reported_by passes through when it is a non-empty array.
 #   - confidence is null, primary_location is "", validation is {}.
@@ -326,6 +327,10 @@ build_findings_jsonl_from_manifest() {
     while IFS= read -r -d '' source_path; do
       if [[ -f "$source_path" ]]; then
         md="$source_path"
+        if [[ "$md" != /* ]]; then
+          md="$(cd -- "$(dirname -- "$source_path")" && printf '%s/%s' "$PWD" "${source_path##*/}")" \
+            || { rm -f "$tmp"; return 1; }
+        fi
         break
       fi
     done < <(jq -j '.source_finding_paths[]? | ., "\u0000"' <<<"$entry")

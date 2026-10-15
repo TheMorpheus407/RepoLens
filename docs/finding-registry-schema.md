@@ -21,7 +21,8 @@ It is built from the existing finding outputs; it does not replace them.
   manifest alone when it exists. Raw Markdown cannot reintroduce findings
   excluded by verification or synthesis. Manifest ingestion preserves duplicate
   status and `also_reported_by` provenance, and links `markdown_path` to the
-  first existing file in `source_finding_paths` without reading source contents.
+  absolute path of the first existing file in `source_finding_paths` without
+  reading source contents. The original source paths remain unchanged.
 - **Other `--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
   (`lib/template.sh`, LOCAL MODE OVERRIDE block, ~line 521). The builder reads
   that frontmatter and emits one normalized record per file. It preserves local

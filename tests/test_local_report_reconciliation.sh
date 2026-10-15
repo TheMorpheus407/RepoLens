@@ -168,6 +168,12 @@ case_manifest_metadata() (
     {cluster_id:"contributor",title:"missing mtls client certificate cn validation in startup",severity:"high",domain:"networking",lens:"tls-config",primary_location:"src/mtls.go:90",source_finding_paths:[$contributor]}
   ] | map(. + {root_cause_category:"validation",cross_link_actions:[],granularity:"independent",verification_status:"verified",body:"Evidence: src/mtls.go:88",proposed_labels:[],dedup_against_existing:[]})' \
     > "$LOG_BASE/model-response.json"
+  if [[ "$field" == links-relative ]]; then
+    jq '.[0].source_finding_paths = ["canonical.md"] | .[1].source_finding_paths = ["contributor.md"]' \
+      "$LOG_BASE/model-response.json" > "$LOG_BASE/relative-response.json"
+    mv "$LOG_BASE/relative-response.json" "$LOG_BASE/model-response.json"
+    cd "$LOG_BASE"
+  fi
   compose_prompt() { printf 'mock model prompt'; }
   run_agent() { cat "$LOG_BASE/model-response.json"; }
   run_synthesizer "$RUN_ID"
@@ -180,10 +186,13 @@ case_manifest_metadata() (
       jq -se --arg path "$contributor" '.[0].also_reported_by == [{domain:"networking",lens:"tls-config",markdown_path:$path}]' "$registry" >/dev/null
       grep -q 'networking/tls-config' "$LOG_BASE/final/DUPLICATES.md"
       ;;
-    links)
+    links|links-relative)
       jq -se --arg path "$canonical" '.[0].markdown_path == $path' "$registry" >/dev/null
       grep -Fq "[$canonical]($canonical)" "$LOG_BASE/final/TODO.md"
       grep -Fq "[$canonical]($canonical)" "$LOG_BASE/final/HUMAN_REVIEW.md"
+      if [[ "$field" == links-relative ]]; then
+        jq -se '.[0].source_finding_paths == ["canonical.md"]' "$registry" >/dev/null
+      fi
       ;;
     duplicates)
       jq -se 'length == 2 and .[1].status == "duplicate"' "$registry" >/dev/null
@@ -231,13 +240,14 @@ case "${1:-all}" in
   empty-preservation) case_empty_preservation ;;
   manifest-contributors) case_manifest_metadata contributors ;;
   manifest-links) case_manifest_metadata links ;;
+  manifest-links-relative) case_manifest_metadata links-relative ;;
   manifest-duplicates) case_manifest_metadata duplicates ;;
   all)
     case_local_verification
     case_empty_resume
     case_custom_output
     case_empty_preservation
-    for field in contributors links duplicates; do case_manifest_metadata "$field"; done
+    for field in contributors links links-relative duplicates; do case_manifest_metadata "$field"; done
     ;;
   *) exit 2 ;;
 esac
