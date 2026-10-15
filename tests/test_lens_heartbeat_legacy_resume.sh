@@ -22,7 +22,9 @@ FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 # shellcheck source=/dev/null
 source "$REPO/lib/core.sh"
-eval "$(awk '/^(sanitize_heartbeat_component|lens_heartbeat_key|lens_heartbeat_path|lens_heartbeat_iteration_path|retire_legacy_lens_heartbeat|run_lens)\(\)/,/^}/' "$REPO/repolens.sh")"
+eval "$(awk '/^(sanitize_heartbeat_component|lens_heartbeat_key|lens_heartbeat_path|lens_heartbeat_iteration_path|retire_legacy_lens_heartbeat|run_lens)\(\)/,/^}/' "$REPO/repolens.sh" | sed 's/^run_lens()/production_run_lens()/')"
+# Keep the real function separate from the later rounds callback mock.
+declare -F production_run_lens >/dev/null || exit 1
 log_info() { :; }
 is_lens_completed() { return 0; }
 LOCAL_MODE=true MODE=audit
@@ -40,7 +42,7 @@ for interval in 15 0; do
   printf '1\n' > "$legacy_iteration"
   printf 'partial\n' > "$legacy.tmp.123"
   printf 'partial\n' > "$legacy_iteration.tmp.123"
-  run_lens "custom/$lens_id"
+  production_run_lens "custom/$lens_id"
   test ! -e "$legacy" || {
     printf 'FAIL: run_lens leaves a legacy heartbeat for a completed lens.\n' >&2
     exit 1
@@ -53,11 +55,11 @@ done
 # Ordinary paths remain compatible; cleanup must not remove their current file.
 ordinary="$(lens_heartbeat_path custom retry)"
 printf 'current\n' > "$ordinary"
-run_lens custom/retry
+production_run_lens custom/retry
 test "$(cat "$ordinary")" = current
 # Longer IDs have no valid legacy basename; cleanup must still allow resume.
 lens_id="r2-$(printf '%0300d' 0 | tr '0' a)"
-run_lens "custom/$lens_id"
+production_run_lens "custom/$lens_id"
 test "$(cat "$unrelated")" = unrelated
 printf 'PASS: resumed completed lenses retire legacy artifacts, including disabled heartbeats.\n'
 
