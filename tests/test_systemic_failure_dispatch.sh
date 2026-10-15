@@ -50,7 +50,7 @@ for marker in writable blocked; do
   RUN_ID="${LOG_BASE#"$SCRIPT_DIR/logs/"}"
   export AGENT_CALLS="$LOG_BASE/agent-calls" FAIL_AGENT=true
   if [[ "$marker" == blocked ]]; then mkdir "$LOG_BASE/.systemic-failure-abort"; fi
-  args=(--mode audit --resume "$RUN_ID" --rounds 1 --depth 1 --focus injection --local --output "$LOG_BASE/output")
+  args=(--mode audit --resume "$RUN_ID" --rounds 1 --depth 1 --domain i18n --local --output "$LOG_BASE/output")
   env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
     REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \
     REPOLENS_LENS_HEARTBEAT_INTERVAL=0 REPOLENS_STATUS_INTERVAL=1 \
@@ -59,10 +59,11 @@ for marker in writable blocked; do
   check test "$?" -ne 0
   check test "$(wc -l < "$AGENT_CALLS")" -eq 1
   check json_matches 'any(.lenses[]; .status == "auth-expired")' "$LOG_BASE/summary.json"
+  check json_matches '([.lenses[] | select(.status == "skipped")] | length) == 1' "$LOG_BASE/summary.json"
   check json_matches '.state == "failed"' "$LOG_BASE/status.json"
   check test ! -f "$LOG_BASE/rounds/round-1/.completed"
   check test ! -s "$LOG_BASE/.completed"
-  # The identical pending lens must run successfully once authentication recovers.
+  # Both the failed and skipped lenses must run once authentication recovers.
   if [[ "$marker" == blocked ]]; then rmdir "$LOG_BASE/.systemic-failure-abort"; fi
   export FAIL_AGENT=false
   env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
@@ -72,7 +73,7 @@ for marker in writable blocked; do
       "${args[@]}" > "$LOG_BASE/resume.out" 2>&1
   check test "$?" -eq 0
   check test "$(wc -l < "$AGENT_CALLS")" -gt 1
-  check test -s "$LOG_BASE/.completed"
+  check test "$(sort -u "$LOG_BASE/.completed" | wc -l)" -eq 2
 done
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))
