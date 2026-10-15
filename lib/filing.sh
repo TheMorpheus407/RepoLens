@@ -538,8 +538,8 @@ _filing_action_reference_candidates() {
 #   Lookup failures are cached for the pass and fail closed. Dedup precedes
 #   budget reservation. Verified readback writes .done; failure writes .failed.
 #
-#   Failures NEVER fail the overall run — cross-link actions are best-effort.
-#   They are logged to stderr and counted in the run's diagnostics only.
+#   Ordinary action failures are best-effort and logged to stderr. Parent
+#   cancellation stops admission and makes the enclosing dispatch fail.
 #
 #   Required globals: FORGE_REPO (or REPO_OWNER+REPO_NAME).
 #   Optional globals: REPOLENS_REOPEN_LABEL (defaults "repolens:reopen-candidate").
@@ -803,7 +803,11 @@ _filing_cross_link_enact() {
           if (( reconcile_done )); then
             response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
           else
-            _filing_cancelled && return 1
+            if _filing_cancelled; then
+              # This reservation belongs to an action that never reached POST.
+              rm -f "$cross_dir/$key.attempted" "$body_file"
+              return 1
+            fi
             response="$(forge_issue_comment_once "$forge_repo" "$issue_number" "$body_file" 2>>"$cross_dir/$key.log")" || rc=$?
             printf '%s\n' "$response" > "$cross_dir/$key.created-response"
           fi
@@ -834,7 +838,10 @@ _filing_cross_link_enact() {
           if (( reconcile_done )); then
             response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
           else
-            _filing_cancelled && return 1
+            if _filing_cancelled; then
+              rm -f "$cross_dir/$key.attempted" "$body_file" "$banner_file"
+              return 1
+            fi
             response="$(forge_issue_create_once "$forge_repo" "$title" "$banner_file" 2>>"$cross_dir/$key.log")" || rc=$?
             printf '%s\n' "$response" > "$cross_dir/$key.created-response"
           fi
@@ -885,8 +892,9 @@ _filing_cross_link_enact() {
 #     0  on completion (whether or not individual callbacks succeeded;
 #        callback failures are reflected in the absence of .url/.failed
 #        markers and counted in the aggregate output).
-#     1  on infrastructure failure: invalid manifest, failed process-scope
-#        initialization/launch/cleanup, or a missing callback outcome.
+#     1  on parent cancellation or infrastructure failure: invalid manifest,
+#        failed process-scope initialization/launch/cleanup, or a missing
+#        callback outcome.
 #
 #   Aggregate output on stdout:
 #     Filed: X, Verification-failed: Y, Skipped-existing: Z
@@ -961,6 +969,7 @@ dispatch_filing_batch() {
     if ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
       _filing_cross_link_enact "$run_id" || true
     fi
+    _filing_cancelled && return 1
     printf 'Filed: 0, Verification-failed: 0, Skipped-existing: 0\n'
     return 0
   fi
@@ -1093,6 +1102,7 @@ dispatch_filing_batch() {
   if (( dispatch_rc == 0 )) && ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
     _filing_cross_link_enact "$run_id" || true
   fi
+  _filing_cancelled && dispatch_rc=1
 
   printf 'Filed: %d, Verification-failed: %d, Skipped-existing: %d\n' \
     "$filed" "$vfailed" "$skipped_existing"
