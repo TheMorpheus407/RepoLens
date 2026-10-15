@@ -114,8 +114,9 @@ generate_todo_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    mv -f -- "$tmp" "$out_file"
-    return 0
+    if mv -f -- "$tmp" "$out_file"; then
+      return 0
+    fi
   fi
 
   rm -f -- "$tmp"
@@ -223,8 +224,9 @@ generate_summary_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    mv -f -- "$tmp" "$out_file"
-    return 0
+    if mv -f -- "$tmp" "$out_file"; then
+      return 0
+    fi
   fi
 
   rm -f -- "$tmp"
@@ -352,8 +354,9 @@ generate_needs_review_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    mv -f -- "$tmp" "$out_file"
-    return 0
+    if mv -f -- "$tmp" "$out_file"; then
+      return 0
+    fi
   fi
 
   rm -f -- "$tmp"
@@ -480,8 +483,9 @@ generate_duplicates_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    mv -f -- "$tmp" "$out_file"
-    return 0
+    if mv -f -- "$tmp" "$out_file"; then
+      return 0
+    fi
   fi
 
   rm -f -- "$tmp"

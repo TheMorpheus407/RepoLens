@@ -225,7 +225,10 @@ _human_review_log_base() {
   printf '%s/logs/%s' "$(_human_review_repo_root)" "$run_id"
 }
 
-# render_human_review_digest <run_id>
+# render_human_review_digest <run_id> [duplicate_report_ready=true]
+#   Pass false when duplicate-report generation failed or was skipped in the
+#   current invocation, to omit a retained older report's link. Standalone
+#   callers default to linking an existing report. A missing file is never linked.
 #   Renders the human-facing curated digest at logs/<run-id>/final/HUMAN_REVIEW.md
 #   from the bucketed finding registry (final/findings.jsonl). This is the
 #   CONSUMER of human_review_bucketize: it slices each bucket to its visible cap
@@ -271,7 +274,9 @@ render_human_review_digest() {
   mkdir -p -- "$final_dir" 2>/dev/null || return 1
   tmp="$out.tmp.$$"
   local has_duplicate_report=false
-  [[ ! -f "$final_dir/DUPLICATES.md" ]] || has_duplicate_report=true
+  if [[ "${2:-true}" == true && -f "$final_dir/DUPLICATES.md" ]]; then
+    has_duplicate_report=true
+  fi
 
   # Bucketize is a total function (always rc 0, always one valid JSON object),
   # so the pipeline's exit status is determined solely by the jq renderer.

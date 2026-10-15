@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Omit retained duplicate-report links from the human-review digest when current report generation fails. Report failed triage-report replacements accurately and remove their temporary files.
+
 - Generate triage reports before the opted-in human-review digest so fresh runs and resumes include the available duplicate-report link.
 
 - Preserve contributor evidence from colliding canonical registry records so duplicate reports retain every validated group while keeping the winning record's other fields.

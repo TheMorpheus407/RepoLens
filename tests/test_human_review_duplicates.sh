@@ -67,6 +67,15 @@ check test "$summary" = 'Human review: 42 findings, 37 surfaced, 5 held back (cr
 : > "$LOG_BASE/final/DUPLICATES.md"
 render_human_review_digest probe
 check grep -Fq '[DUPLICATES.md](DUPLICATES.md)' "$digest"
+# Finalization explicitly rejects retained reports after a failed rebuild.
+render_human_review_digest probe false
+check lacks '\[DUPLICATES.md\]' "$digest"
+check grep -Fq '[findings.jsonl](findings.jsonl)' "$digest"
+render_human_review_digest probe true
+check grep -Fq '[DUPLICATES.md](DUPLICATES.md)' "$digest"
+rm "$LOG_BASE/final/DUPLICATES.md"
+render_human_review_digest probe true
+check lacks '\[DUPLICATES.md\]' "$digest"
 check test "$(sha256sum "$findings")" = "$before"
 
 # A duplicate-only registry has zero eligible/held-back entries, with provenance.

@@ -5446,6 +5446,7 @@ fi
 # (warn + continue), matching the verifier/synthesizer/human-review precedent; none
 # of these touch REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
 TRIAGE_FINDINGS="$LOG_BASE/final/findings.jsonl"
+_duplicate_report_ready=false
 if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && { ! $LOCAL_MODE || $_local_registry_ready; }; then
   for _triage_spec in \
@@ -5457,6 +5458,7 @@ if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != inte
     _triage_fn="${_triage_spec%%:*}"
     _triage_out="$LOG_BASE/final/${_triage_spec##*:}"
     if "$_triage_fn" "$TRIAGE_FINDINGS" "$_triage_out"; then
+      [[ "$_triage_fn" != generate_duplicates_md ]] || _duplicate_report_ready=true
       log_info "Triage artifact: $_triage_out"
     else
       log_warn "Triage artifact: failed to render $_triage_out ($_triage_fn, rc $?)"
@@ -5468,7 +5470,8 @@ else
 fi
 
 # --- Human review digest (non-fatal) ---
-# Render after triage so a newly generated duplicate report can be linked.
+# Render after triage; link only a duplicate report generated successfully in
+# this invocation, since a failed writer preserves an older report on resume.
 # When --human-review is set and the finding registry exists, render the curated
 # final/HUMAN_REVIEW.md from the bucketed findings. Non-fatal, matching the
 # verifier precedent: a render failure logs a warning and NEVER touches
@@ -5477,7 +5480,7 @@ fi
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
     && "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]] \
     && { ! $LOCAL_MODE || $_local_registry_ready; }; then
-  if render_human_review_digest "$RUN_ID"; then
+  if render_human_review_digest "$RUN_ID" "$_duplicate_report_ready"; then
     log_info "Human review: HUMAN_REVIEW.md written"
   else
     log_warn "Human review: failed to render HUMAN_REVIEW.md"
@@ -5492,7 +5495,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
   fi
 fi
 
-unset _local_registry_ready
+unset _local_registry_ready _duplicate_report_ready
 
 apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"
