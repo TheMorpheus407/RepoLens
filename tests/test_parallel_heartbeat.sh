@@ -115,6 +115,7 @@ fresh_sem
 REPOLENS_HEARTBEAT_INTERVAL=1
 export REPOLENS_HEARTBEAT_INTERVAL
 spawn_lens "slow/a" cb_sleep 3
+assert_matches "spawn_lens records child start times" "^[0-9]+$" "${_REPOLENS_CHILD_STARTED_AT[0]:-}"
 spawn_lens "slow/b" cb_sleep 3
 output_file="$TMPROOT/two-child.out"
 run_wait_all_capture "$output_file"
@@ -201,11 +202,9 @@ assert_eq "Elapsed formatter: hours" "1h01m01s" "$(_format_elapsed 3661)"
 # ---------------------------------------------------------------------------
 # 6. Structural guards and documentation coverage.
 # ---------------------------------------------------------------------------
-spawn_lens_src="$(declare -f spawn_lens)"
 wait_all_src="$(declare -f wait_all)"
 sem_acquire_src="$(declare -f sem_acquire)"
 
-assert_contains "spawn_lens records child start times" "_REPOLENS_CHILD_STARTED_AT" "$spawn_lens_src"
 assert_contains "wait_all reads heartbeat interval env var" "REPOLENS_HEARTBEAT_INTERVAL" "$wait_all_src"
 assert_contains "wait_all emits heartbeat label through helper" "[heartbeat]" "$wait_all_src"
 assert_contains "sem_acquire reads heartbeat interval env var" "REPOLENS_HEARTBEAT_INTERVAL" "$sem_acquire_src"

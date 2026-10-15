@@ -142,6 +142,18 @@ _scope_terminate() {
 # Collect each *scope*, even when the direct callback has already exited.
 # The callback PID is used only to retrieve Bash's child exit status.
 _parallel_poll_once() {
+  local _REPOLENS_LIFECYCLE_BUSY=1 rc=0
+  _parallel_poll_scopes || rc=$?
+  _REPOLENS_LIFECYCLE_BUSY=0
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    _cleanup_children || true
+    return 1
+  fi
+  return "$rc"
+}
+
+# Keep worker metadata stable across returning signal traps during RPCs.
+_parallel_poll_scopes() {
   local i pid state now elapsed started_at lens_id failed=0
   local expired=() completed=()
   local max_wait="${REPOLENS_CHILD_MAX_WAIT:-144000}"
