@@ -71,6 +71,23 @@ for _agent in claude codex opencode agy; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_BIN/$_agent"
   chmod +x "$FAKE_BIN/$_agent"
 done
+# Pin the pricing-age clock to the checked-in pricing date. Otherwise the
+# freshness warning appears after 60 days and breaks all eight baselines.
+# Keep real date parsing and formatted timestamps; freshness behavior has its
+# own boundary tests in test_pricing_freshness.sh.
+BASELINE_REAL_DATE="$(command -v date)"
+BASELINE_NOW_EPOCH="$("$BASELINE_REAL_DATE" -d "$(jq -er '.updated_at' "$SCRIPT_DIR/config/agent-pricing.json")" +%s)" || exit 1
+export BASELINE_REAL_DATE BASELINE_NOW_EPOCH
+cat > "$FAKE_BIN/date" <<'DATE'
+#!/usr/bin/env bash
+set -uo pipefail
+if [[ "$#" -eq 1 && "$1" == +%s ]]; then
+  printf '%s\n' "$BASELINE_NOW_EPOCH"
+else
+  exec "$BASELINE_REAL_DATE" "$@"
+fi
+DATE
+chmod +x "$FAKE_BIN/date"
 export PATH="$FAKE_BIN:$PATH"
 
 UPDATE_BASELINE=false
