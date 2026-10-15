@@ -477,8 +477,14 @@ build_findings_jsonl_from_local() {
   : > "$tmp" || return 1
 
   local file rel lens_rel title severity domain lens id sev type_raw ftype cx status duplicate_of
-  # Follow an explicitly supplied symlink root, preserving its lexical paths
-  # for metadata fallback and links. Symlinks inside the tree stay untraversed.
+  # Finish enumeration before ingestion: process substitution hides find's
+  # failure and could otherwise promote an empty or partial registry.
+  # Follow only an explicitly supplied symlink root.
+  if ! (set -o pipefail; find -H "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z) > "$tmp.files"; then
+    rm -f "$tmp" "$tmp.files"
+    return 1
+  fi
+  local ingest_failed=0
   while IFS= read -r -d '' file; do
     # Skip + warn (not fatal) when there is no valid leading frontmatter block.
     if ! _ledger_has_frontmatter "$file"; then
@@ -538,8 +544,13 @@ build_findings_jsonl_from_local() {
         markdown_path: $md,
         validation: {},
         complexity: (if $complexity == "" then null else ($complexity | tonumber) end)
-      }' >> "$tmp" || { rm -f "$tmp"; return 1; }
-  done < <(find -H "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z)
+      }' >> "$tmp" || { ingest_failed=1; break; }
+  done < "$tmp.files"
+  rm -f "$tmp.files"
+  if (( ingest_failed )); then
+    rm -f "$tmp"
+    return 1
+  fi
 
   # Reuse current connected components, including transitive matches and the
   # operator's thresholds. A live old link alone cannot justify suppression
