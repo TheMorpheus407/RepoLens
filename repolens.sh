@@ -3553,16 +3553,30 @@ lens_heartbeat_iteration_path() {
   printf '%s/.%s.iteration\n' "$HEARTBEAT_DIR" "$key"
 }
 
-# Retire the previous unbounded paths before resuming a long lens, including
-# completed lenses and runs with heartbeats disabled. Ordinary keys stay intact.
+# Retire unbounded paths and stale canonical paths from older attributed runs,
+# including completed lenses and runs with heartbeats disabled. A live plain
+# investigation still owns its canonical heartbeat and must keep it.
 retire_legacy_lens_heartbeat() {
-  local domain="$1" lens_id="$2" legacy_key file
+  local domain="$1" lens_id="$2" lens_tuple="${3:-$1/$2}" legacy_key file key owner_pid
+  local -a legacy_keys=()
   legacy_key="$(sanitize_heartbeat_component "$domain")__$(sanitize_heartbeat_component "$lens_id")"
-  (( ${#legacy_key} > 200 )) || return 0
-  for file in "$HEARTBEAT_DIR/$legacy_key.json" "$HEARTBEAT_DIR/$legacy_key.json.tmp."* \
-    "$HEARTBEAT_DIR/.$legacy_key.iteration" "$HEARTBEAT_DIR/.$legacy_key.iteration.tmp."*; do
-    [[ -e "$file" || -L "$file" ]] || continue
-    rm -f -- "$file" || return 1
+  if (( ${#legacy_key} > 200 )); then legacy_keys+=("$legacy_key"); fi
+  if [[ "$lens_tuple" != "$domain/$lens_id" ]]; then
+    key="$(lens_heartbeat_key "$domain" "$lens_id")" || return 1
+    if [[ -f "$HEARTBEAT_DIR/$key.json" ]]; then
+      owner_pid="$(jq -r '.pid // 0' "$HEARTBEAT_DIR/$key.json" 2>/dev/null)" || return 0
+      if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+        return 0
+      fi
+      legacy_keys+=("$key")
+    fi
+  fi
+  for key in "${legacy_keys[@]}"; do
+    for file in "$HEARTBEAT_DIR/$key.json" "$HEARTBEAT_DIR/$key.json.tmp."* \
+      "$HEARTBEAT_DIR/.$key.iteration" "$HEARTBEAT_DIR/.$key.iteration.tmp."*; do
+      [[ -e "$file" || -L "$file" ]] || continue
+      rm -f -- "$file" || return 1
+    done
   done
   return 0
 }
@@ -4579,7 +4593,7 @@ run_lens() {
     fi
   fi
 
-  retire_legacy_lens_heartbeat "$domain" "$lens_id" || return 1
+  retire_legacy_lens_heartbeat "$domain" "$lens_id" "$lens_tuple" || return 1
 
   # Check resume
   if is_lens_completed "$lens_tuple"; then
@@ -4817,9 +4831,18 @@ run_lens() {
     iteration=$((iteration + 1))
     local timestamp
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    local output_file
-    if ! output_file="$(mktemp "$lens_log_dir/iteration-${iteration}-${timestamp}-XXXXXX.txt")"; then
+    local output_file capture_allocation
+    # Native macOS mktemp requires trailing Xs. Add the forensic .txt suffix
+    # without replacing an older capture; mv -n can skip with exit status zero.
+    if ! capture_allocation="$(mktemp "$lens_log_dir/iteration-${iteration}-${timestamp}-XXXXXX")"; then
       log_error "[$domain/$lens_id] Unable to allocate iteration capture; leaving investigation pending."
+      exit_status="lens-execution-failed"
+      break
+    fi
+    output_file="$capture_allocation.txt"
+    if ! mv -n "$capture_allocation" "$output_file" || [[ -e "$capture_allocation" ]]; then
+      rm -f -- "$capture_allocation"
+      log_error "[$domain/$lens_id] Unable to reserve iteration capture; leaving investigation pending."
       exit_status="lens-execution-failed"
       break
     fi

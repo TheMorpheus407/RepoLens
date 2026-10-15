@@ -276,5 +276,87 @@ check test "$(jq -sc '[.[] | select(.domain == "security" and .lens == "injectio
 printf '%s\n' "${MATRIX[0]}" > "$completed_lenses_file"
 _rounds_record_skipped_lenses "${MATRIX[0]}" "${MATRIX[1]}"
 check test "$(jq '[.lenses[] | select(.status == "skipped")] | length' "$SUMMARY_FILE")" -eq 1
+# Apple mktemp randomizes trailing Xs only. Model that behavior while keeping
+# the production capture allocator, callback, and same-second retry intact.
+LOG_BASE="$FIXTURE/portable-capture" OUTPUT_DIR="$FIXTURE/portable-capture/output"
+SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+mkdir -p "$LOG_BASE"
+: > "$completed_lenses_file"
+init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" audit codex '' '' local "$OUTPUT_DIR"
+run_agent() { printf 'DONE\n'; }
+mktemp() {
+  if [[ "$#" == 1 && "$1" == *iteration-* && "$1" != *XXXXXX ]]; then
+    (set -o noclobber; : > "$1") 2>/dev/null || return 1
+    printf '%s\n' "$1"
+  else command mktemp "$@"; fi
+}
+run_lens "${ENTRIES[0]}"
+check test "$?" -eq 0
+: > "$completed_lenses_file"
+run_lens "${ENTRIES[0]}"
+check test "$?" -eq 0
+check is_lens_completed "${ENTRIES[0]}"
+check test "$(find "$LOG_BASE/security" -name 'iteration-*.txt' | wc -l)" -eq 2
+unset -f mktemp
+
+# A skipped no-clobber rename must preserve existing data, discard the
+# temporary allocation, clean its heartbeat, and leave the dispatch pending.
+: > "$completed_lenses_file"
+HEARTBEAT_DIR="$LOG_BASE/.heartbeat"
+mkdir -p "$HEARTBEAT_DIR"
+resolve_lens_heartbeat_interval() { printf 1; }
+mv() {
+  if [[ "$#" == 3 && "$1" == -n && "$2" == *iteration-* ]]; then
+    printf 'existing evidence\n' > "$3"
+    return 0
+  fi
+  command mv "$@"
+}
+run_lens "${ENTRIES[0]}"
+check test "$?" -ne 0
+check test ! -s "$completed_lenses_file"
+check test "$(find "$LOG_BASE/security" -type f ! -name '*.txt' ! -name '*.envelope.json' | wc -l)" -eq 0
+check test "$(find "$HEARTBEAT_DIR" -type f | wc -l)" -eq 0
+check test "$(find "$LOG_BASE/security" -name '*.txt' -exec grep -lx 'existing evidence' {} + | wc -l)" -eq 1
+unset -f mv
+mark_lens_completed "${ENTRIES[0]}"
+
+# Older attributed runs left a canonical heartbeat. Retire it before the
+# completion shortcut, even with heartbeats disabled; preserve a live plain
+# sibling and unrelated/dispatch-owned files.
+eval "$(sed -n '/^retire_legacy_lens_heartbeat() {/,/^}/p' "$CALLBACK_SOURCE")"
+HEARTBEAT_DIR="$LOG_BASE/.heartbeat"
+mkdir -p "$HEARTBEAT_DIR"
+legacy_heartbeat="$(lens_heartbeat_path security injection)"
+legacy_iteration="$(lens_heartbeat_iteration_path security injection)"
+sibling_heartbeat="$(lens_heartbeat_path security dispatch-unrelated)"
+printf 'unrelated\n' > "$sibling_heartbeat"
+for interval in 0 1; do
+  resolve_lens_heartbeat_interval() { printf '%s' "$interval"; }
+  printf '{"domain":"security","lens_id":"injection","pid":0,"state":"running"}\n' > "$legacy_heartbeat"
+  printf '1\n' > "$legacy_iteration"
+  printf partial > "$legacy_heartbeat.tmp.123"
+  printf partial > "$legacy_iteration.tmp.123"
+  run_lens "${ENTRIES[0]}"
+  check test "$?" -eq 0
+  check test ! -e "$legacy_heartbeat"
+  check test ! -e "$legacy_iteration"
+  check test ! -e "$legacy_heartbeat.tmp.123"
+  check test ! -e "$legacy_iteration.tmp.123"
+  check grep -qx unrelated "$sibling_heartbeat"
+done
+printf '{"domain":"security","lens_id":"injection","pid":%s,"state":"running"}\n' "$BASHPID" > "$legacy_heartbeat"
+printf '3\n' > "$legacy_iteration"
+run_lens "${ENTRIES[0]}"
+check test "$?" -eq 0
+check test -f "$legacy_heartbeat"
+check grep -qx 3 "$legacy_iteration"
+# Completed-round shortcuts also perform retirement without a lens callback.
+printf '{"domain":"security","lens_id":"injection","pid":0}\n' > "$legacy_heartbeat"
+LENSES=("${ENTRIES[0]}")
+run_rounds 1 LENSES
+check test "$?" -eq 0
+check test ! -e "$legacy_heartbeat"
+check test ! -e "$legacy_iteration"
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

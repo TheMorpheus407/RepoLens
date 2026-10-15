@@ -2682,7 +2682,7 @@ run_rounds() {
         local completed_entry completed_role completed_focus completed_anchor completed_exclude
         for lens_entry in "${active_lens_list[@]}"; do
           _rounds_meta_tuple_parse "$lens_entry" completed_entry completed_role completed_focus completed_anchor completed_exclude
-          retire_legacy_lens_heartbeat "${completed_entry%%/*}" "${completed_entry#*/}" || return 1
+          retire_legacy_lens_heartbeat "${completed_entry%%/*}" "${completed_entry#*/}" "$lens_entry" || return 1
         done
       fi
       if (( round < rounds_total )); then
