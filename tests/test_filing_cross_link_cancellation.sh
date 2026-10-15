@@ -109,7 +109,7 @@ for scenario in comment-body reopen-body comment-body-fail reopen-body-fail reco
         if [[ "$scenario" == reconciled-* ]]; then
           # A saved successful POST still needs reconciliation, even if its body write fails.
           [[ ! -e "$LOG_BASE/writes" && -e "$cross_dir/$key.attempted" ]] || exit 1
-          [[ -e "$cross_dir/$key.unverified-done" && -s "$cross_dir/$key.created-response" ]] || exit 1
+          [[ -e "$cross_dir/$key.done" && ! -e "$cross_dir/$key.unverified-done" && -s "$cross_dir/$key.created-response" ]] || exit 1
           REPOLENS_FINAL_STATE=finished
           cancel_enabled=0
           _filing_cross_link_enact probe || true
