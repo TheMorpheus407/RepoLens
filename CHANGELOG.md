@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve saved cross-link success receipts and stage both body and banner payloads during interrupted reattestation; release fresh unsent reopen reservations even when banner generation fails; quarantine completed validation failures and stop final receipt recount reads after cancellation (repolens-r5-p1-2, repolens-r5-p2-1).
+- Preserve saved cross-link success receipts and stage both body and banner payloads during interrupted reattestation, rolling back interrupted quarantine and failed or cancelled payload promotion; release fresh unsent reopen reservations even when banner generation fails; quarantine completed validation failures and stop final receipt recount reads after cancellation (repolens-r5-p1-2, repolens-r5-p2-1).
 
 - Stop prompt composition on failed spec, explicit file-backed context, or remote-execution partial reads, including a required greenfield spec that disappears during composition; discard partial content and leave failed dispatches resumable (repolens-r5-p1-4).
 

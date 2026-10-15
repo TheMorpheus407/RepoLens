@@ -127,9 +127,11 @@ filing_verified_issue_count() {
           '.url == $url and .number == $number and .title == $title and .body == $body and .state == "open"' \
           <<< "$readback" >/dev/null; then
       _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
-      mv "$marker" "$prefix.unverified-done" || return 1
-      : > "$prefix.attempted" || return 1
-      printf 'VERIFICATION_FAILED: saved creation receipt could not be reconciled\n' > "$prefix.failed" || return 1
+      if ! _filing_cross_link_fail "$marker" "$prefix.failed" \
+          'VERIFICATION_FAILED: saved creation receipt could not be reconciled'; then
+        _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+        return 1
+      fi
       rc=1
       continue
     fi
@@ -494,15 +496,76 @@ _filing_fail() {
 # Invalidate a saved cross-link receipt only after a completed failure.
 # A cancellation leaves the original receipt and its payload available for resume.
 _filing_cross_link_fail() {
-  local done_file="$1" result_file="$2" reason="$3"
+  local done_file="$1" result_file="$2" reason="$3" move_rc=0
   _filing_cancelled && return 1
   if [[ -e "$done_file" || -L "$done_file" ]]; then
     # Reserve the already completed POST before any marker move, including crashes.
     : > "${done_file%.done}.attempted" || return 1
     _filing_cancelled && return 1
-    mv "$done_file" "${done_file%.done}.unverified-done" || return 1
+    mv "$done_file" "${done_file%.done}.unverified-done" || move_rc=$?
+    # A returning handler may run while mv waits for its child. Even a failed
+    # command can have completed the rename before reporting interruption.
+    if _filing_cancelled; then
+      if [[ ! -e "$done_file" && ! -L "$done_file" ]] \
+          && [[ -e "${done_file%.done}.unverified-done" || -L "${done_file%.done}.unverified-done" ]]; then
+        mv "${done_file%.done}.unverified-done" "$done_file" || return 1
+      fi
+      return 1
+    fi
+    (( move_rc == 0 )) || return 1
   fi
   printf '%s\n' "$reason" > "$result_file"
+}
+
+# Promote verified saved payloads together, retaining originals until both
+# renames complete without cancellation. Restore even an absent historical raw
+# body on failure. If rollback itself fails, keep its backup for reconciliation.
+_filing_cross_link_promote_payload() {
+  local prefix="$1" body_candidate="$2" banner_candidate="$3"
+  local backup i rc=0 restore_rc=0
+  local -a candidates=() targets=()
+  if [[ -n "$banner_candidate" ]]; then
+    candidates+=("$banner_candidate")
+    targets+=("$prefix.body.banner.md")
+  fi
+  candidates+=("$body_candidate")
+  targets+=("$prefix.body.md")
+  backup="$(mktemp -d "$prefix.body.md.reconcile.XXXXXX")" || return 1
+  mkdir "$backup/originals" || { rmdir "$backup"; return 1; }
+  for i in "${!targets[@]}"; do
+    if [[ -e "${targets[$i]}" || -L "${targets[$i]}" ]]; then
+      cp -pP "${targets[$i]}" "$backup/originals/$i" || {
+        rm -rf -- "$backup"
+        return 1
+      }
+    fi
+  done
+  if _filing_cancelled; then
+    rm -rf -- "$backup"
+    return 1
+  fi
+  for i in "${!targets[@]}"; do
+    mv "${candidates[$i]}" "${targets[$i]}" || rc=1
+    if (( rc != 0 )) || _filing_cancelled; then
+      rc=1
+      break
+    fi
+  done
+  if (( rc != 0 )); then
+    for i in "${!targets[@]}"; do
+      if [[ -e "$backup/originals/$i" || -L "$backup/originals/$i" ]]; then
+        mv "$backup/originals/$i" "${targets[$i]}" || restore_rc=1
+      else
+        rm -f "${targets[$i]}" || restore_rc=1
+      fi
+    done
+  fi
+  if (( restore_rc != 0 )); then
+    echo "_filing_cross_link_promote_payload: restore failed; originals retained under $backup" >&2
+    return 1
+  fi
+  rm -rf -- "$backup"
+  return "$rc"
 }
 
 # Emit complete whitespace tokens carrying bare file/line-shaped references.
@@ -949,14 +1012,10 @@ _filing_cross_link_enact() {
         return 1
       fi
       if (( rc == 0 )); then
-        if [[ -n "$reconcile_banner_file" ]]; then
-          mv "$reconcile_banner_file" "$cross_dir/$key.body.banner.md" || rc=1
-        fi
-        if (( rc == 0 )); then
-          mv "$reconcile_body_file" "$cross_dir/$key.body.md" || rc=1
-        fi
+        _filing_cross_link_promote_payload "$cross_dir/$key" "$reconcile_body_file" "$reconcile_banner_file" || rc=1
       fi
       rm -f "$reconcile_body_file" ${reconcile_banner_file:+"$reconcile_banner_file"}
+      _filing_cancelled && return 1
     fi
     if (( rc == 0 )); then
       printf '%s\n' "$readback" > "$cross_dir/$key.readback.json" || continue

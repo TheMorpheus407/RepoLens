@@ -36,3 +36,53 @@ for signal in HUP INT TERM; do
   ); then printf 'PASS: %s failure admission\n' "$signal"
   else printf 'FAIL: %s failure admission\n' "$signal"; exit 1; fi
 done
+
+# A returning signal inside mv must roll quarantine back before writing a result.
+for signal in HUP INT TERM; do
+  for move_status in 0 1; do
+    if (
+      prefix="$FIXTURE/move-$signal-$move_status"
+      printf 'saved receipt\n' > "$prefix.done"
+      REPOLENS_FINAL_STATE=finished
+      trap 'REPOLENS_FINAL_STATE=interrupted' HUP INT TERM
+      mv() {
+        command mv "$@" || return 1
+        if [[ "$1" == "$prefix.done" ]]; then
+          kill -s "$signal" "$BASHPID"
+          return "$move_status"
+        fi
+      }
+      rc=0
+      _filing_cross_link_fail "$prefix.done" "$prefix.failed" invalid || rc=$?
+      [[ "$rc" == 1 && -e "$prefix.done" && -e "$prefix.attempted" && ! -e "$prefix.unverified-done" && ! -e "$prefix.failed" ]] || exit 1
+      cmp -s <(printf 'saved receipt\n') "$prefix.done"
+    ); then printf 'PASS: %s quarantine move status %s\n' "$signal" "$move_status"
+    else printf 'FAIL: %s quarantine move status %s\n' "$signal" "$move_status"; exit 1; fi
+  done
+done
+
+# The final reopen recount must use the same reversible quarantine transition.
+for signal in HUP INT TERM; do
+  if (
+    LOG_BASE="$FIXTURE/recount-$signal"
+    prefix="$LOG_BASE/final/filed/cross-link/reopen-suggestion-9"
+    mkdir -p "${prefix%/*}"
+    : > "$prefix.done"
+    printf 'https://example.invalid/issues/17\n' > "$prefix.created-response"
+    printf 'saved banner\n' > "$prefix.body.banner.md"
+    REPOLENS_FINAL_STATE=finished FORGE_REPO=acme/repo
+    REPOLENS_INTERRUPT_EXIT_CODE=130
+    case "$signal" in HUP) REPOLENS_INTERRUPT_EXIT_CODE=129;; TERM) REPOLENS_INTERRUPT_EXIT_CODE=143;; esac
+    trap 'REPOLENS_FINAL_STATE=interrupted' HUP INT TERM
+    forge_issue_number_from_url() { printf '17\n'; }
+    forge_issue_read_json() { printf '{}\n'; }
+    mv() {
+      command mv "$@" || return 1
+      if [[ "$1" == "$prefix.done" ]]; then kill -s "$signal" "$BASHPID"; fi
+    }
+    rc=0
+    filing_verified_issue_count probe > "$LOG_BASE/count" || rc=$?
+    [[ "$rc" == "$REPOLENS_INTERRUPT_EXIT_CODE" && -e "$prefix.done" && -e "$prefix.attempted" && ! -e "$prefix.unverified-done" && ! -e "$prefix.failed" && ! -s "$LOG_BASE/count" ]]
+  ); then printf 'PASS: %s recount quarantine rollback\n' "$signal"
+  else printf 'FAIL: %s recount quarantine rollback\n' "$signal"; exit 1; fi
+done
