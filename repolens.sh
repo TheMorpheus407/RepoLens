@@ -5482,41 +5482,8 @@ case "$RUN_HEALTH" in
     ;;
 esac
 
-# Resolve the process exit code ONCE, up front, from the now-final run state
-# (REPOLENS_FINAL_STATE / RUN_HEALTH / RUN_ROUNDS_RC). The exit-code ladder below
-# routes through this same value so the code recorded in attempts.json can never
-# drift from the real process exit (#375).
-RUN_EXIT_CODE="$(resolve_run_exit_code)"
-
-# Record this invocation in the per-attempt audit trail (#371), enriched for
-# triage (#375), now that REPOLENS_FINAL_STATE / RUN_HEALTH are resolved and
-# summary.json exists. why_stopped prefers summary.json's stopped_reason and
-# falls back to the present abort sentinel; exit_code is the resolved code above.
-# Non-fatal: a write failure logs a warning and never changes the exit code.
-attempts_finalize \
-  "$LOG_BASE" \
-  "${REPOLENS_FINAL_STATE:-finished}" \
-  "$(resolve_why_stopped)" \
-  "$RUN_EXIT_CODE" || true
-
-# Emit the canonical latest-result pointer at the top of the logs tree (#308).
-# Non-fatal: a pointer-write failure logs a warning and never changes exit code.
-write_latest_result_pointer \
-  "$SCRIPT_DIR/logs" \
-  "$RUN_ID" \
-  "$MODE" \
-  "$AGENT" \
-  "$SUMMARY_FILE" \
-  "${REPOLENS_FINAL_STATE:-finished}" \
-  "$LOG_BASE/final" || true
-
-# Cursor Composer watches the durable control stream, so explicitly terminate
-# the handoff queue after the final state and exit code have been resolved.
-if [[ "${CURSOR_IDE_ACTIVE:-false}" == "true" ]]; then
-  cursor_ide_emit_run_complete \
-    "$RUN_ID" "${REPOLENS_FINAL_STATE:-finished}" "$SUMMARY_FILE"
-fi
-
+# Resolve the process exit code after final presentation: the returning parallel
+# signal traps can still mark this invocation interrupted while output is rendered.
 log_info "=============================="
 log_info "RepoLens run $RUN_ID complete"
 log_info "Summary: $SUMMARY_FILE"
@@ -5549,18 +5516,52 @@ jq '.' "$SUMMARY_FILE"
 # Surface the parent-run + attempts model (#377): when this run dir represents
 # one parent that took more than one attempt (a fresh start plus one or more
 # --resume invocations), print a single legible note pointing at the full
-# continuation history. attempts_finalize (above) has already appended the
-# current attempt, so the count includes it. Single-attempt runs print nothing.
+# continuation history. Include the current invocation, which is recorded after
+# presentation so signals received while rendering remain visible.
 # Non-fatal: jq-guarded and tolerant of an absent/corrupt attempts.json.
 if command -v jq >/dev/null 2>&1 && [[ -f "$LOG_BASE/attempts.json" ]]; then
-  _attempts_n="$(jq -r 'if type == "array" then length else 0 end' "$LOG_BASE/attempts.json" 2>/dev/null || printf '0')"
+  _attempts_n="$(jq -r 'if type == "array" then length + 1 else 0 end' "$LOG_BASE/attempts.json" 2>/dev/null || printf '0')"
   [[ "$_attempts_n" =~ ^[0-9]+$ ]] || _attempts_n=0
   if (( _attempts_n > 1 )); then
-    _attempts_latest="$(jq -r 'if type == "array" then (last.status // "") else "" end' "$LOG_BASE/attempts.json" 2>/dev/null || printf '')"
+    _attempts_latest="${REPOLENS_FINAL_STATE:-finished}"
     echo "This run took ${_attempts_n} attempts (latest: ${_attempts_latest}). Full continuation history: logs/${RUN_ID}/attempts.json"
   fi
   unset _attempts_n _attempts_latest
 fi
+
+# Emit the canonical latest-result pointer at the top of the logs tree (#308).
+# Non-fatal: a pointer-write failure logs a warning and never changes exit code.
+write_latest_result_pointer \
+  "$SCRIPT_DIR/logs" \
+  "$RUN_ID" \
+  "$MODE" \
+  "$AGENT" \
+  "$SUMMARY_FILE" \
+  "${REPOLENS_FINAL_STATE:-finished}" \
+  "$LOG_BASE/final" || true
+
+# Cursor Composer watches the durable control stream, so explicitly terminate
+# the handoff queue after final presentation has observed any interruption.
+if [[ "${CURSOR_IDE_ACTIVE:-false}" == "true" ]]; then
+  cursor_ide_emit_run_complete \
+    "$RUN_ID" "${REPOLENS_FINAL_STATE:-finished}" "$SUMMARY_FILE"
+fi
+
+# Refresh interruption diagnostics and resolve the exit immediately before the
+# attempt record, after all final presentation and completion notifications.
+apply_rate_limit_abort_final_state || true
+RUN_EXIT_CODE="$(resolve_run_exit_code)"
+
+# Record this invocation in the per-attempt audit trail (#371), enriched for
+# triage (#375), after presentation and result publication. summary.json exists;
+# why_stopped prefers its stopped_reason and
+# falls back to the present abort sentinel; exit_code is the resolved code above.
+# Non-fatal: a write failure logs a warning and never changes the exit code.
+attempts_finalize \
+  "$LOG_BASE" \
+  "${REPOLENS_FINAL_STATE:-finished}" \
+  "$(resolve_why_stopped)" \
+  "$RUN_EXIT_CODE" || true
 
 # Exit-code ladder. The numeric code comes from RUN_EXIT_CODE (resolved above by
 # resolve_run_exit_code) so it can never drift from the attempts.json record;

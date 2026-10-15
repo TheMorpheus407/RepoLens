@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Resolve and record the final invocation outcome after summary rendering, preserving late INT/TERM exit codes and interrupted attempt records (repolens-r2-p1-4).
+
 - Stop before lens dispatch when heartbeat path hashing fails, keeping the lens pending without writing temporary files outside the run directory. Disabled heartbeats skip path hashing.
 
 - Bound semaphore filenames by bytes so custom dispatches with multibyte focus text remain usable in parallel rounds.
