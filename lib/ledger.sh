@@ -422,9 +422,10 @@ _ledger_frontmatter_scalar() {
 #     arrived via a manifest cluster or a local .md file.
 #   - severity is run through _ledger_severity_normalize ("Critical"->"critical").
 #   - confidence is null, primary_location is "", validation is {}.
-#   - status preserves the local dedupe pass's "duplicate" mark; otherwise it
-#     defaults to "new", so reports do not present marked duplicates as actions.
-#     Its duplicate_of links reconstruct also_reported_by on canonical records.
+#   - status preserves a "duplicate" mark only with a direct duplicate_of link
+#     to a different, parsed non-duplicate in the current tree; otherwise it is
+#     "new", so stale marks cannot hide the last actionable representation.
+#     Valid links reconstruct also_reported_by on canonical records.
 #
 #   jq owns all quoting/escaping: title/domain/lens/markdown_path are passed as
 #   --arg and the object is built inside jq, so titles with quotes, `$()`,
@@ -507,10 +508,18 @@ build_findings_jsonl_from_local() {
   done < <(find "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z)
 
   # The local dedupe pass stores canonical paths relative to output_dir. Resolve
-  # only against records in this same tree; no referenced file is opened. Derive
-  # contributor details from those records rather than parsing a YAML list.
+  # only against records in this same tree; no referenced file is opened. Check
+  # RAW statuses before normalization so self-links, chains and cycles cannot
+  # validate one another. Missing/filtered/invalid canonicals restore eligibility
+  # without modifying the markdown evidence. Only validated links contribute.
   if ! jq -cs --arg dir "${dir%/}" '
-      (reduce .[] as $r ({};
+      (map({key: .markdown_path, value: .status}) | from_entries) as $raw_status
+      | map(
+          ($dir + "/" + .__local_duplicate_of) as $target
+          | if .status == "duplicate" and .__local_duplicate_of != ""
+              and $target != .markdown_path and $raw_status[$target] == "new" then .
+            else .status = "new" | .__local_duplicate_of = "" end)
+      | (reduce .[] as $r ({};
         if $r.__local_duplicate_of == "" then .
         else .[$dir + "/" + $r.__local_duplicate_of] +=
           [{lens: $r.lens, domain: $r.domain, markdown_path: $r.markdown_path}]

@@ -20,8 +20,13 @@ It is built from the existing finding outputs; it does not replace them.
 - **`--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
   (`lib/template.sh`, LOCAL MODE OVERRIDE block, ~line 521). The builder reads
   that frontmatter and emits one normalized record per file. It preserves local
-  dedupe's `status: duplicate` marks and uses their relative `duplicate_of` links
-  to reconstruct `also_reported_by` contributors on the canonical records.
+  dedupe's `status: duplicate` marks only when their direct relative
+  `duplicate_of` link identifies a different parsed record with a raw
+  non-duplicate status in the current tree. Missing, filtered or invalid
+  canonicals, self-links, chains and cycles restore the affected records to
+  `new` in the registry. Markdown evidence remains unchanged. Only validated
+  links reconstruct `also_reported_by` contributors on canonical records;
+  referenced paths are never opened.
 
 The registry collapses identical IDs to one record, preferring a non-duplicate
 record over a marked duplicate while preserving the ID's first position.
