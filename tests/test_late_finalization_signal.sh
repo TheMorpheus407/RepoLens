@@ -17,9 +17,25 @@
 # attempt ledger, result pointer and Cursor completion with one consistent state.
 # shellcheck disable=SC2034,SC2329 # Extracted production code consumes globals.
 set -euo pipefail
+# Define injection callbacks before the first trap call for older CI linters.
+# Send to the parent even from a jq command substitution or pipeline.
+interrupt_once() {
+  if [[ ! -e "$LOG_BASE/signalled" ]]; then
+    : > "$LOG_BASE/signalled"
+    kill -s "$SIGNAL" "$SIGNAL_PARENT_PID"
+  fi
+}
+
+# Probe the final check-to-freeze race without changing production logic.
+trap() {
+  if [[ "${hook:-}" == before-freeze && "$*" == ' HUP INT TERM' ]]; then interrupt_once; fi
+  # shellcheck disable=SC2064 # Forward the already-quoted trap arguments unchanged.
+  builtin trap "$@"
+}
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="$(mktemp -d)"
-# Fixture cleanup uses the real utility, independent of the injected rm below.
+# Fixture cleanup always uses the real rm utility.
 trap 'command rm -rf -- "$FIXTURE"' EXIT
 # shellcheck source=/dev/null
 source "$REPO/lib/parallel.sh"
@@ -41,13 +57,6 @@ test -s "$FIXTURE/tail.sh"
 parallel_preflight() { _REPOLENS_SCOPE_READY=1; _REPOLENS_SCOPE_FAILED=0; }
 log_info() { :; }
 log_warn() { :; }
-# Send to the parent even from a jq command substitution or pipeline.
-interrupt_once() {
-  if [[ ! -e "$LOG_BASE/signalled" ]]; then
-    : > "$LOG_BASE/signalled"
-    kill -s "$SIGNAL" "$SIGNAL_PARENT_PID"
-  fi
-}
 summary_time_breakdown() { if [[ "$hook" == time ]]; then interrupt_once; fi; }
 print_resume_hint() { printf 'resume hint\n'; }
 # Inject inside the real serializers, after their arguments have been captured.
@@ -103,12 +112,6 @@ mv() {
   if [[ "$hook" == attempt-move && "${*: -1}" == "$LOG_BASE/attempts.json" ]]; then
     interrupt_once
   fi
-}
-# Probe the final check-to-freeze race without changing production logic.
-trap() {
-  if [[ "${hook:-}" == before-freeze && "$*" == ' HUP INT TERM' ]]; then interrupt_once; fi
-  # shellcheck disable=SC2064 # Forward the already-quoted trap arguments unchanged.
-  builtin trap "$@"
 }
 eval "$(declare -f cursor_ide_emit | sed '1s/cursor_ide_emit/original_cursor_ide_emit/')"
 cursor_ide_emit() {
