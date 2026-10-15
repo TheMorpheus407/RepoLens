@@ -5418,8 +5418,10 @@ fi
 
 # --- Local-mode finding registry (non-fatal) ---
 # The non-local registry hook above ( ! $LOCAL_MODE) never fires for --local.
-# Use a synthesized manifest when present, preserving verification filtering;
-# otherwise index the NNN-<slug>.md tree under $OUTPUT_DIR. The orchestrator writes only into
+# For default per-round output, use the synthesized manifest when present to
+# preserve verification filtering. Explicit --output uses a shared directory
+# outside the round-only synthesis inventory, so keep indexing its Markdown.
+# The orchestrator writes only into
 # logs/<run-id>/final/ (resolved from LOG_BASE, NOT $OUTPUT_DIR), so the user's
 # output dir stays pure md. Build after dedupe and before the digest/triage
 # consumers so fresh runs and the first successful resume render the current
@@ -5428,7 +5430,7 @@ fi
 # successful rebuild; a failed pre-promotion write may leave an older index.
 _local_registry_ready=false
 _local_registry_source="${OUTPUT_DIR:-}"
-if [[ -f "$LOG_BASE/final/manifest.json" ]]; then
+if [[ -f "$LOG_BASE/final/manifest.json" ]] && ! ${OUTPUT_DIR_SET:-false}; then
   _local_registry_source=""
 fi
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \

@@ -263,8 +263,11 @@ _ledger_resolve_finding_type() {
 #   - duplicate_group is SEEDED from cluster_id; the final dedup grouping is
 #               owned by the dedupe agent (#316/#322/#335). cluster_id is a
 #               per-run, non-stable handle and must not be confused with id.
-#   - type/confidence/markdown_path are null and primary_location is "";
-#     validation is an empty object {}. These are owned by sibling agents.
+#   - synthesized status="duplicate" remains duplicate for report exclusion.
+#   - markdown_path is the first existing source finding file, else null.
+#     Source files are only checked for existence, never read.
+#   - also_reported_by passes through when it is a non-empty array.
+#   - confidence is null, primary_location is "", validation is {}.
 #   - source_finding_paths is passed through verbatim so siblings can trace
 #     the underlying evidence.
 #
@@ -288,7 +291,7 @@ build_findings_jsonl_from_manifest() {
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
-  local count i entry domain lens title raw_sev sev vstatus status id raw_type ftype cx
+  local count i entry domain lens title raw_sev sev vstatus status id raw_type ftype cx md source_path
   count="$(jq 'length' "$manifest")" || { rm -f "$tmp"; return 1; }
   for (( i = 0; i < count; i++ )); do
     entry="$(jq -c --argjson i "$i" '.[$i]' "$manifest")" || { rm -f "$tmp"; return 1; }
@@ -316,10 +319,21 @@ build_findings_jsonl_from_manifest() {
       stale) status="needs-validation" ;;
     esac
 
+    if [[ "$(jq -r '.status // ""' <<<"$entry")" == duplicate ]]; then
+      status=duplicate
+    fi
+    md=""
+    while IFS= read -r -d '' source_path; do
+      if [[ -f "$source_path" ]]; then
+        md="$source_path"
+        break
+      fi
+    done < <(jq -j '.source_finding_paths[]? | ., "\u0000"' <<<"$entry")
+
     jq -cn \
       --argjson entry "$entry" \
       --arg id "$id" --arg severity "$sev" --arg status "$status" --arg ftype "$ftype" \
-      --arg complexity "$cx" '
+      --arg md "$md" --arg complexity "$cx" '
       {
         id: $id,
         title: ($entry.title // ""),
@@ -331,11 +345,13 @@ build_findings_jsonl_from_manifest() {
         primary_location: "",
         confidence: null,
         duplicate_group: ($entry.cluster_id // null),
-        markdown_path: null,
+        markdown_path: (if $md == "" then null else $md end),
         validation: {},
         complexity: (if $complexity == "" then null else ($complexity | tonumber) end),
         source_finding_paths: ($entry.source_finding_paths // [])
-      }' >> "$tmp" || { rm -f "$tmp"; return 1; }
+      }
+      + (if ($entry.also_reported_by | type) == "array" and ($entry.also_reported_by | length) > 0
+         then {also_reported_by: $entry.also_reported_by} else {} end)' >> "$tmp" || { rm -f "$tmp"; return 1; }
   done
 
   mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }
