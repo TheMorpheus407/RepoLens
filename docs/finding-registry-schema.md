@@ -115,7 +115,8 @@ One JSON object per line in `findings.jsonl`, with these 13 fields:
   `config/domains.json`). Missing local frontmatter values fall back to the
   first two directory components beneath the output root, including when
   findings are nested further in dispatch directories. Trailing slashes on
-  that root do not change the metadata or finding IDs. Flat findings without
+  that root do not change the metadata or finding IDs. A symlinked output root
+  is traversed; symlinks inside the tree are not followed. Flat findings without
   these frontmatter fields retain empty values.
 - `status` — `new` \| `duplicate` \| `needs-validation` \|
   `likely-false-positive`; defaults to `new`.

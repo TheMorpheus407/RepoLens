@@ -691,4 +691,37 @@ for suffix in '' / ///; do
     "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$TMPDIR/trailing-registry/final/findings.jsonl")"
 done
 
+echo "=== symlinked output root preserves findings without following child links ==="
+
+linked_root="$TMPDIR/reports link [root]"
+ln -s "$slash_dir" "$linked_root"
+# Only the explicitly supplied root may be followed. Child links must not add
+# outside findings or duplicate existing files (as find -L would do).
+outside_dir="$TMPDIR/outside"
+mkdir -p "$outside_dir"
+cat > "$outside_dir/004-outside.md" <<'EOF'
+---
+title: Outside finding
+severity: high
+---
+body
+EOF
+ln -s "$outside_dir" "$slash_dir/linked-directory"
+ln -s "$outside_dir/004-outside.md" "$slash_dir/linked-file.md"
+for suffix in '' / ///; do
+  link_out="$TMPDIR/linked-findings.jsonl"
+  build_findings_jsonl_from_local "$linked_root$suffix" "$link_out"
+  assert_success "symlink-root ingestion succeeds with suffix '$suffix'" "$?"
+  assert_eq "symlink-root metadata, types and IDs match without child links, suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$link_out")"
+  while IFS= read -r markdown; do
+    assert_file_exists "symlink-root source link resolves with suffix '$suffix'" "$markdown"
+  done < <(jq -r '.markdown_path' "$link_out")
+
+  LOG_BASE="$TMPDIR/linked-registry" build_finding_registry linked "$linked_root$suffix"
+  assert_success "symlink-root registry succeeds with suffix '$suffix'" "$?"
+  assert_eq "symlink-root registry retains all findings and excludes child links, suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$TMPDIR/linked-registry/final/findings.jsonl")"
+done
+
 finish

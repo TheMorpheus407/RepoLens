@@ -477,6 +477,8 @@ build_findings_jsonl_from_local() {
   : > "$tmp" || return 1
 
   local file rel lens_rel title severity domain lens id sev type_raw ftype cx status duplicate_of
+  # Follow an explicitly supplied symlink root, preserving its lexical paths
+  # for metadata fallback and links. Symlinks inside the tree stay untraversed.
   while IFS= read -r -d '' file; do
     # Skip + warn (not fatal) when there is no valid leading frontmatter block.
     if ! _ledger_has_frontmatter "$file"; then
@@ -537,7 +539,7 @@ build_findings_jsonl_from_local() {
         validation: {},
         complexity: (if $complexity == "" then null else ($complexity | tonumber) end)
       }' >> "$tmp" || { rm -f "$tmp"; return 1; }
-  done < <(find "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z)
+  done < <(find -H "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z)
 
   # Reuse current connected components, including transitive matches and the
   # operator's thresholds. A live old link alone cannot justify suppression
