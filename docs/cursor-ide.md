@@ -55,6 +55,8 @@ Keep servicing events until `kind` is `run_complete`.
 
 ## Stop and resume
 
+During final summary rendering and result persistence, HUP, INT, and TERM still mark the invocation interrupted. RepoLens reconciles its attempt and latest-result pointer, prepares the completion JSON, then freezes the outcome immediately before publishing a single `run_complete` event. Signals received from that boundary through exit are ignored, so Composer, the attempt ledger, and the process retain the same outcome.
+
 Pressing Ctrl-C leaves all handoff artifacts and the ordinary RepoLens run state intact. Resume with the command RepoLens prints:
 
 ```bash

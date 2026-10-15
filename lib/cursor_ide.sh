@@ -530,10 +530,11 @@ run_cursor_ide_agent() {
   return 124
 }
 
-cursor_ide_emit_run_complete() {
+# Prepare a terminal event without publishing it, so main can reconcile a
+# signal received during JSON construction before freezing the final outcome.
+cursor_ide_run_complete_json() {
   local run_id="${1:-}" outcome="${2:-unknown}" summary_file="${3:-}"
-  local json
-  json="$(jq -nc \
+  jq -nc \
     --argjson schema_version 1 \
     --arg kind "run_complete" \
     --arg run_id "$run_id" \
@@ -546,6 +547,11 @@ cursor_ide_emit_run_complete() {
       outcome: $outcome,
       summary_file: $summary,
       instruction: "No more handoffs remain. Read the summary and collected findings."
-    }')"
+    }'
+}
+
+cursor_ide_emit_run_complete() {
+  local json
+  json="$(cursor_ide_run_complete_json "$@")" || return
   cursor_ide_emit "$json"
 }

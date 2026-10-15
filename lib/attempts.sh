@@ -107,7 +107,9 @@ attempts_begin() {
 
 # attempts_finalize <log_base> <status> <why_stopped> <exit_code> — append one
 # attempt entry to <log_base>/attempts.json atomically (temp file in <log_base>
-# + mv).
+# + mv). An optional 5th argument selects the current invocation's fixed
+# attempt_id: append that slot or reconcile the last entry in place. The caller
+# retains .attempt-start until reconciliation finishes, then removes it.
 #
 # Reads started_at + baseline_completed from the .attempt-start marker written
 # by attempts_begin (fallbacks: started_at="", baseline 0 if absent). attempt_id
@@ -161,9 +163,22 @@ attempts_finalize() {
     fi
   fi
 
-  local attempt_id
+  local attempt_id current_id="${5:-}"
   attempt_id="$(printf '%s' "$existing" | jq 'length + 1' 2>/dev/null || printf '')"
-  [[ "$attempt_id" =~ ^[0-9]+$ ]] || attempt_id=1
+  if [[ ! "$attempt_id" =~ ^[1-9][0-9]*$ ]]; then
+    log_warn "attempts: cannot determine the next attempt id; skipping record"
+    return 0
+  fi
+  if [[ -n "$current_id" ]]; then
+    # Only the new slot or the last slot may be written. Earlier history
+    # is immutable; main reserves this invocation's slot before the first write.
+    if [[ ! "$current_id" =~ ^[1-9][0-9]*$ ]] \
+        || (( current_id != attempt_id && current_id != attempt_id - 1 )); then
+      log_warn "attempts: current attempt slot changed; skipping record to avoid data loss"
+      return 0
+    fi
+    attempt_id="$current_id"
+  fi
 
   # lenses_completed_this_attempt = work done during THIS attempt (current -
   # baseline), clamped at >= 0 defensively. lenses_completed_total = the same
@@ -196,7 +211,7 @@ attempts_finalize() {
       --argjson lenses_completed_this_attempt "$lenses_completed" \
       --argjson lenses_completed_total "$current_completed" \
       --argjson exit_code "$exit_code_json" \
-      '. + [{
+      '.[($attempt_id - 1)] = {
         attempt_id: $attempt_id,
         started_at: $started_at,
         finished_at: $finished_at,
@@ -205,7 +220,7 @@ attempts_finalize() {
         lenses_completed_this_attempt: $lenses_completed_this_attempt,
         lenses_completed_total: $lenses_completed_total,
         exit_code: $exit_code
-      }]' > "$tmp" 2>/dev/null; then
+      }' > "$tmp" 2>/dev/null; then
     log_warn "attempts: failed to build JSON; skipping attempt record"
     rm -f "$tmp" 2>/dev/null
     return 0
@@ -218,7 +233,7 @@ attempts_finalize() {
   fi
 
   # Tidy the transient marker; the next attempts_begin overwrites it anyway.
-  rm -f "$marker" 2>/dev/null
+  if [[ -z "$current_id" ]]; then rm -f "$marker" 2>/dev/null; fi
 
   return 0
 }
