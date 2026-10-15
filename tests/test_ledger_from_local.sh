@@ -654,4 +654,74 @@ flatdl_id="$(finding_id "" "" '[low] flat, no domain or lens')"
 assert_eq "flat file id is finding_id over empty domain/lens" \
   "$flatdl_id" "$(jq -r '.id' "$out_flatdl")"
 
+echo "=== trailing slashes preserve canonical metadata and finding IDs ==="
+
+slash_dir="$TMPDIR/reports [local]"
+mkdir -p "$slash_dir/security/injection/dispatch-example"
+for finding in security/injection/001-plain.md security/injection/dispatch-example/002-nested.md 003-flat.md; do
+  cat > "$slash_dir/$finding" <<EOF
+---
+title: $finding
+severity: low
+---
+body
+EOF
+done
+plain_id="$(finding_id security injection security/injection/001-plain.md)"
+nested_id="$(finding_id security injection security/injection/dispatch-example/002-nested.md)"
+flat_id="$(finding_id '' '' 003-flat.md)"
+expected_metadata="$(jq -cn --arg plain "$plain_id" --arg nested "$nested_id" --arg flat "$flat_id" '
+  [["003-flat.md", "", "", "maintainability", $flat],
+   ["security/injection/001-plain.md", "security", "injection", "security-vulnerability", $plain],
+   ["security/injection/dispatch-example/002-nested.md", "security", "injection", "security-vulnerability", $nested]]')"
+for suffix in '' / ///; do
+  slash_out="$TMPDIR/trailing-findings.jsonl"
+  build_findings_jsonl_from_local "$slash_dir$suffix" "$slash_out"
+  assert_success "local ingestion succeeds with suffix '$suffix'" "$?"
+  assert_eq "local metadata, inferred type and IDs survive suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$slash_out")"
+  while IFS= read -r markdown; do
+    assert_file_exists "source link resolves with suffix '$suffix'" "$markdown"
+  done < <(jq -r '.markdown_path' "$slash_out")
+
+  # The public registry caller forwards the root without CLI canonicalization.
+  LOG_BASE="$TMPDIR/trailing-registry" build_finding_registry trailing "$slash_dir$suffix"
+  assert_success "registry ingestion succeeds with suffix '$suffix'" "$?"
+  assert_eq "registry preserves metadata and IDs with suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$TMPDIR/trailing-registry/final/findings.jsonl")"
+done
+
+echo "=== symlinked output root preserves findings without following child links ==="
+
+linked_root="$TMPDIR/reports link [root]"
+ln -s "$slash_dir" "$linked_root"
+# Only the explicitly supplied root may be followed. Child links must not add
+# outside findings or duplicate existing files (as find -L would do).
+outside_dir="$TMPDIR/outside"
+mkdir -p "$outside_dir"
+cat > "$outside_dir/004-outside.md" <<'EOF'
+---
+title: Outside finding
+severity: high
+---
+body
+EOF
+ln -s "$outside_dir" "$slash_dir/linked-directory"
+ln -s "$outside_dir/004-outside.md" "$slash_dir/linked-file.md"
+for suffix in '' / ///; do
+  link_out="$TMPDIR/linked-findings.jsonl"
+  build_findings_jsonl_from_local "$linked_root$suffix" "$link_out"
+  assert_success "symlink-root ingestion succeeds with suffix '$suffix'" "$?"
+  assert_eq "symlink-root metadata, types and IDs match without child links, suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$link_out")"
+  while IFS= read -r markdown; do
+    assert_file_exists "symlink-root source link resolves with suffix '$suffix'" "$markdown"
+  done < <(jq -r '.markdown_path' "$link_out")
+
+  LOG_BASE="$TMPDIR/linked-registry" build_finding_registry linked "$linked_root$suffix"
+  assert_success "symlink-root registry succeeds with suffix '$suffix'" "$?"
+  assert_eq "symlink-root registry retains all findings and excludes child links, suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$TMPDIR/linked-registry/final/findings.jsonl")"
+done
+
 finish

@@ -3486,7 +3486,14 @@ is_lens_completed() {
 }
 
 mark_lens_completed() {
-  echo "$1" >> "$completed_lenses_file"
+  # A full tuple may span multiple writes. Hold the receipt inode lock until
+  # its complete line is appended; the subshell closes the descriptor on exit.
+  (
+    local receipt_fd
+    exec {receipt_fd}>>"$completed_lenses_file" || exit 1
+    flock "$receipt_fd" || exit 1
+    printf '%s\n' "$1" >&"$receipt_fd"
+  )
 }
 
 LENS_HEARTBEAT_INTERVAL_DEFAULT=15
@@ -3546,16 +3553,30 @@ lens_heartbeat_iteration_path() {
   printf '%s/.%s.iteration\n' "$HEARTBEAT_DIR" "$key"
 }
 
-# Retire the previous unbounded paths before resuming a long lens, including
-# completed lenses and runs with heartbeats disabled. Ordinary keys stay intact.
+# Retire unbounded paths and stale canonical paths from older attributed runs,
+# including completed lenses and runs with heartbeats disabled. A live plain
+# investigation still owns its canonical heartbeat and must keep it.
 retire_legacy_lens_heartbeat() {
-  local domain="$1" lens_id="$2" legacy_key file
+  local domain="$1" lens_id="$2" lens_tuple="${3:-$1/$2}" legacy_key file key owner_pid
+  local -a legacy_keys=()
   legacy_key="$(sanitize_heartbeat_component "$domain")__$(sanitize_heartbeat_component "$lens_id")"
-  (( ${#legacy_key} > 200 )) || return 0
-  for file in "$HEARTBEAT_DIR/$legacy_key.json" "$HEARTBEAT_DIR/$legacy_key.json.tmp."* \
-    "$HEARTBEAT_DIR/.$legacy_key.iteration" "$HEARTBEAT_DIR/.$legacy_key.iteration.tmp."*; do
-    [[ -e "$file" || -L "$file" ]] || continue
-    rm -f -- "$file" || return 1
+  if (( ${#legacy_key} > 200 )); then legacy_keys+=("$legacy_key"); fi
+  if [[ "$lens_tuple" != "$domain/$lens_id" ]]; then
+    key="$(lens_heartbeat_key "$domain" "$lens_id")" || return 1
+    if [[ -f "$HEARTBEAT_DIR/$key.json" ]]; then
+      owner_pid="$(jq -r '.pid // 0' "$HEARTBEAT_DIR/$key.json" 2>/dev/null)" || return 0
+      if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+        return 0
+      fi
+      legacy_keys+=("$key")
+    fi
+  fi
+  for key in "${legacy_keys[@]}"; do
+    for file in "$HEARTBEAT_DIR/$key.json" "$HEARTBEAT_DIR/$key.json.tmp."* \
+      "$HEARTBEAT_DIR/.$key.iteration" "$HEARTBEAT_DIR/.$key.iteration.tmp."*; do
+      [[ -e "$file" || -L "$file" ]] || continue
+      rm -f -- "$file" || return 1
+    done
   done
   return 0
 }
@@ -4572,12 +4593,24 @@ run_lens() {
     fi
   fi
 
-  retire_legacy_lens_heartbeat "$domain" "$lens_id" || return 1
+  retire_legacy_lens_heartbeat "$domain" "$lens_id" "$lens_tuple" || return 1
 
   # Check resume
-  if is_lens_completed "$lens_entry"; then
+  if is_lens_completed "$lens_tuple"; then
     log_info "[$domain/$lens_id] Skipping (already completed in previous run)"
     return 0
+  fi
+
+  # Attributed investigations share a canonical lens but own their execution
+  # evidence and findings. Keep historical paths for plain lens dispatches.
+  local dispatch_path="" dispatch_key heartbeat_lens_id="$lens_id"
+  if [[ "$lens_tuple" != "$lens_entry" ]]; then
+    if ! dispatch_key="$(sha256_text "$lens_tuple")"; then
+      log_error "[$domain/$lens_id] Unable to derive dispatch artifact identity; leaving investigation pending."
+      return 1
+    fi
+    dispatch_path="/dispatch-$dispatch_key"
+    heartbeat_lens_id="dispatch-$dispatch_key"
   fi
 
   # Issue #380: resolve the effective agent for this lens (domain/lens > domain >
@@ -4694,8 +4727,8 @@ run_lens() {
   # Compose prompt (pass local mode params)
   local prompt="" lens_local_dir="" prompt_rc=0
   if $LOCAL_MODE; then
-    lens_local_dir="${CURRENT_ROUND_OUTPUT_DIR:-$OUTPUT_DIR}/$domain/$lens_id"
-    mkdir -p "$lens_local_dir"
+    lens_local_dir="${CURRENT_ROUND_OUTPUT_DIR:-$OUTPUT_DIR}/$domain/$lens_id$dispatch_path"
+    mkdir -p "$lens_local_dir" || return 1
     if [[ "$MODE" != "greenfield" ]]; then
       prompt="$(compose_prompt "$base_file" "$lens_file" "$vars" "$SPEC_FILE" "$MODE" "$MAX_ISSUES" "$SOURCE_FILE" "$HOSTED" "true" "$lens_local_dir")" || prompt_rc=$?
     fi
@@ -4714,8 +4747,8 @@ run_lens() {
   fi
 
   # Create lens log directory
-  local lens_log_dir="$LOG_BASE/$domain/$lens_id"
-  mkdir -p "$lens_log_dir"
+  local lens_log_dir="$LOG_BASE/$domain/$lens_id$dispatch_path"
+  mkdir -p "$lens_log_dir" || return 1
 
   local heartbeat_interval heartbeat_file heartbeat_iteration_file heartbeat_started_at heartbeat_owner_pid heartbeat_writer_pid
   local previous_exit_trap previous_exit_action
@@ -4727,8 +4760,8 @@ run_lens() {
   if (( heartbeat_interval > 0 )); then
     # Resolve both destinations before installing traps or starting either writer.
     # A failed hash must leave this lens pending, never write relative .tmp files.
-    if ! heartbeat_file="$(lens_heartbeat_path "$domain" "$lens_id")" \
-        || ! heartbeat_iteration_file="$(lens_heartbeat_iteration_path "$domain" "$lens_id")"; then
+    if ! heartbeat_file="$(lens_heartbeat_path "$domain" "$heartbeat_lens_id")" \
+        || ! heartbeat_iteration_file="$(lens_heartbeat_iteration_path "$domain" "$heartbeat_lens_id")"; then
       log_error "[$domain/$lens_id] Unable to derive heartbeat paths; stopping before agent dispatch."
       printf '%s\n' 'lens-execution-failed' > "$LOG_BASE/.systemic-failure-abort"
       set_stop_reason "$SUMMARY_FILE" "lens-execution-failed" || true
@@ -4798,10 +4831,24 @@ run_lens() {
     iteration=$((iteration + 1))
     local timestamp
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    local output_file="$lens_log_dir/iteration-${iteration}-${timestamp}.txt"
+    local output_file capture_allocation
+    # Native macOS mktemp requires trailing Xs. Add the forensic .txt suffix
+    # without replacing an older capture; mv -n can skip with exit status zero.
+    if ! capture_allocation="$(mktemp "$lens_log_dir/iteration-${iteration}-${timestamp}-XXXXXX")"; then
+      log_error "[$domain/$lens_id] Unable to allocate iteration capture; leaving investigation pending."
+      exit_status="lens-execution-failed"
+      break
+    fi
+    output_file="$capture_allocation.txt"
+    if ! mv -n "$capture_allocation" "$output_file" || [[ -e "$capture_allocation" ]]; then
+      rm -f -- "$capture_allocation"
+      log_error "[$domain/$lens_id] Unable to reserve iteration capture; leaving investigation pending."
+      exit_status="lens-execution-failed"
+      break
+    fi
     local envelope_file="$output_file.envelope.json"
     local output_envelope_file
-    output_envelope_file="$LOG_BASE/output/$domain/$lens_id/$(basename "$output_file").envelope.json"
+    output_envelope_file="$LOG_BASE/output/$domain/$lens_id$dispatch_path/$(basename "$output_file").envelope.json"
 
     log_info "[$domain/$lens_id] Iteration $iteration"
     if (( heartbeat_interval > 0 )); then
@@ -5085,12 +5132,16 @@ run_lens() {
   (( lens_duration_seconds < 0 )) && lens_duration_seconds=0
   record_lens "$SUMMARY_FILE" "$domain" "$lens_id" "$iteration" "$exit_status" "$lens_issues" "$rate_limit_sleep_seconds" \
     "$lens_start_iso" "$lens_end_iso" "$lens_duration_seconds" "$findings_drafted"
+  local completion_rc=0
   if [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
       && "$exit_status" != "auth-expired" && "$exit_status" != "model-unavailable" \
       && "$exit_status" != "budget-exhausted" && "$exit_status" != "agent-refused" \
       && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" \
-      && "$exit_status" != "prompt-render-failed" ]]; then
-    mark_lens_completed "$lens_entry"
+      && "$exit_status" != "prompt-render-failed" && "$exit_status" != "lens-execution-failed" ]]; then
+    mark_lens_completed "$lens_tuple" || completion_rc=$?
+    if (( completion_rc != 0 )); then
+      log_error "[$domain/$lens_id] Unable to persist dispatch completion; leaving investigation pending."
+    fi
   fi
 
   # Compress this lens's forensic iteration captures, keeping the most recent
@@ -5111,10 +5162,10 @@ run_lens() {
   log_info "[$domain/$lens_id] Finished after $iteration iteration(s), $lens_issues issue(s)"
   # The callback is an independent failure channel when marker persistence fails.
   case "$exit_status" in
-    prompt-render-failed|auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error)
+    lens-execution-failed|prompt-render-failed|auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error)
       return 1 ;;
   esac
-  return 0
+  return "$completion_rc"
 }
 
 # --- Phase execution state ---
