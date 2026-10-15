@@ -1057,54 +1057,101 @@ _rounds_meta_custom_focus_body() {
   fi
 }
 
+# Materialize a dispatch entry idempotently. Existing matching content belongs
+# to a prior attempt; IDs already claimed in this dispatch remain collisions.
 _rounds_meta_write_custom_lens() {
-  local custom_lenses_dir="$1" payload="$2" index="$3"
-  local category base_slug slug lens_dir lens_file focus_body
+  local custom_lenses_dir="$1" payload="$2" reserved_entries="${4:-}"
+  local category base_slug slug lens_dir lens_file focus_body lens_content saved_content tmp_file
+  local role focus anchor exclude dispatch_attributes=""
   local round_prefix="" collision_suffix=2
+  local fallback=0 candidate_file candidate_slug candidate_index=0
+  local name_max digest
+  local -a fallback_slugs=()
 
   category="$(_rounds_meta_custom_category_from_payload "$payload")" || return 1
   base_slug="$(_rounds_meta_slug "$category")"
-  [[ -n "$base_slug" ]] || base_slug="custom-$index"
-
-  # Bug 1 — cross-round disambiguation. When CURRENT_ROUND_INDEX is set
-  # (multi-round mode), prefix the slug with r<N>- so the same agent-named
-  # category in round 2 and round 3 produces distinct lens IDs.
+  # The third argument is a legacy dispatch index, never investigation identity.
+  if [[ -z "$base_slug" ]]; then base_slug="custom"; fallback=1; fi
   if [[ -n "${CURRENT_ROUND_INDEX:-}" && "$CURRENT_ROUND_INDEX" =~ ^[0-9]+$ ]]; then
     round_prefix="r${CURRENT_ROUND_INDEX}-"
   fi
-
   slug="${round_prefix}${base_slug}"
   lens_dir="$custom_lenses_dir/custom"
-  lens_file="$lens_dir/$slug.md"
-
   mkdir -p "$lens_dir" || return 1
+  name_max="$(getconf NAME_MAX "$lens_dir")" || return 1
+  [[ "$name_max" =~ ^[0-9]+$ ]] || return 1
+  focus_body="$(_rounds_meta_custom_focus_body "$payload")" || return 1
+  _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
+  if [[ -n "$role$focus$anchor$exclude" ]]; then
+    dispatch_attributes="$(jq -cn --args '$ARGS.positional' -- "$role" "$focus" "$anchor" "$exclude")" || return 1
+  fi
 
-  # Bug 2 — same-round collision counter. Two distinct categories that
-  # slugify identically (e.g. "Payment retry race!" and "payment-retry race")
-  # would otherwise overwrite each other. Append -2, -3, ... until we land
-  # on a free filename.
-  while [[ -e "$lens_file" ]]; do
-    slug="${round_prefix}${base_slug}-${collision_suffix}"
+  if (( fallback )); then
+    # Search the entire legacy custom-N pool, including old collision suffixes,
+    # before allocating. A gap must not hide matching work at a higher index.
+    for candidate_file in "$lens_dir/${round_prefix}custom-"*.md; do
+      candidate_slug="${candidate_file##*/}"
+      candidate_slug="${candidate_slug%.md}"
+      if [[ "$candidate_slug" =~ ^${round_prefix}custom-[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+        fallback_slugs+=("$candidate_slug")
+      fi
+    done
+    slug="${round_prefix}custom-1"
+    while [[ -e "$lens_dir/$slug.md" || -L "$lens_dir/$slug.md" ]]; do
+      slug="${round_prefix}custom-${collision_suffix}"
+      collision_suffix=$((collision_suffix + 1))
+    done
+    fallback_slugs+=("$slug")
+  fi
+
+  while :; do
+    if (( fallback )); then
+      (( candidate_index < ${#fallback_slugs[@]} )) || return 1
+      slug="${fallback_slugs[$candidate_index]}"
+      candidate_index=$((candidate_index + 1))
+    fi
+    # Keep existing valid IDs, shortening only candidates that exceed the
+    # destination's filename limit. Hash the full candidate, including its
+    # collision suffix, so truncated categories and retries stay distinct.
+    if (( ${#slug} + 3 > name_max )); then
+      digest="$(sha256_text "$slug")" || return 1
+      slug="${slug:0:$((name_max - 36))}-${digest:0:32}"
+    fi
     lens_file="$lens_dir/$slug.md"
-    collision_suffix=$(( collision_suffix + 1 ))
+    lens_content="$(
+      printf -- '---\n'
+      printf 'id: %s\n' "$slug"
+      printf 'domain: custom\n'
+      printf 'name: Custom %s\n' "$slug"
+      printf 'role: meta-orchestrator custom follow-up\n'
+      if [[ -n "$dispatch_attributes" ]]; then
+        printf 'dispatch_attributes: %s\n' "$dispatch_attributes"
+      fi
+      printf -- '---\n'
+      printf '## Your Expert Focus\n\n'
+      printf 'Category: %s\n\n' "$category"
+      if [[ -n "$focus_body" ]]; then printf '%s\n' "$focus_body"; fi
+    )" || return 1
+    if [[ ! -e "$lens_file" && ! -L "$lens_file" ]]; then break; fi
+    if [[ -f "$lens_file" && ! -L "$lens_file" && " $reserved_entries " != *" custom/$slug "* ]]; then
+      saved_content="$(cat "$lens_file")" || return 1
+      if [[ "$saved_content" == "$lens_content" ]]; then
+        printf 'custom/%s\n' "$slug"
+        return 0
+      fi
+    fi
+    if (( fallback )); then continue; fi
+    slug="${round_prefix}${base_slug}-${collision_suffix}"
+    collision_suffix=$((collision_suffix + 1))
   done
 
-  focus_body="$(_rounds_meta_custom_focus_body "$payload")"
-
-  {
-    printf -- '---\n'
-    printf 'id: %s\n' "$slug"
-    printf 'domain: custom\n'
-    printf 'name: Custom %s\n' "$slug"
-    printf 'role: meta-orchestrator custom follow-up\n'
-    printf -- '---\n'
-    printf '## Your Expert Focus\n\n'
-    printf 'Category: %s\n\n' "$category"
-    if [[ -n "$focus_body" ]]; then
-      printf '%s\n' "$focus_body"
-    fi
-  } > "$lens_file" || return 1
-
+  # Failed writes must not leave a truncated canonical file that changes the
+  # next attempt's collision suffix.
+  tmp_file="$(mktemp "$lens_dir/.custom-lens.XXXXXX")" || return 1
+  if ! printf '%s\n' "$lens_content" > "$tmp_file" || ! mv -f -- "$tmp_file" "$lens_file"; then
+    rm -f -- "$tmp_file"
+    return 1
+  fi
   printf 'custom/%s\n' "$slug"
 }
 
@@ -1139,6 +1186,17 @@ _rounds_meta_custom_attrs_from_payload() {
   printf -v "$exclude_var" '%s' "$_attr_exclude"
 }
 
+# Identity includes all prompt inputs, with normalized header attributes and
+# extracted body. JSON preserves field boundaries even with pipes or newlines.
+_rounds_meta_custom_identity() {
+  local payload="$1" category focus_body role focus anchor exclude
+  category="$(_rounds_meta_custom_category_from_payload "$payload")" || return 1
+  [[ -n "$category" ]] || return 1
+  focus_body="$(_rounds_meta_custom_focus_body "$payload")" || return 1
+  _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
+  jq -cn --args '$ARGS.positional' -- "$category" "$focus_body" "$role" "$focus" "$anchor" "$exclude"
+}
+
 _rounds_meta_dispatch_custom_entries() {
   local dispatch_file="$1" custom_lenses_dir="$2"
   local line trimmed payload="" custom_entry index=0
@@ -1160,13 +1218,15 @@ _rounds_meta_dispatch_custom_entries() {
 
     if (( in_custom )) && (( in_fence == 0 )) && _rounds_meta_dispatch_boundary "$trimmed"; then
       index=$((index + 1))
-      if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index")"; then
+      if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index" "${!seen_entries[*]}")"; then
         if [[ -z "${seen_entries[$custom_entry]:-}" ]]; then
           seen_entries["$custom_entry"]=1
           _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
           tuple="$(_rounds_meta_tuple_serialize "$custom_entry" "$role" "$focus" "$anchor" "$exclude")"
           printf '%s\n' "$tuple"
         fi
+      else
+        return 1
       fi
       payload=""
       in_custom=0
@@ -1190,15 +1250,18 @@ _rounds_meta_dispatch_custom_entries() {
       _rounds_meta_warn "Custom dispatch payload reached EOF with an unclosed fence; flushing as-is."
     fi
     index=$((index + 1))
-    if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index")"; then
+    if custom_entry="$(_rounds_meta_write_custom_lens "$custom_lenses_dir" "$payload" "$index" "${!seen_entries[*]}")"; then
       if [[ -z "${seen_entries[$custom_entry]:-}" ]]; then
         seen_entries["$custom_entry"]=1
         _rounds_meta_custom_attrs_from_payload "$payload" role focus anchor exclude
         tuple="$(_rounds_meta_tuple_serialize "$custom_entry" "$role" "$focus" "$anchor" "$exclude")"
         printf '%s\n' "$tuple"
       fi
+    else
+      return 1
     fi
   fi
+  return 0
 }
 
 _rounds_meta_dispatch_has_entries() {
@@ -1262,7 +1325,7 @@ _rounds_meta_extract_hypotheses() {
 
 _rounds_meta_parse_output() {
   local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
-  local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_category
+  local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_identity
   local lens_attrs lens_dispatch_line generic_attrs generic_dispatch_line stripped attr_body
   local role focus anchor exclude missed_angle dedup_key
   local in_custom=0 in_fence=0
@@ -1284,9 +1347,9 @@ _rounds_meta_parse_output() {
     fi
 
     if (( in_custom )) && (( in_fence == 0 )) && _rounds_meta_dispatch_boundary "$trimmed"; then
-      custom_category="$(_rounds_meta_custom_category_from_payload "$custom_payload")"
-      if [[ -n "$custom_category" && -z "${seen_custom[$custom_category]:-}" ]]; then
-        seen_custom["$custom_category"]=1
+      custom_identity="$(_rounds_meta_custom_identity "$custom_payload")" || return 1
+      if [[ -z "${seen_custom[$custom_identity]:-}" ]]; then
+        seen_custom["$custom_identity"]=1
         custom_payloads+=("$custom_payload")
       fi
       custom_payload=""
@@ -1383,9 +1446,9 @@ _rounds_meta_parse_output() {
     if (( in_fence )); then
       _rounds_meta_warn "Meta-orchestrator output reached EOF with an unclosed CUSTOM fence; flushing as-is."
     fi
-    custom_category="$(_rounds_meta_custom_category_from_payload "$custom_payload")"
-    if [[ -n "$custom_category" && -z "${seen_custom[$custom_category]:-}" ]]; then
-      seen_custom["$custom_category"]=1
+    custom_identity="$(_rounds_meta_custom_identity "$custom_payload")" || return 1
+    if [[ -z "${seen_custom[$custom_identity]:-}" ]]; then
+      seen_custom["$custom_identity"]=1
       custom_payloads+=("$custom_payload")
     fi
   fi
@@ -2283,7 +2346,7 @@ _rounds_agent_abort_reason() {
     local systemic_reason
     systemic_reason="$(head -n 1 "$LOG_BASE/.systemic-failure-abort" 2>/dev/null || true)"
     case "$systemic_reason" in
-      auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error|prompt-render-failed)
+      auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error|prompt-render-failed|lens-execution-failed)
         printf '%s\n' "$systemic_reason"
         ;;
       *)
@@ -2537,6 +2600,17 @@ run_rounds() {
         dispatched_lenses_output="$(_rounds_meta_dispatch_lens_entries "$dispatch_path")"
         round_custom_lenses_dir="${dispatch_path%/*}/custom-lenses"
         dispatched_custom_output="$(_rounds_meta_dispatch_custom_entries "$dispatch_path" "$round_custom_lenses_dir")"
+        round_rc=$?
+        if (( round_rc != 0 )); then
+          ROUNDS_FAILURE_REASON="custom-lens-materialization-failed"
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          else
+            set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON"
+          fi
+          log_warn "[round $round/$rounds_total] Custom lens materialization failed; round remains pending"
+          return "$round_rc"
+        fi
         dispatched_generic_output="$(_rounds_meta_dispatch_generic_entries "$dispatch_path")"
         if _rounds_meta_dispatch_has_entries "$dispatch_path"; then
           dispatch_has_entries=1
@@ -2571,6 +2645,15 @@ run_rounds() {
     # Eligibility is evaluated before callbacks: newly finished work needs a
     # fresh handoff. Restore saturation before considering completion markers.
     if _rounds_all_lenses_completed "$round_completed_lenses_file" "${active_lens_list[@]}"; then
+      # These shortcuts bypass run_lens, including its legacy heartbeat cleanup.
+      if declare -F retire_legacy_lens_heartbeat >/dev/null 2>&1; then
+        # shellcheck disable=SC2034 # Tuple parser requires outputs for unused dispatch attributes.
+        local completed_entry completed_role completed_focus completed_anchor completed_exclude
+        for lens_entry in "${active_lens_list[@]}"; do
+          _rounds_meta_tuple_parse "$lens_entry" completed_entry completed_role completed_focus completed_anchor completed_exclude
+          retire_legacy_lens_heartbeat "${completed_entry%%/*}" "${completed_entry#*/}" || return 1
+        done
+      fi
       if (( round < rounds_total )); then
         _rounds_meta_restore_success "$current_round_dir"
         round_rc=$?

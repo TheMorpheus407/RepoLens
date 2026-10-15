@@ -23,6 +23,8 @@ source "$SCRIPT_DIR/lib/forge.sh"
 # shellcheck source=lib/filing.sh
 source "$SCRIPT_DIR/lib/filing.sh"
 TMP="$(mktemp -d)"
+# Keep fixture file setup independent of the governor's PROJECT_PATH global.
+test_project_path="$TMP/project"
 trap 'rm -rf "$TMP"' EXIT
 PASS=0 FAIL=0
 check() {
@@ -97,12 +99,12 @@ gh() {
 }
 fresh() {
   rm -rf "$TMP/run"
-  LOG_BASE="$TMP/run" PROJECT_PATH="$TMP/project"
+  LOG_BASE="$TMP/run" PROJECT_PATH="$test_project_path"
   FORGE_REPO='acme/origin' REPO_NAME='wrong-checkout-name' FORGE_PROVIDER=gh FORGE_HOST=github.com
   MODE=audit FAULT='' STUB_URL_REPO=''
   unset REPOLENS_MODE
-  mkdir -p "$LOG_BASE/final/filed" "$PROJECT_PATH/src"
-  printf 'return 0\n' > "$PROJECT_PATH/src/a.sh"
+  mkdir -p "$LOG_BASE/final/filed" "$test_project_path/src"
+  printf 'return 0\n' > "$test_project_path/src/a.sh"
   printf '[]\n' > "$TMP/issues.json"
   : > "$TMP/calls"
   : > "$TMP/hosts"
@@ -135,7 +137,7 @@ fresh
 set_body 'src/a.sh:1 observed at 12:30 and https://example.org:8443/status plus `http://127.0.0.1:8080` and `12:30` and `12:30:45`'
 check 'timestamps and URL ports are not mistaken for citations' run
 fresh
-cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/with spaces.sh"
+cp "$test_project_path/src/a.sh" "$test_project_path/src/with spaces.sh"
 set_body '`src/with spaces.sh:1` — `return 0`'
 check 'quoted citations support spaces in source paths' run
 
@@ -182,7 +184,7 @@ for body in 'src/missing.sh:1' 'src/a.sh:999' 'src/a.sh:1 — `phantom`' '../out
   check "unverified body never reaches create: $body" no_create
 done
 fresh
-ln -s "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/link.sh"
+ln -s "$test_project_path/src/a.sh" "$test_project_path/link.sh"
 set_body 'link.sh:1'
 run || true
 check 'symlink citation never reaches create' no_create
@@ -356,8 +358,8 @@ for prose_body in 'Follow-up with no new citations.' \
     '<**`src/with,semicolon;.sh:1`**,**src/a.sh:1**>'; do
   fresh
   CROSS_LINK_MODE=comment
-  cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/with spaces.sh"
-  cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/with,semicolon;.sh"
+  cp "$test_project_path/src/a.sh" "$test_project_path/src/with spaces.sh"
+  cp "$test_project_path/src/a.sh" "$test_project_path/src/with,semicolon;.sh"
   jq --arg body "$prose_body" \
     '.[0].cross_link_actions=[{type:"comment",issue_number:9,body:$body}]' \
     "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
@@ -383,7 +385,7 @@ for fenced_case in missing line scope; do
     scope)
       MODE=branch-review BRANCH_SCOPE_FILE="$TMP/scope.json"
       printf '["src/a.sh"]\n' > "$BRANCH_SCOPE_FILE"
-      cp "$PROJECT_PATH/src/a.sh" "$PROJECT_PATH/src/support.sh"
+      cp "$test_project_path/src/a.sh" "$test_project_path/src/support.sh"
       fenced_reference='src/support.sh:1'; fenced_reason='out-of-scope citation'
       ;;
   esac

@@ -2650,7 +2650,7 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
 fi
 # A failed marker write must not leave an old execution error on a successful retry.
 if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
-    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|process-scope-cleanup-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
+    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|custom-lens-materialization-failed|process-scope-cleanup-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
@@ -3518,20 +3518,43 @@ sanitize_heartbeat_component() {
 
 lens_heartbeat_key() {
   local domain="$1" lens_id="$2"
-  local safe_domain safe_lens_id
+  local safe_domain safe_lens_id key
   safe_domain="$(sanitize_heartbeat_component "$domain")"
   safe_lens_id="$(sanitize_heartbeat_component "$lens_id")"
-  printf '%s__%s\n' "$safe_domain" "$safe_lens_id"
+  key="${safe_domain}__${safe_lens_id}"
+  # Reserve space for heartbeat/iteration extensions and atomic-write suffixes.
+  # The JSON still reports the original canonical domain and lens ID.
+  if (( ${#key} > 200 )); then
+    key="$(sha256_text "$key")" || return 1
+    key="long-$key"
+  fi
+  printf '%s\n' "$key"
 }
 
 lens_heartbeat_path() {
-  local domain="$1" lens_id="$2"
-  printf '%s/%s.json\n' "$HEARTBEAT_DIR" "$(lens_heartbeat_key "$domain" "$lens_id")"
+  local domain="$1" lens_id="$2" key
+  key="$(lens_heartbeat_key "$domain" "$lens_id")" || return 1
+  printf '%s/%s.json\n' "$HEARTBEAT_DIR" "$key"
 }
 
 lens_heartbeat_iteration_path() {
-  local domain="$1" lens_id="$2"
-  printf '%s/.%s.iteration\n' "$HEARTBEAT_DIR" "$(lens_heartbeat_key "$domain" "$lens_id")"
+  local domain="$1" lens_id="$2" key
+  key="$(lens_heartbeat_key "$domain" "$lens_id")" || return 1
+  printf '%s/.%s.iteration\n' "$HEARTBEAT_DIR" "$key"
+}
+
+# Retire the previous unbounded paths before resuming a long lens, including
+# completed lenses and runs with heartbeats disabled. Ordinary keys stay intact.
+retire_legacy_lens_heartbeat() {
+  local domain="$1" lens_id="$2" legacy_key file
+  legacy_key="$(sanitize_heartbeat_component "$domain")__$(sanitize_heartbeat_component "$lens_id")"
+  (( ${#legacy_key} > 200 )) || return 0
+  for file in "$HEARTBEAT_DIR/$legacy_key.json" "$HEARTBEAT_DIR/$legacy_key.json.tmp."* \
+    "$HEARTBEAT_DIR/.$legacy_key.iteration" "$HEARTBEAT_DIR/.$legacy_key.iteration.tmp."*; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    rm -f -- "$file" || return 1
+  done
+  return 0
 }
 
 read_lens_heartbeat_iteration() {
@@ -4546,6 +4569,8 @@ run_lens() {
     fi
   fi
 
+  retire_legacy_lens_heartbeat "$domain" "$lens_id" || return 1
+
   # Check resume
   if is_lens_completed "$lens_entry"; then
     log_info "[$domain/$lens_id] Skipping (already completed in previous run)"
@@ -4692,13 +4717,21 @@ run_lens() {
   local heartbeat_interval heartbeat_file heartbeat_iteration_file heartbeat_started_at heartbeat_owner_pid heartbeat_writer_pid
   local previous_exit_trap previous_exit_action
   heartbeat_interval="$(resolve_lens_heartbeat_interval)"
-  heartbeat_file="$(lens_heartbeat_path "$domain" "$lens_id")"
-  heartbeat_iteration_file="$(lens_heartbeat_iteration_path "$domain" "$lens_id")"
   heartbeat_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   heartbeat_owner_pid="$BASHPID"
   heartbeat_writer_pid=""
 
   if (( heartbeat_interval > 0 )); then
+    # Resolve both destinations before installing traps or starting either writer.
+    # A failed hash must leave this lens pending, never write relative .tmp files.
+    if ! heartbeat_file="$(lens_heartbeat_path "$domain" "$lens_id")" \
+        || ! heartbeat_iteration_file="$(lens_heartbeat_iteration_path "$domain" "$lens_id")"; then
+      log_error "[$domain/$lens_id] Unable to derive heartbeat paths; stopping before agent dispatch."
+      printf '%s\n' 'lens-execution-failed' > "$LOG_BASE/.systemic-failure-abort"
+      set_stop_reason "$SUMMARY_FILE" "lens-execution-failed" || true
+      record_lens "$SUMMARY_FILE" "$domain" "$lens_id" 0 "lens-execution-failed" 0 0
+      return 1
+    fi
     previous_exit_trap="$(trap -p EXIT || true)"
     previous_exit_action="$(extract_exit_trap_action "$previous_exit_trap")"
     _REPOLENS_LENS_PREVIOUS_EXIT_ACTION="$previous_exit_action"

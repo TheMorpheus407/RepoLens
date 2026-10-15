@@ -18,6 +18,11 @@
 # Uses a file-based semaphore approach for controlling max concurrent processes.
 # Background child PIDs are tracked for cleanup on SIGINT/SIGTERM.
 
+if ! declare -F sha256_text >/dev/null 2>&1; then
+  # shellcheck source=lib/core.sh
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/core.sh"
+fi
+
 # shellcheck source=lib/process_scope.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/process_scope.sh"
 
@@ -299,6 +304,15 @@ _sem_token_path() {
   local lens_id="$1" token_id
   token_id="${lens_id//[![:alnum:]_.-]/_}"
   [[ -n "$token_id" ]] || token_id="lens"
+  # Leave room for the token extension and mktemp suffix without changing
+  # the canonical completion ID or ordinary token filenames. Count bytes after
+  # sanitization: UTF-8 letters can survive the caller's locale-aware pattern.
+  local LC_ALL=C
+  if (( ${#token_id} > 200 )); then
+    token_id="$(sha256_text "$lens_id")" || return 1
+    # The + delimiter cannot occur in a sanitized short ID.
+    token_id="long+$token_id"
+  fi
   printf '%s/%s.token\n' "$_REPOLENS_SEM_DIR" "$token_id"
 }
 
@@ -307,7 +321,7 @@ _sem_token_path() {
 sem_token_create() {
   local lens_id="$1" token tmp
 
-  token="$(_sem_token_path "$lens_id")"
+  token="$(_sem_token_path "$lens_id")" || return 1
   tmp="$(mktemp "$_REPOLENS_SEM_DIR/.${token##*/}.XXXXXX")" || return 1
   {
     printf 'owner=%s\n' "${_REPOLENS_SEM_OWNER:-manual:$$}"
@@ -326,7 +340,9 @@ sem_token_create() {
 # sem_token_remove <lens_id>
 #   Remove the token file for this lens.
 sem_token_remove() {
-  rm -f "$(_sem_token_path "$1")"
+  local token
+  token="$(_sem_token_path "$1")" || return 1
+  rm -f "$token"
 }
 
 _format_elapsed() {

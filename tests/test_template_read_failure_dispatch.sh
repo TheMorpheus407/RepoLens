@@ -152,7 +152,8 @@ for mode in audit greenfield; do
       source "$SCRIPT_DIR/lib/clean.sh"
       retry_is_complete() { ! _clean_is_incomplete "$1"; }
       for previous_reason in prompt-render-failed lens-execution-failed \
-          interrupted-sighup interrupted-sigint interrupted-sigterm process-scope-cleanup-failed; do
+          interrupted-sighup interrupted-sigint interrupted-sigterm process-scope-cleanup-failed \
+          custom-lens-materialization-failed; do
         jq --arg reason "$previous_reason" '.stopped_reason = $reason' "$LOG_BASE/summary.json" > "$LOG_BASE/seed.json"
         mv "$LOG_BASE/seed.json" "$LOG_BASE/summary.json"
         env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \

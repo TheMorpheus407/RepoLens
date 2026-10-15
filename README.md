@@ -815,7 +815,7 @@ Inspect the file from another terminal while a run is active:
 jq . logs/<run-id>/.heartbeat/<domain>__<lens-id>.json
 ```
 
-The file is rewritten atomically while the lens is active and removed after clean lens completion. If the process dies abnormally, the last heartbeat is left behind so status tools and operators can treat it as stale. The JSON contains `run_id`, `domain`, `lens_id`, numeric `pid`, current `iteration`, `started_at`, `last_heartbeat_at`, and `state: "running"`.
+The file is rewritten atomically while the lens is active and removed after clean lens completion. Long internal filenames use a deterministic hash; resuming those lenses retires their older unbounded heartbeat paths, including when a completed round skips its lens callbacks. If hashing fails, the lens stays pending and stops before agent dispatch; repair the SHA-256 tool and resume. Disabled heartbeats skip path hashing. If the process dies abnormally, the last heartbeat is left behind so status tools and operators can treat it as stale. The JSON contains `run_id`, `domain`, `lens_id`, numeric `pid`, current `iteration`, `started_at`, `last_heartbeat_at`, and `state: "running"`.
 
 ### Run Status Snapshot
 
@@ -1000,7 +1000,9 @@ If a run is interrupted, crashes, or ends as `rate-limit-pending`, resume it:
 ./repolens.sh --project ~/my-app --agent claude --resume 20260315T120000Z-a1b2c3d4
 ```
 
-Completed lenses are skipped; unfinished and rate-limited lenses are retried. A failed between-round handoff is retried after its cause is resolved. A saved, verified successful handoff is reused if completion persistence failed, preserving its selection, hypotheses, and saturation result without another meta agent call. Selecting unfinished lenses retires an older handoff before that work starts; resume then obtains a fresh handoff. The run ID is printed at startup and found in `logs/`.
+Completed lenses are skipped; unfinished and rate-limited lenses are retried. A failed between-round handoff is retried after its cause is resolved. A saved, verified successful handoff is reused if completion persistence failed, preserving its selection, hypotheses, and saturation result without another meta agent call. Selecting unfinished lenses retires an older handoff before that work starts; resume then obtains a fresh handoff.
+
+Custom investigations reuse their saved IDs only when category, extracted prompt body and effective dispatch attributes match. Distinct same-category investigations keep separate IDs. Names that exceed the destination filesystem's filename limit are shortened with a deterministic hash; existing valid IDs remain unchanged. Hashing long names requires `sha256sum`, `shasum`, or `openssl`, including in sequential mode; it does not require Python. Categories without ASCII letters or digits use a shared, round-specific `custom-N` pool, so reordering also preserves their saved IDs, including legacy matches beyond numbering gaps. Attributed lenses saved by older versions without attribute metadata may run once more to establish a safe identity. If a custom lens cannot be written, the round remains pending; resolve the write failure and resume. The run ID is printed at startup and found in `logs/`.
 
 Resume **reuses the same `logs/<run-id>/` directory** — it does not create a new sibling run. Lenses that already finished are recorded in `logs/<run-id>/.completed` and are skipped on resume; only unfinished and rate-limited lenses run again. You can **narrow a resume** by adding `--focus <lens-id>` or `--domain <domain-id>`: only those lenses run, and their results merge into the same run rather than starting a fresh directory.
 

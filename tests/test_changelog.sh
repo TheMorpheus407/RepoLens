@@ -359,7 +359,7 @@ TOTAL=$((TOTAL + 1))
 cli_modes="audit feature bugfix discover deploy custom opensource content"
 missing_modes=""
 for mode in $cli_modes; do
-  if ! echo "$changelog_content" | grep -qw "${mode}"; then
+  if ! grep -qw "${mode}" <<< "$changelog_content"; then
     missing_modes="$missing_modes $mode"
   fi
 done
