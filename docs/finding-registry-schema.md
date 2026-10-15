@@ -17,7 +17,18 @@ It is built from the existing finding outputs; it does not replace them.
   and the `validate_manifest` schema block). `manifest.json` is the upstream
   source; the registry builder reads it and writes one normalized record per
   finding.
-- **`--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
+- **`--local` multi-round runs with default output** use the synthesized
+  manifest alone when it exists. Raw Markdown cannot reintroduce findings
+  excluded by verification or synthesis. Manifest ingestion preserves duplicate
+  status and `also_reported_by` provenance, and links `markdown_path` to the
+  absolute path of the first existing file in `source_finding_paths` without
+  reading source contents. Relative contributor Markdown links are also made
+  absolute so they resolve from `DUPLICATES.md` under `final/`. The original
+  manifest and `source_finding_paths` remain unchanged.
+  Relative source and contributor paths resolve from `--project`, where the
+  synthesizer runs, even when RepoLens is launched from another directory.
+  Standalone library callers without `PROJECT_PATH` use their current directory.
+- **Other `--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
   (`lib/template.sh`, LOCAL MODE OVERRIDE block, ~line 521). The builder reads
   that frontmatter and emits one normalized record per file. It preserves local
   dedupe's `status: duplicate` marks only when their direct relative
@@ -30,6 +41,12 @@ It is built from the existing finding outputs; it does not replace them.
   links reconstruct `also_reported_by` contributors on canonical records;
   referenced paths are never opened.
 
+An explicit `--output` uses a shared Markdown directory outside the round-only
+verifier/synthesizer inventory. It retains direct Markdown indexing, even when
+round synthesis writes an empty manifest; these findings have not been checked
+by that cross-round verifier. Without a manifest, default local output also
+uses direct Markdown indexing.
+
 The registry collapses identical IDs to one record, preferring a non-duplicate
 record over a marked duplicate while preserving the ID's first position.
 Otherwise the first record wins (manifest before local). Colliding non-duplicate
@@ -40,12 +57,15 @@ the registry retains those records when their IDs differ from the canonical ID.
 
 Because the registry is derived, several fields below are **added or derived by
 the builder** and are present in neither upstream source (notably `id`,
-`confidence`, `primary_location`, `status`, `type`, `duplicate_group`,
-`validation`). Do not conflate the synthesizer's per-run `cluster_id` (a
+`confidence`, `primary_location`, `type`, `duplicate_group`, `validation`).
+`status` also preserves upstream duplicate marks. Do not conflate the synthesizer's per-run `cluster_id` (a
 non-stable grouping handle) with the registry `id` (content-derived, stable).
 
-**Empty run:** an empty manifest is `[]`; the corresponding registry is an
-**empty `findings.jsonl`** (zero lines) plus a **header-only `findings.csv`**.
+**Empty run:** an authoritative empty manifest is `[]`; the corresponding registry
+is an **empty `findings.jsonl`** (zero lines) plus a **header-only `findings.csv`**.
+After a successful empty local rebuild, finalization removes stale `TODO.md`,
+`SUMMARY.md`, `NEEDS_REVIEW.md` and `DUPLICATES.md`. Failed or interrupted rebuilds
+retain existing reports. Raw Markdown evidence is retained in every case.
 
 ## Record schema
 
@@ -63,7 +83,7 @@ One JSON object per line in `findings.jsonl`, with these 13 fields:
 | `primary_location` | string | `"file:line"` or `""` (empty) | **derived by the builder** (#314 / #319) from finding content — present in neither upstream source. This doc defines the field shape only; it does not invent an extraction algorithm. |
 | `confidence` | number | float in `[0, 1]` | consumed by risk ranking (#315: `severity rank × confidence`). `low` \| `medium` \| `high` are accepted only as **optional authoring aliases** that normalize to numeric (mapping owned by triage / #315), never as the stored type. |
 | `duplicate_group` | string or null | opaque group key; `null` when the finding is not part of a duplicate cluster | dedup internals owned by the **dedupe** agent (#316 canonical selection, #322 matching, #335 marking, #353 thresholds, #343 over `--local`). |
-| `markdown_path` | string | path to the `NNN-<slug>.md` file when one exists; `""` (or absent) otherwise | present for `--local` findings; bugreport-only findings may have none. Consumed by triage artifacts and html-report. |
+| `markdown_path` | string or null | path to the source Markdown when available; `null` otherwise (legacy inputs may use `""` or omit it) | populated by local ingestion or from the first existing manifest source file. Consumed by triage artifacts and html-report. |
 | `validation` | object | opaque object slot (may be `{}`) | **contents owned by the `validation-hints` agent**: #317 (block contract), #332 (parser → structured object), #345 (proof-anchor validator), #334 (status classifier). This doc records only that the key exists and is an object. |
 | `complexity` | number or null | integer `1`–`5`, or `null` | **optional routing tier authored by the audit model (#385)**. Estimates the implementation *effort* to fix the finding — orthogonal to `severity`. Absent, non-integer, or out-of-range (`0`, `6`, …) normalizes to `null` (rejected, never clamped). Consumed by downstream semantic model routing. |
 

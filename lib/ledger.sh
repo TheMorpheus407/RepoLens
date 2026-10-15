@@ -263,8 +263,15 @@ _ledger_resolve_finding_type() {
 #   - duplicate_group is SEEDED from cluster_id; the final dedup grouping is
 #               owned by the dedupe agent (#316/#322/#335). cluster_id is a
 #               per-run, non-stable handle and must not be confused with id.
-#   - type/confidence/markdown_path are null and primary_location is "";
-#     validation is an empty object {}. These are owned by sibling agents.
+#   - synthesized status="duplicate" remains duplicate for report exclusion.
+#   - markdown_path is the absolute path of the first existing source finding
+#     file, else null (so links work from reports under final/).
+#     Relative paths use PROJECT_PATH, the synthesizer's working directory,
+#     falling back to the caller's directory for standalone library use.
+#     Source files are only checked for existence, never read.
+#   - also_reported_by passes through when it is a non-empty array, with
+#     relative Markdown links made absolute for reports under final/.
+#   - confidence is null, primary_location is "", validation is {}.
 #   - source_finding_paths is passed through verbatim so siblings can trace
 #     the underlying evidence.
 #
@@ -288,7 +295,9 @@ build_findings_jsonl_from_manifest() {
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
-  local count i entry domain lens title raw_sev sev vstatus status id raw_type ftype cx
+  local count i entry domain lens title raw_sev sev vstatus status id raw_type ftype cx md source_path source_base
+  source_base="${PROJECT_PATH:-$PWD}"
+  [[ "$source_base" == /* ]] || source_base="$PWD/$source_base"
   count="$(jq 'length' "$manifest")" || { rm -f "$tmp"; return 1; }
   for (( i = 0; i < count; i++ )); do
     entry="$(jq -c --argjson i "$i" '.[$i]' "$manifest")" || { rm -f "$tmp"; return 1; }
@@ -316,10 +325,22 @@ build_findings_jsonl_from_manifest() {
       stale) status="needs-validation" ;;
     esac
 
+    if [[ "$(jq -r '.status // ""' <<<"$entry")" == duplicate ]]; then
+      status=duplicate
+    fi
+    md=""
+    while IFS= read -r -d '' source_path; do
+      [[ "$source_path" == /* ]] || source_path="$source_base/$source_path"
+      if [[ -f "$source_path" ]]; then
+        md="$source_path"
+        break
+      fi
+    done < <(jq -j '.source_finding_paths[]? | ., "\u0000"' <<<"$entry")
+
     jq -cn \
       --argjson entry "$entry" \
       --arg id "$id" --arg severity "$sev" --arg status "$status" --arg ftype "$ftype" \
-      --arg complexity "$cx" '
+      --arg md "$md" --arg complexity "$cx" --arg source_base "$source_base" '
       {
         id: $id,
         title: ($entry.title // ""),
@@ -331,11 +352,17 @@ build_findings_jsonl_from_manifest() {
         primary_location: "",
         confidence: null,
         duplicate_group: ($entry.cluster_id // null),
-        markdown_path: null,
+        markdown_path: (if $md == "" then null else $md end),
         validation: {},
         complexity: (if $complexity == "" then null else ($complexity | tonumber) end),
         source_finding_paths: ($entry.source_finding_paths // [])
-      }' >> "$tmp" || { rm -f "$tmp"; return 1; }
+      }
+      + (if ($entry.also_reported_by | type) == "array" and ($entry.also_reported_by | length) > 0
+         then {also_reported_by: ($entry.also_reported_by | map(
+           if (.markdown_path | type) == "string" and .markdown_path != ""
+              and (.markdown_path | startswith("/") | not)
+           then .markdown_path = ($source_base + "/" + .markdown_path)
+           else . end))} else {} end)' >> "$tmp" || { rm -f "$tmp"; return 1; }
   done
 
   mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }
@@ -779,7 +806,8 @@ _ledger_log_base() {
 #   Source selection (both may run, results are concatenated):
 #   - if `<log_base>/final/manifest.json` exists, ingest it via
 #     build_findings_jsonl_from_manifest.
-#   - if a local output dir is supplied (2nd arg, else the OUTPUT_DIR global)
+#   - if a local output dir is supplied (2nd arg, else the OUTPUT_DIR global;
+#     an explicit empty 2nd arg disables local ingestion)
 #     and is a directory, ingest its `*.md` tree via
 #     build_findings_jsonl_from_local.
 #   The concatenation is then collapsed so each `id` appears once, keeping the
@@ -806,7 +834,7 @@ _ledger_log_base() {
 #   Returns 2 on a missing run_id, 1 on a builder/jq/IO/validation failure.
 build_finding_registry() {
   local run_id="${1:-}"
-  local local_dir="${2:-${OUTPUT_DIR:-}}"
+  local local_dir="${2-${OUTPUT_DIR:-}}"
   if [[ -z "$run_id" ]]; then
     echo "build_finding_registry: missing run_id" >&2
     return 2
