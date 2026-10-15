@@ -470,6 +470,9 @@ build_findings_jsonl_from_local() {
   [[ -n "$out" ]] || { echo "build_findings_jsonl_from_local: missing out path" >&2; return 2; }
   [[ -d "$dir" ]] || { echo "build_findings_jsonl_from_local: output_dir not found: $dir" >&2; return 2; }
 
+  # Keep the traversal and relative-path prefix consistent for library callers.
+  while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
+
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
@@ -501,7 +504,7 @@ build_findings_jsonl_from_local() {
     # Findings may be nested further in a dispatch-specific directory.
     # rel like <domain>/<lens>/NNN-x.md has 3+ path components; a flat file does
     # not, so we never derive a bogus domain/lens from <output_dir>'s own name.
-    rel="${file#"$dir"/}"
+    rel="${file#"${dir%/}"/}"
     if [[ -z "$domain" || -z "$lens" ]] && [[ "$rel" == */*/* ]]; then
       lens_rel="${rel#*/}"
       [[ -z "$lens"   ]] && lens="${lens_rel%%/*}"

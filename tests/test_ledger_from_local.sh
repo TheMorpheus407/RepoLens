@@ -654,4 +654,41 @@ flatdl_id="$(finding_id "" "" '[low] flat, no domain or lens')"
 assert_eq "flat file id is finding_id over empty domain/lens" \
   "$flatdl_id" "$(jq -r '.id' "$out_flatdl")"
 
+echo "=== trailing slashes preserve canonical metadata and finding IDs ==="
+
+slash_dir="$TMPDIR/reports [local]"
+mkdir -p "$slash_dir/security/injection/dispatch-example"
+for finding in security/injection/001-plain.md security/injection/dispatch-example/002-nested.md 003-flat.md; do
+  cat > "$slash_dir/$finding" <<EOF
+---
+title: $finding
+severity: low
+---
+body
+EOF
+done
+plain_id="$(finding_id security injection security/injection/001-plain.md)"
+nested_id="$(finding_id security injection security/injection/dispatch-example/002-nested.md)"
+flat_id="$(finding_id '' '' 003-flat.md)"
+expected_metadata="$(jq -cn --arg plain "$plain_id" --arg nested "$nested_id" --arg flat "$flat_id" '
+  [["003-flat.md", "", "", "maintainability", $flat],
+   ["security/injection/001-plain.md", "security", "injection", "security-vulnerability", $plain],
+   ["security/injection/dispatch-example/002-nested.md", "security", "injection", "security-vulnerability", $nested]]')"
+for suffix in '' / ///; do
+  slash_out="$TMPDIR/trailing-findings.jsonl"
+  build_findings_jsonl_from_local "$slash_dir$suffix" "$slash_out"
+  assert_success "local ingestion succeeds with suffix '$suffix'" "$?"
+  assert_eq "local metadata, inferred type and IDs survive suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$slash_out")"
+  while IFS= read -r markdown; do
+    assert_file_exists "source link resolves with suffix '$suffix'" "$markdown"
+  done < <(jq -r '.markdown_path' "$slash_out")
+
+  # The public registry caller forwards the root without CLI canonicalization.
+  LOG_BASE="$TMPDIR/trailing-registry" build_finding_registry trailing "$slash_dir$suffix"
+  assert_success "registry ingestion succeeds with suffix '$suffix'" "$?"
+  assert_eq "registry preserves metadata and IDs with suffix '$suffix'" \
+    "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$TMPDIR/trailing-registry/final/findings.jsonl")"
+done
+
 finish
