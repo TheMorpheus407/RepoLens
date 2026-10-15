@@ -29,7 +29,8 @@ check() {
 log_info() { :; }
 log_warn() { :; }
 set_stop_reason() { STOP_REASON="$2"; return 1; }
-record_lens() { :; }
+record_lens() { printf '%s/%s:%s\n' "$2" "$3" "$5" >> "$LOG_BASE/records"; }
+is_lens_completed() { return 1; }
 LENSES=(security/injection security/xss-csrf)
 LOCAL_MODE=false
 PARALLEL=false
@@ -53,6 +54,29 @@ check test ! -e "$LOG_BASE/rounds/round-1/digest.md"
 check test ! -e "$LOG_BASE/rounds/round-1/.completed"
 check test "$completed_lenses_file" = "$LOG_BASE/.completed"
 check test "${STOP_REASON:-}" = lens-execution-failed
+
+check test "$(cat "$LOG_BASE/records" 2>/dev/null)" = security/xss-csrf:skipped
+
+# Admission can observe a failed sibling before the next callback starts.
+PARALLEL=true
+init_parallel() { return 0; }
+spawn_lens() {
+  SPAWNS=$((SPAWNS + 1))
+  (( SPAWNS == 1 ))
+}
+_cleanup_children() { CLEANUPS=$((CLEANUPS + 1)); }
+LOG_BASE="$TEST_DIR/admission"
+mkdir -p "$LOG_BASE/.systemic-failure-abort"
+completed_lenses_file="$LOG_BASE/.completed"
+SPAWNS=0 CLEANUPS=0
+run_rounds 2 LENSES
+check test "$?" -ne 0
+check test "$SPAWNS" -eq 2
+check test "$CLEANUPS" -eq 1
+check test "$(cat "$LOG_BASE/records" 2>/dev/null)" = security/xss-csrf:skipped
+check test ! -e "$LOG_BASE/rounds/round-1/digest.md"
+check test ! -e "$LOG_BASE/rounds/round-1/.completed"
+check test "$completed_lenses_file" = "$LOG_BASE/.completed"
 
 # Collector errors must survive a successful sibling and require no abort file.
 PARALLEL=true

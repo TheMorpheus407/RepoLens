@@ -2811,6 +2811,7 @@ run_rounds() {
             break
           fi
           _rounds_record_execution_failure
+          _rounds_record_skipped_lenses "${active_lens_list[@]:$((parallel_count - 1))}"
           if declare -F _cleanup_children >/dev/null 2>&1; then
             _cleanup_children || true
           else
@@ -2875,6 +2876,7 @@ run_rounds() {
         log_info "--- Lens $local_count/$lens_total ---"
         if ! run_lens "$lens_entry"; then
           _rounds_record_execution_failure
+          _rounds_record_skipped_lenses "${active_lens_list[@]:$local_count}"
           break
         fi
       done

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Propagate persistent lens agent failures through the callback even when the abort marker cannot be written, and keep unstarted lenses visible as skipped after sequential callback or parallel admission failures (repolens-r5-p1-3).
+
 - Resolve relative manifest source and contributor links from the audited project so generated reports work when RepoLens is launched from another directory.
 
 - Keep synthesized local manifests authoritative for default round output so verified-away findings do not return through raw Markdown, preserve custom-output findings and manifest source links/duplicate provenance, and remove stale triage reports after successful empty local rebuilds (repolens-r4-p2-3, repolens-r4-p2-4).
