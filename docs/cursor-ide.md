@@ -57,6 +57,8 @@ Keep servicing events until `kind` is `run_complete`.
 
 During final summary rendering and result persistence, HUP, INT, and TERM still mark the invocation interrupted. RepoLens reconciles its attempt and latest-result pointer, prepares the completion JSON, then freezes the outcome immediately before publishing a single `run_complete` event. Signals received from that boundary through exit are ignored, so Composer, the attempt ledger, and the process retain the same outcome.
 
+Cancellation stops optional finalization work at safe boundaries. The interrupted result can retain previous accounting counts and incomplete deduplication or review artifacts; resume rechecks accounting and regenerates those artifacts. A `run_complete` event with outcome `interrupted` reports the invocation's termination, without promising finished artifacts.
+
 Pressing Ctrl-C leaves all handoff artifacts and the ordinary RepoLens run state intact. Resume with the command RepoLens prints:
 
 ```bash

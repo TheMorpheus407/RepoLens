@@ -421,8 +421,11 @@ _ledger_frontmatter_scalar() {
 #     primary_location), so the same finding earns the same id whether it
 #     arrived via a manifest cluster or a local .md file.
 #   - severity is run through _ledger_severity_normalize ("Critical"->"critical").
-#   - type/confidence are null, primary_location is "", validation is {},
-#     status is "new" (owned by sibling agents).
+#   - confidence is null, primary_location is "", validation is {}.
+#   - status preserves a "duplicate" mark only with a direct duplicate_of link
+#     to a different, parsed non-duplicate in the same current deterministic
+#     group; otherwise it is "new", so stale marks cannot suppress review.
+#     Valid links reconstruct also_reported_by on canonical records.
 #
 #   jq owns all quoting/escaping: title/domain/lens/markdown_path are passed as
 #   --arg and the object is built inside jq, so titles with quotes, `$()`,
@@ -443,7 +446,7 @@ build_findings_jsonl_from_local() {
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
-  local file rel title severity domain lens id sev type_raw ftype cx
+  local file rel title severity domain lens id sev type_raw ftype cx status duplicate_of
   while IFS= read -r -d '' file; do
     # Skip + warn (not fatal) when there is no valid leading frontmatter block.
     if ! _ledger_has_frontmatter "$file"; then
@@ -456,6 +459,12 @@ build_findings_jsonl_from_local() {
     domain="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" domain)")"
     lens="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" lens)")"
     type_raw="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" type)")"
+    status="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" status)")"
+    [[ "$status" == duplicate ]] || status=new
+    duplicate_of=""
+    if [[ "$status" == duplicate ]]; then
+      duplicate_of="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" duplicate_of)")"
+    fi
     # Complexity (#385): optional 1..5 routing tier from the finding frontmatter.
     # The normalizer trims/de-quotes and range-checks; absent or out-of-range
     # yields "" -> stored as null (parity with the nullable confidence slot).
@@ -479,7 +488,7 @@ build_findings_jsonl_from_local() {
     jq -cn \
       --arg id "$id" --arg title "$title" --arg severity "$sev" \
       --arg domain "$domain" --arg lens "$lens" --arg md "$file" --arg ftype "$ftype" \
-      --arg complexity "$cx" '
+      --arg complexity "$cx" --arg status "$status" --arg duplicate_of "$duplicate_of" '
       {
         id: $id,
         title: $title,
@@ -487,7 +496,8 @@ build_findings_jsonl_from_local() {
         type: $ftype,
         domain: $domain,
         lens: $lens,
-        status: "new",
+        status: $status,
+        __local_duplicate_of: $duplicate_of,
         primary_location: "",
         confidence: null,
         duplicate_group: null,
@@ -497,7 +507,75 @@ build_findings_jsonl_from_local() {
       }' >> "$tmp" || { rm -f "$tmp"; return 1; }
   done < <(find "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z)
 
-  mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }
+  # Reuse current connected components, including transitive matches and the
+  # operator's thresholds. A live old link alone cannot justify suppression
+  # after a title edit. Unmarked trees need no grouping during ingestion.
+  local components="$tmp.components" manifest="$tmp.manifest"
+  : > "$components" || { rm -f "$tmp"; return 1; }
+  if jq -se 'any(.[]; .status == "duplicate")' "$tmp" >/dev/null; then
+    if ! declare -F _synthesize_compute_duplicate_groups >/dev/null 2>&1; then
+      # shellcheck source=/dev/null
+      source "$(_ledger_repo_root)/lib/synthesize.sh"
+    fi
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$tmp" "$components"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+    if ! jq -s '.' "$tmp" > "$manifest"; then
+      rm -f "$tmp" "$components" "$manifest"
+      return 1
+    fi
+    # Assembly can accept a returning parent signal. Do not start the expensive
+    # grouping pass once cancellation has been observed at this boundary.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$tmp" "$components" "$manifest"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+    if ! _synthesize_compute_duplicate_groups "$manifest" > "$components"; then
+      rm -f "$tmp" "$components" "$manifest"
+      return 1
+    fi
+    rm -f "$manifest"
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$tmp" "$components"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+  fi
+
+  # The local dedupe pass stores canonical paths relative to output_dir. Resolve
+  # only against records in this same tree; no referenced file is opened. Check
+  # RAW statuses before normalization so self-links, chains and cycles cannot
+  # validate one another. Missing/filtered/invalid or now-unrelated canonicals
+  # restore eligibility without modifying evidence. Only valid links contribute.
+  if ! jq -cs --arg dir "${dir%/}" --slurpfile groups "$components" '
+      . as $records
+      | (reduce $groups[] as $g ({};
+          reduce $g.member_indices[] as $i (.;
+            .[$records[$i].markdown_path] = $g.canonical_idx))) as $membership
+      | (map({key: .markdown_path, value: .status}) | from_entries) as $raw_status
+      | map(
+          ($dir + "/" + .__local_duplicate_of) as $target
+          | if .status == "duplicate" and .__local_duplicate_of != ""
+              and $target != .markdown_path and $raw_status[$target] == "new"
+              and $membership[.markdown_path] != null
+              and $membership[.markdown_path] == $membership[$target] then .
+            else .status = "new" | .__local_duplicate_of = "" end)
+      | (reduce .[] as $r ({};
+        if $r.__local_duplicate_of == "" then .
+        else .[$dir + "/" + $r.__local_duplicate_of] +=
+          [{lens: $r.lens, domain: $r.domain, markdown_path: $r.markdown_path}]
+        end)) as $contributors
+      | .[]
+      | if ($contributors[.markdown_path] // [] | length) > 0 then
+          . + {also_reported_by: ($contributors[.markdown_path] | sort_by(.domain, .lens, .markdown_path))}
+        else . end
+      | del(.__local_duplicate_of)
+    ' "$tmp" > "$tmp.groups"; then
+    rm -f "$tmp" "$tmp.groups" "$components"
+    return 1
+  fi
+  rm -f "$tmp" "$components"
+  mv "$tmp.groups" "$out" || { rm -f "$tmp.groups"; return 1; }
 }
 
 # build_findings_csv <findings_jsonl_path> <out_csv_path>
@@ -705,10 +783,13 @@ _ledger_log_base() {
 #     and is a directory, ingest its `*.md` tree via
 #     build_findings_jsonl_from_local.
 #   The concatenation is then collapsed so each `id` appears once, keeping the
-#   FIRST occurrence (manifest-first tie-break — the manifest record carries the
+#   first NON-DUPLICATE occurrence, or the first duplicate if none is canonical.
+#   Ties retain input order (manifest-first — the manifest record carries the
 #   richer cross-run provenance: source_finding_paths passthrough and a
 #   cluster-seeded duplicate_group. Either order satisfies the AC, which mandates
-#   only that identical-id duplicates collapse). jq -s + reduce is single-pass
+#   only that identical-id duplicates collapse). Colliding non-duplicate records
+#   merge their also_reported_by contributors, preserving all other winner fields.
+#   jq -s + reduce is single-pass
 #   and order-preserving (unique_by would sort and lose "keep first").
 #
 #   Atomicity mirrors run_synthesizer's tmp+mv discipline: the registry is
@@ -777,12 +858,23 @@ build_finding_registry() {
     rm -f "$l_tmp"
   fi
 
-  # Collapse identical-id lines, keeping the first occurrence (input order
-  # preserved). Empty candidate -> empty output (0 lines).
+  # A later canonical local record must replace an earlier marked duplicate
+  # sharing its id, or actionable reports lose the finding entirely. Preserve
+  # the first id's position and manifest-first precedence among equal statuses.
+  # Empty candidate -> empty output (0 lines).
   if ! jq -c -s '
         reduce .[] as $r ({seen: {}, out: []};
-          if (.seen[$r.id] // false) then .
-          else .seen[$r.id] = true | .out += [$r] end)
+          (.seen[$r.id] // null) as $pos
+          | if $pos == null then
+              .seen[$r.id] = (.out | length) | .out += [$r]
+            elif .out[$pos].status == "duplicate" and $r.status != "duplicate" then
+              .out[$pos] = $r
+            elif .out[$pos].status != "duplicate" and $r.status != "duplicate"
+                and (((.out[$pos].also_reported_by // []) + ($r.also_reported_by // [])) | length) > 0 then
+              .out[$pos].also_reported_by =
+                ((.out[$pos].also_reported_by // []) + ($r.also_reported_by // [])
+                  | unique_by([.domain, .lens, .markdown_path]))
+            else . end)
         | .out[]' "$candidate" > "$deduped" 2>/dev/null; then
     echo "build_finding_registry: dedup pass failed" >&2
     rm -f "$candidate" "$deduped"

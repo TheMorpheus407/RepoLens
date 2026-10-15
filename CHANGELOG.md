@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Check cancellation between local registry JSON assembly and duplicate grouping, preserving the previous complete output and the accepted signal's exit code.
+
+- Restore local duplicate marks to actionable registry records when title edits or current similarity thresholds no longer place them with their live canonical. Reuse transitive grouping, preserve markdown evidence, and omit unsupported contributor claims.
+
+- Omit retained duplicate-report links from the human-review digest when current report generation fails. Report failed triage-report replacements accurately and remove their temporary files.
+
+- Generate triage reports before the opted-in human-review digest so fresh runs and resumes include the available duplicate-report link.
+
+- Preserve contributor evidence from colliding canonical registry records so duplicate reports retain every validated group while keeping the winning record's other fields.
+
+- Keep finalization guards compatible with the existing triage and forge-rollup regression checks while preserving cancellation checks, and describe generated reports without triggering the README draft-marker check.
+
+- Install returning HUP/INT/TERM handlers before final artifact and summary persistence so early cancellation still publishes the reconciled attempt, latest-result pointer and single Cursor completion event (repolens-r3-p2-2).
+
+- Stop optional finalization work at cancellation boundaries, including receipt readback and local dedupe loops. Preserve previous accounting counts when recounting is interrupted, keep saved receipts intact, and regenerate deferred artifacts on resume.
+
+- Check cancellation before local duplicate grouping. Rebuild the local finding registry before review artifacts so fresh runs and the first successful resume generate current reports; preserve markdown duplicate marks in the registry and actionable lists.
+
+- Retain canonical findings when identical registry IDs collapse. Exclude marked duplicates from human-review budgets with explicit provenance accounting, and skip local review consumers after a failed registry rebuild.
+
+- Restore local findings to actionable review when their duplicate mark has no live direct canonical in the current tree, including after scope filtering. Preserve the markdown evidence and accept contributor links only to parsed non-duplicate findings.
+
 - Keep post-round filing in the parent process so cancellation stops later callbacks and cleans up the owned workers (repolens-r3-p2-1). Guard setup and polling against returning signal traps, stop sequential and cross-link admission after cancellation, release fresh cross-link reservations when dispatch observes cancellation before POST (including interrupted body-write failures), and return a failed dispatch on cross-link cancellation. Document that immediate sequential signal exits can retain unsent reservations for manual reconciliation. Skip the cgroup regressions on unsupported local hosts while requiring both setup and parent-filing cancellation in containment CI.
 
 - Preserve attempt-start diagnostics when a late signal requires reconciliation and the later ledger write fails.

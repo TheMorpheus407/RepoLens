@@ -52,8 +52,8 @@ source "$SCRIPT_DIR/lib/status.sh"
 eval "$(declare -f set_stop_reason | sed '1s/set_stop_reason/original_set_stop_reason/')"
 eval "$(declare -f rate_limit_sleep_interrupt_marker | sed '1s/rate_limit_sleep_interrupt_marker/original_sleep_marker/')"
 eval "$(declare -f rate_limit_abort_stopped_reason | sed '1s/rate_limit_abort_stopped_reason/original_abort_reason/')"
-# The unconditional filing reconciliation in main runs even after failed rounds.
-sed -n '/^if ! \$LOCAL_MODE && { \[\[ "\$MODE" == branch-review/,/^# Emit deduped forge-warning/p' \
+# Filing reconciliation runs after failed rounds, unless already cancelled.
+sed -n '/^# Reconcile on failed dispatch too:/,/^# Emit deduped forge-warning/p' \
   "$SCRIPT_DIR/repolens.sh" | sed '$d' > "$TEST_DIR/accounting.sh"
 test -s "$TEST_DIR/accounting.sh" || exit 1
 passed=0 failed=0

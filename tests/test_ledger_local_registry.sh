@@ -280,8 +280,8 @@ fi
 csv_header="$(head -n1 "$CSV" 2>/dev/null || true)"
 assert_eq "findings.csv carries the canonical 12-column header" "$CSV_HEADER" "$csv_header"
 
-# AC #2: the registry is under final/; $OUTPUT_DIR stays md-only and final/ holds
-# no md (the deliverable was not copied into the index dir).
+# AC #2: the registry is under final/; $OUTPUT_DIR stays md-only. Only generated
+# review reports may appear as markdown under final/, never copied findings.
 TOTAL=$((TOTAL + 1))
 non_md_in_out="$(find "$OUT_DIR" -type f ! -name '*.md' 2>/dev/null)"
 if [[ -z "$non_md_in_out" ]]; then
@@ -290,7 +290,9 @@ else
   fail_with "\$OUTPUT_DIR (lens-outputs) contains only md files" "non-md present: $non_md_in_out"
 fi
 TOTAL=$((TOTAL + 1))
-md_in_final="$(find "$FINAL_DIR" -type f -name '*.md' 2>/dev/null)"
+md_in_final="$(find "$FINAL_DIR" -type f -name '*.md' \
+  ! -name TODO.md ! -name SUMMARY.md ! -name NEEDS_REVIEW.md \
+  ! -name DUPLICATES.md ! -name HUMAN_REVIEW.md 2>/dev/null)"
 if [[ -z "$md_in_final" ]]; then
   pass_with "final/ holds the registry, not copied md deliverables"
 else
@@ -457,8 +459,9 @@ if [[ ! -f "$REPOLENS_SH" ]]; then
 fi
 
 # Locate the LOCAL-gated build_finding_registry call: among all call sites, the
-# one whose preceding window opens with a positive `if $LOCAL_MODE` guard (NOT the
-# negated `! $LOCAL_MODE` non-local block). Implementation may pass OUTPUT_DIR as
+# one whose preceding window contains a positive `$LOCAL_MODE` guard (NOT the
+# negated `! $LOCAL_MODE` non-local block), including cancellation-gated guards.
+# Implementation may pass OUTPUT_DIR as
 # the 2nd arg or rely on the OUTPUT_DIR global default — both are accepted, so we
 # key on the guard, not the exact arg list.
 local_call_ln=""
@@ -466,7 +469,7 @@ while IFS=: read -r ln _; do
   [[ -n "$ln" ]] || continue
   win_start=$(( ln > 6 ? ln - 6 : 1 ))
   guard_block="$(sed -n "${win_start},${ln}p" "$REPOLENS_SH")"
-  if printf '%s' "$guard_block" | grep -qE 'if[[:space:]]+\$LOCAL_MODE' \
+  if printf '%s' "$guard_block" | grep -qE '(^|[[:space:]])\$LOCAL_MODE([[:space:]]|$)' \
      && ! printf '%s' "$guard_block" | grep -qF '! $LOCAL_MODE'; then
     local_call_ln="$ln"
     break

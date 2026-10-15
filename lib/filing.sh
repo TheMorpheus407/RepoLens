@@ -80,12 +80,15 @@ _filing_reserve_issue_attempt_locked() {
 # Reattest even historical receipts omitted from a regenerated manifest;
 # quarantined markers retain their budget reservation but drop out of totals.
 # Unique URLs describe actual creations even if two records reference one URL.
+# Call in the signal-receiving parent to support cancellation. Cancellation
+# returns the signal code with no count and never quarantines an in-flight read.
 filing_verified_issue_count() {
   local run_id="$1" filed_dir marker prefix url entry number readback
   local verified_urls="" rc=0
   filed_dir="$(_filing_log_base "$run_id")/final/filed"
   local repo="${FORGE_REPO:-${REPO_OWNER:-}/${REPO_NAME:-}}"
   for marker in "$filed_dir"/*.url; do
+    _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     [[ -e "$marker" || -L "$marker" ]] || continue
     prefix="${marker%.url}"
     if [[ ! -f "$marker" || -L "$marker" \
@@ -96,14 +99,17 @@ filing_verified_issue_count() {
         || ! number="$(forge_issue_number_from_url "$repo" "$url")" \
         || ! readback="$(forge_issue_read_json "$repo" "$number")" \
         || ! _filing_readback_matches "$entry" "$url" "$number" "$readback"; then
+      _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       _filing_fail "$filed_dir" "${prefix##*/}" 'saved creation receipt could not be reconciled'
       rc=1
       continue
     fi
+    _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     printf '%s\n' "$readback" > "$prefix.readback.json" || rc=1
     verified_urls+="$url"$'\n'
   done
   for marker in "$filed_dir"/cross-link/reopen-suggestion-*.done; do
+    _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     [[ -e "$marker" || -L "$marker" ]] || continue
     prefix="${marker%.done}"
     if [[ ! -f "$marker" || -L "$marker" \
@@ -118,15 +124,18 @@ filing_verified_issue_count() {
           --rawfile body "$prefix.body.banner.md" \
           '.url == $url and .number == $number and .title == $title and .body == $body and .state == "open"' \
           <<< "$readback" >/dev/null; then
+      _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       mv "$marker" "$prefix.unverified-done" || return 1
       : > "$prefix.attempted" || return 1
       printf 'VERIFICATION_FAILED: saved creation receipt could not be reconciled\n' > "$prefix.failed" || return 1
       rc=1
       continue
     fi
+    _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     printf '%s\n' "$readback" > "$prefix.readback.json" || rc=1
     verified_urls+="$url"$'\n'
   done
+  _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   printf '%s' "$verified_urls" | LC_ALL=C sort -u | wc -l | tr -d '[:space:]'
   return "$rc"
 }
