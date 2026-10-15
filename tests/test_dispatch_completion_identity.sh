@@ -17,6 +17,7 @@
 # shellcheck disable=SC2034,SC2329 # Extracted production functions consume globals.
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CALLBACK_SOURCE="${REPOLENS_TEST_CALLBACK_SOURCE:-$REPO/repolens.sh}"
 FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 # shellcheck source=/dev/null
@@ -27,7 +28,7 @@ source "$REPO/lib/rounds.sh"
 source "$REPO/lib/summary.sh"
 # Exercise the live CLI callback and receipt functions without CLI preflight.
 for function_name in run_lens is_lens_completed mark_lens_completed template_var_escape; do
-  eval "$(sed -n "/^${function_name}() {/,/^}/p" "$REPO/repolens.sh")"
+  eval "$(sed -n "/^${function_name}() {/,/^}/p" "$CALLBACK_SOURCE")"
 done
 LOCAL_MODE=true MODE=audit AGENT=codex PARALLEL=false
 RUN_ID=probe RESUME_RUN_ID=probe
@@ -96,5 +97,184 @@ for legacy in no yes; do
   mark_lens_completed security/injection
   check is_lens_completed security/injection
 done
+
+# Same-second callbacks must retain their own captures, local findings and live
+# heartbeat, even when another investigation of the lens fails authentication.
+# shellcheck source=/dev/null
+source "$REPO/lib/streak.sh"
+for function_name in sanitize_heartbeat_component lens_heartbeat_key lens_heartbeat_path lens_heartbeat_iteration_path write_lens_heartbeat_iteration write_lens_heartbeat stop_lens_heartbeat_writer extract_exit_trap_action restore_exit_trap run_lens_heartbeat_exit_trap; do
+  eval "$(sed -n "/^${function_name}() {/,/^}/p" "$CALLBACK_SOURCE")"
+done
+resolve_lens_heartbeat_interval() { printf 1; }
+start_lens_heartbeat_writer() { printf -v "$1" '%s' ''; }
+date() {
+  if [[ "$*" == '-u +%Y%m%dT%H%M%SZ' ]]; then printf '20261015T120000Z\n'; else command date "$@"; fi
+}
+wait_for_file() {
+  local i
+  for ((i=0; i<300; i++)); do
+    [[ -f "$1" ]] && return 0
+    sleep 0.01
+  done
+  return 1
+}
+# shellcheck disable=SC2154 # Callback locals are dynamically scoped.
+run_agent() {
+  printf '%s\n' "$6" > "$LOG_BASE/$lens_role.envelope-path"
+  printf '%s\n' "$lens_local_dir" > "$LOG_BASE/$lens_role.output-dir"
+  if [[ "$lens_role" == deeper ]]; then
+    printf 'DONE\n'
+    printf '{}\n' > "$6"
+    printf '%s\n' "$lens_role" > "$lens_local_dir/001-finding.md"
+    touch "$LOG_BASE/deeper-written"
+    wait_for_file "$LOG_BASE/broader-written" || return 1
+  else
+    wait_for_file "$LOG_BASE/deeper-written" || return 1
+    printf 'not logged in; please run /login\n'
+    printf '{"api_error_status":401}\n' > "$6"
+    printf '%s\n' "$lens_role" > "$lens_local_dir/001-finding.md"
+    touch "$LOG_BASE/broader-written"
+    wait_for_file "$LOG_BASE/release-broader" || return 1
+    return 1
+  fi
+}
+LOG_BASE="$FIXTURE/parallel" OUTPUT_DIR="$FIXTURE/parallel/output"
+CURRENT_ROUND_OUTPUT_DIR=""
+SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+HEARTBEAT_DIR="$LOG_BASE/.heartbeat"
+mkdir -p "$HEARTBEAT_DIR"
+: > "$completed_lenses_file"
+init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" audit codex '' '' local "$OUTPUT_DIR"
+(trap - EXIT; run_lens "${ENTRIES[0]}") &
+deeper_pid=$!
+(trap - EXIT; run_lens "${ENTRIES[1]}") &
+broader_pid=$!
+wait "$deeper_pid"
+check test "$?" -eq 0
+check is_lens_completed "${ENTRIES[0]}"
+check test "$(find "$HEARTBEAT_DIR" -name '*.json' | wc -l)" -eq 1
+touch "$LOG_BASE/release-broader"
+wait "$broader_pid"
+check test "$?" -ne 0
+if is_lens_completed "${ENTRIES[1]}"; then check false; else check true; fi
+check test "$(find "$HEARTBEAT_DIR" -name '*.json' | wc -l)" -eq 0
+check test "$(cat "$LOG_BASE/deeper.envelope-path")" != "$(cat "$LOG_BASE/broader.envelope-path")"
+check grep -qx DONE "$(cat "$LOG_BASE/deeper.envelope-path" | sed 's/\.envelope\.json$//')"
+check grep -qx deeper "$(cat "$LOG_BASE/deeper.output-dir")/001-finding.md"
+check grep -qx broader "$(cat "$LOG_BASE/broader.output-dir")/001-finding.md"
+check test "$(find "$LOG_BASE/output" -name '*.envelope.json' | wc -l)" -eq 2
+check test "$(jq '[.lenses[] | select(.status == "completed")] | length' "$SUMMARY_FILE")" -eq 1
+
+# Long tuples exceed Bash's output buffer. Concurrent appenders must preserve
+# whole lines, including backslashes, rather than mixing receipt fragments.
+completed_lenses_file="$FIXTURE/long-receipts"
+: > "$completed_lenses_file"
+: > "$FIXTURE/expected-receipts"
+printf -v padding '%65536s' ''
+padding="${padding// /x}"
+receipt_pids=()
+for worker in {1..8}; do
+  tuple="security/injection|deeper|$worker$padding|anchor\\|pipe|exclude"
+  printf '%s\n' "$tuple" >> "$FIXTURE/expected-receipts"
+  (
+    for _ in {1..8}; do mark_lens_completed "$tuple" || exit 1; done
+  ) &
+  receipt_pids+=("$!")
+done
+for receipt_pid in "${receipt_pids[@]}"; do wait "$receipt_pid"; check test "$?" -eq 0; done
+check python3 - "$FIXTURE/expected-receipts" "$completed_lenses_file" <<'PY'
+from collections import Counter
+from pathlib import Path
+import sys
+expected = Counter({line: 8 for line in Path(sys.argv[1]).read_text().splitlines()})
+actual = Counter(Path(sys.argv[2]).read_text().splitlines())
+sys.exit(0 if actual == expected else 1)
+PY
+
+# A failed receipt write must propagate through the callback so the round
+# cannot certify work whose completion was never persisted.
+LOG_BASE="$FIXTURE/receipt-failure" OUTPUT_DIR="$FIXTURE/receipt-failure/output"
+SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/blocked-receipts"
+mkdir -p "$completed_lenses_file"
+init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" audit codex '' '' local "$OUTPUT_DIR"
+resolve_lens_heartbeat_interval() { printf 0; }
+run_agent() { printf 'DONE\n'; }
+run_lens security/injection
+check test "$?" -ne 0
+LENSES=(security/injection)
+run_rounds 1 LENSES
+check test "$?" -ne 0
+check test ! -f "$LOG_BASE/rounds/round-1/.completed"
+check test "$(jq -r .stopped_reason "$SUMMARY_FILE")" = lens-execution-failed
+unset ROUNDS_FAILURE_REASON
+
+# Hash/capture allocation failures stop before model execution and still clean
+# an already-started heartbeat. A repaired retry remains possible.
+completed_lenses_file="$LOG_BASE/.completed"
+: > "$completed_lenses_file"
+run_agent() { printf 'called\n' >> "$LOG_BASE/unexpected-agent"; printf 'DONE\n'; }
+sha256_text() { return 1; }
+run_lens "${ENTRIES[0]}"
+check test "$?" -ne 0
+check test ! -e "$LOG_BASE/unexpected-agent"
+check test ! -s "$completed_lenses_file"
+unset -f sha256_text
+# shellcheck source=/dev/null
+source "$REPO/lib/core.sh"
+HEARTBEAT_DIR="$LOG_BASE/.heartbeat"
+mkdir -p "$HEARTBEAT_DIR"
+resolve_lens_heartbeat_interval() { printf 1; }
+mktemp() {
+  if [[ "$*" == *iteration-* ]]; then return 1; else command mktemp "$@"; fi
+}
+run_lens "${ENTRIES[0]}"
+check test "$?" -ne 0
+check test ! -e "$LOG_BASE/unexpected-agent"
+check test ! -s "$completed_lenses_file"
+check test "$(find "$HEARTBEAT_DIR" -type f | wc -l)" -eq 0
+unset -f mktemp
+
+# Vary each attribute on its own, including escaped pipes and Unicode. Local
+# ingestion must retain canonical metadata even in nested dispatch directories.
+# shellcheck source=/dev/null
+source "$REPO/lib/ledger.sh"
+# shellcheck disable=SC2154 # The production callback supplies these locals.
+run_agent() {
+  printf 'called\n' >> "$LOG_BASE/matrix-agent"
+  cat > "$lens_local_dir/001-finding.md" <<EOF
+---
+title: $lens_role $lens_focus $prior_finding_anchor $exclusion_hints
+severity: low
+---
+Finding without optional domain/lens frontmatter.
+EOF
+  printf 'DONE\n'
+}
+LOG_BASE="$FIXTURE/matrix" OUTPUT_DIR="$FIXTURE/matrix/output"
+CURRENT_ROUND_OUTPUT_DIR=""
+SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+mkdir -p "$LOG_BASE"
+: > "$completed_lenses_file"
+resolve_lens_heartbeat_interval() { printf 0; }
+init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" audit codex '' '' local "$OUTPUT_DIR"
+MATRIX=(
+  "$(_rounds_meta_tuple_serialize security/injection deeper 'src/ä|b.sh:1' a e)"
+  "$(_rounds_meta_tuple_serialize security/injection broader 'src/ä|b.sh:1' a e)"
+  "$(_rounds_meta_tuple_serialize security/injection deeper 'src/c.sh:1' a e)"
+  "$(_rounds_meta_tuple_serialize security/injection deeper 'src/ä|b.sh:1' b e)"
+  "$(_rounds_meta_tuple_serialize security/injection deeper 'src/ä|b.sh:1' a f)"
+)
+for tuple in "${MATRIX[@]}"; do
+  run_lens "$tuple"
+  check test "$?" -eq 0
+  check is_lens_completed "$tuple"
+done
+check test "$(wc -l < "$LOG_BASE/matrix-agent")" -eq 5
+check test "$(find "$OUTPUT_DIR" -name '*.md' | wc -l)" -eq 5
+check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
+check test "$(jq -sc '[.[] | select(.domain == "security" and .lens == "injection")] | length' "$LOG_BASE/registry.jsonl")" -eq 5
+printf '%s\n' "${MATRIX[0]}" > "$completed_lenses_file"
+_rounds_record_skipped_lenses "${MATRIX[0]}" "${MATRIX[1]}"
+check test "$(jq '[.lenses[] | select(.status == "skipped")] | length' "$SUMMARY_FILE")" -eq 1
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

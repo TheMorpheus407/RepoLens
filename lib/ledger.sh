@@ -473,7 +473,7 @@ build_findings_jsonl_from_local() {
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
-  local file rel title severity domain lens id sev type_raw ftype cx status duplicate_of
+  local file rel lens_rel title severity domain lens id sev type_raw ftype cx status duplicate_of
   while IFS= read -r -d '' file; do
     # Skip + warn (not fatal) when there is no valid leading frontmatter block.
     if ! _ledger_has_frontmatter "$file"; then
@@ -498,12 +498,14 @@ build_findings_jsonl_from_local() {
     cx="$(_ledger_complexity_normalize "$(_ledger_frontmatter_scalar "$file" complexity)")"
 
     # Directory fallback only when the <domain>/<lens> nesting actually exists.
+    # Findings may be nested further in a dispatch-specific directory.
     # rel like <domain>/<lens>/NNN-x.md has 3+ path components; a flat file does
     # not, so we never derive a bogus domain/lens from <output_dir>'s own name.
     rel="${file#"$dir"/}"
     if [[ -z "$domain" || -z "$lens" ]] && [[ "$rel" == */*/* ]]; then
-      [[ -z "$lens"   ]] && lens="$(basename "$(dirname "$file")")"
-      [[ -z "$domain" ]] && domain="$(basename "$(dirname "$(dirname "$file")")")"
+      lens_rel="${rel#*/}"
+      [[ -z "$lens"   ]] && lens="${lens_rel%%/*}"
+      [[ -z "$domain" ]] && domain="${rel%%/*}"
     fi
 
     id="$(finding_id "$domain" "$lens" "$title")"

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Keep completion receipts per full lens dispatch so different role, focus, anchor, or exclusion investigations of the same lens run and resume independently (repolens-r5-p1-1).
+- Keep completion receipts per full lens dispatch so different role, focus, anchor, or exclusion investigations of the same lens run and resume independently; isolate their captures, local findings and heartbeats, serialize long receipt writes, and propagate receipt persistence failures (repolens-r5-p1-1).
 
 - Propagate persistent lens agent failures through the callback even when the abort marker cannot be written, and keep unstarted lenses visible as skipped after sequential callback or parallel admission failures (repolens-r5-p1-3).
 
