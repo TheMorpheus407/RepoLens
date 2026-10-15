@@ -521,8 +521,17 @@ build_findings_jsonl_from_local() {
       rm -f "$tmp" "$components"
       return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     fi
-    if ! jq -s '.' "$tmp" > "$manifest" \
-        || ! _synthesize_compute_duplicate_groups "$manifest" > "$components"; then
+    if ! jq -s '.' "$tmp" > "$manifest"; then
+      rm -f "$tmp" "$components" "$manifest"
+      return 1
+    fi
+    # Assembly can accept a returning parent signal. Do not start the expensive
+    # grouping pass once cancellation has been observed at this boundary.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -f "$tmp" "$components" "$manifest"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+    if ! _synthesize_compute_duplicate_groups "$manifest" > "$components"; then
       rm -f "$tmp" "$components" "$manifest"
       return 1
     fi

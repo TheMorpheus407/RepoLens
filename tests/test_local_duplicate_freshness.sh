@@ -127,5 +127,51 @@ for scenario in grouping-failure grouping-cancelled; do
   ) && result=0 || result=$?
   check test "$result" -eq 0
 done
+# A returning signal during successful JSON assembly must not admit grouping.
+# Exercise the production handlers, real parser/grouping and resumable output.
+eval "$(declare -f _synthesize_compute_duplicate_groups | sed '1s/_synthesize_compute_duplicate_groups/original_compute_duplicate_groups/')"
+for signal in HUP INT TERM NONE; do
+  scenario="assembly-$signal"
+  out="$FIXTURE/$scenario.jsonl"
+  groups="$FIXTURE/$scenario.groups"
+  signalled="$FIXTURE/$scenario.signalled"
+  printf 'previous complete registry\n' > "$out"
+  before="$(sha256sum "$out")"
+  rc=0 expected=0
+  case "$signal" in HUP) expected=129 ;; INT) expected=130 ;; TERM) expected=143 ;; esac
+  (
+    signal_parent="$BASHPID"
+    # shellcheck disable=SC2034 # Sourced ingestion and production traps read it.
+    REPOLENS_FINAL_STATE=finished
+    eval "$(sed -n '/^_final_signal_generation=0/,/^_install_finalization_signal_handlers$/p' "$REPO/repolens.sh")"
+    # shellcheck disable=SC2329 # Invoked by the real ingestion path.
+    _synthesize_compute_duplicate_groups() {
+      printf 'grouping\n' >> "$groups"
+      original_compute_duplicate_groups "$@"
+    }
+    # shellcheck disable=SC2329 # Inject after the real successful assembly.
+    jq() {
+      command jq "$@" || return $?
+      if [[ "$signal" != NONE && "${1:-}" == -s && "${2:-}" == . && ! -e "$signalled" ]]; then
+        : > "$signalled"
+        kill -s "$signal" "$signal_parent"
+      fi
+    }
+    build_findings_jsonl_from_local "$FIXTURE/valid/output" "$out"
+  ) || rc=$?
+  check test "$rc" -eq "$expected"
+  check test "$(find "$FIXTURE" -maxdepth 1 -name "$scenario.jsonl.tmp.*" | wc -l)" -eq 0
+  if [[ "$signal" == NONE ]]; then
+    check test "$(wc -l < "$groups")" -eq 1
+    check cmp -s "$out" "$FIXTURE/valid/logs/probe/final/findings.jsonl"
+  else
+    check test -f "$signalled"
+    check test ! -e "$groups"
+    check test "$before" = "$(sha256sum "$out")"
+    # Resume without cancellation produces the same complete registry.
+    build_findings_jsonl_from_local "$FIXTURE/valid/output" "$out"
+    check cmp -s "$out" "$FIXTURE/valid/logs/probe/final/findings.jsonl"
+  fi
+done
 printf 'Local duplicate freshness: %s checks, %s failures.\n' "$checks" "$failed"
 (( failed == 0 ))

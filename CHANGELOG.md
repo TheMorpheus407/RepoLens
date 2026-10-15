@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Check cancellation between local registry JSON assembly and duplicate grouping, preserving the previous complete output and the accepted signal's exit code.
+
 - Restore local duplicate marks to actionable registry records when title edits or current similarity thresholds no longer place them with their live canonical. Reuse transitive grouping, preserve markdown evidence, and omit unsupported contributor claims.
 
 - Omit retained duplicate-report links from the human-review digest when current report generation fails. Report failed triage-report replacements accurately and remove their temporary files.
