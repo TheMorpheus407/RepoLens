@@ -192,6 +192,11 @@ case_manifest_metadata() (
       grep -Fq "[$canonical]($canonical)" "$LOG_BASE/final/HUMAN_REVIEW.md"
       if [[ "$field" == links-relative ]]; then
         jq -se '.[0].source_finding_paths == ["canonical.md"]' "$registry" >/dev/null
+        jq -se --arg path "$contributor" '.[0].also_reported_by == [{domain:"networking",lens:"tls-config",markdown_path:$path}]' "$registry" >/dev/null
+        grep -Fq "[$contributor]($contributor)" "$LOG_BASE/final/DUPLICATES.md"
+        # Link normalization belongs to the derived registry; keep synthesis
+        # provenance as originally recorded.
+        jq -e '.[0].also_reported_by[0].markdown_path == "contributor.md" and .[1].source_finding_paths == ["contributor.md"]' "$LOG_BASE/final/manifest.json" >/dev/null
       fi
       ;;
     duplicates)

@@ -267,7 +267,8 @@ _ledger_resolve_finding_type() {
 #   - markdown_path is the absolute path of the first existing source finding
 #     file, else null (so links work from reports under final/).
 #     Source files are only checked for existence, never read.
-#   - also_reported_by passes through when it is a non-empty array.
+#   - also_reported_by passes through when it is a non-empty array, with
+#     relative Markdown links made absolute for reports under final/.
 #   - confidence is null, primary_location is "", validation is {}.
 #   - source_finding_paths is passed through verbatim so siblings can trace
 #     the underlying evidence.
@@ -338,7 +339,7 @@ build_findings_jsonl_from_manifest() {
     jq -cn \
       --argjson entry "$entry" \
       --arg id "$id" --arg severity "$sev" --arg status "$status" --arg ftype "$ftype" \
-      --arg md "$md" --arg complexity "$cx" '
+      --arg md "$md" --arg complexity "$cx" --arg source_base "$PWD" '
       {
         id: $id,
         title: ($entry.title // ""),
@@ -356,7 +357,11 @@ build_findings_jsonl_from_manifest() {
         source_finding_paths: ($entry.source_finding_paths // [])
       }
       + (if ($entry.also_reported_by | type) == "array" and ($entry.also_reported_by | length) > 0
-         then {also_reported_by: $entry.also_reported_by} else {} end)' >> "$tmp" || { rm -f "$tmp"; return 1; }
+         then {also_reported_by: ($entry.also_reported_by | map(
+           if (.markdown_path | type) == "string" and .markdown_path != ""
+              and (.markdown_path | startswith("/") | not)
+           then .markdown_path = ($source_base + "/" + .markdown_path)
+           else . end))} else {} end)' >> "$tmp" || { rm -f "$tmp"; return 1; }
   done
 
   mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }

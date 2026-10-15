@@ -22,7 +22,9 @@ It is built from the existing finding outputs; it does not replace them.
   excluded by verification or synthesis. Manifest ingestion preserves duplicate
   status and `also_reported_by` provenance, and links `markdown_path` to the
   absolute path of the first existing file in `source_finding_paths` without
-  reading source contents. The original source paths remain unchanged.
+  reading source contents. Relative contributor Markdown links are also made
+  absolute so they resolve from `DUPLICATES.md` under `final/`. The original
+  manifest and `source_finding_paths` remain unchanged.
 - **Other `--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
   (`lib/template.sh`, LOCAL MODE OVERRIDE block, ~line 521). The builder reads
   that frontmatter and emits one normalized record per file. It preserves local
