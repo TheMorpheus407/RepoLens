@@ -97,6 +97,7 @@ filing_verified_issue_count() {
         || ! url="$(cat "$marker")" \
         || ! entry="$(cat "$prefix.request.json")" \
         || ! number="$(forge_issue_number_from_url "$repo" "$url")" \
+        || _filing_cancelled \
         || ! readback="$(forge_issue_read_json "$repo" "$number")" \
         || ! _filing_readback_matches "$entry" "$url" "$number" "$readback"; then
       _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
@@ -118,6 +119,7 @@ filing_verified_issue_count() {
         || ! -f "$prefix.body.banner.md" || -L "$prefix.body.banner.md" ]] \
         || ! url="$(cat "$prefix.created-response")" \
         || ! number="$(forge_issue_number_from_url "$repo" "$url")" \
+        || _filing_cancelled \
         || ! readback="$(forge_issue_read_json "$repo" "$number")" \
         || ! jq -e --arg url "$url" --argjson number "$number" \
           --arg title "[reopen-candidate] consider re-opening #${prefix##*/reopen-suggestion-}" \
@@ -125,9 +127,11 @@ filing_verified_issue_count() {
           '.url == $url and .number == $number and .title == $title and .body == $body and .state == "open"' \
           <<< "$readback" >/dev/null; then
       _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
-      mv "$marker" "$prefix.unverified-done" || return 1
-      : > "$prefix.attempted" || return 1
-      printf 'VERIFICATION_FAILED: saved creation receipt could not be reconciled\n' > "$prefix.failed" || return 1
+      if ! _filing_cross_link_fail "$marker" "$prefix.failed" \
+          'VERIFICATION_FAILED: saved creation receipt could not be reconciled'; then
+        _filing_cancelled && return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+        return 1
+      fi
       rc=1
       continue
     fi
@@ -489,6 +493,81 @@ _filing_fail() {
   rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
 }
 
+# Invalidate a saved cross-link receipt only after a completed failure.
+# A cancellation leaves the original receipt and its payload available for resume.
+_filing_cross_link_fail() {
+  local done_file="$1" result_file="$2" reason="$3" move_rc=0
+  _filing_cancelled && return 1
+  if [[ -e "$done_file" || -L "$done_file" ]]; then
+    # Reserve the already completed POST before any marker move, including crashes.
+    : > "${done_file%.done}.attempted" || return 1
+    _filing_cancelled && return 1
+    mv "$done_file" "${done_file%.done}.unverified-done" || move_rc=$?
+    # A returning handler may run while mv waits for its child. Even a failed
+    # command can have completed the rename before reporting interruption.
+    if _filing_cancelled; then
+      if [[ ! -e "$done_file" && ! -L "$done_file" ]] \
+          && [[ -e "${done_file%.done}.unverified-done" || -L "${done_file%.done}.unverified-done" ]]; then
+        mv "${done_file%.done}.unverified-done" "$done_file" || return 1
+      fi
+      return 1
+    fi
+    (( move_rc == 0 )) || return 1
+  fi
+  printf '%s\n' "$reason" > "$result_file"
+}
+
+# Promote verified saved payloads together, retaining originals until both
+# renames complete without cancellation. Restore even an absent historical raw
+# body on failure. If rollback itself fails, keep its backup for reconciliation.
+_filing_cross_link_promote_payload() {
+  local prefix="$1" body_candidate="$2" banner_candidate="$3"
+  local backup i rc=0 restore_rc=0
+  local -a candidates=() targets=()
+  if [[ -n "$banner_candidate" ]]; then
+    candidates+=("$banner_candidate")
+    targets+=("$prefix.body.banner.md")
+  fi
+  candidates+=("$body_candidate")
+  targets+=("$prefix.body.md")
+  backup="$(mktemp -d "$prefix.body.md.reconcile.XXXXXX")" || return 1
+  mkdir "$backup/originals" || { rmdir "$backup"; return 1; }
+  for i in "${!targets[@]}"; do
+    if [[ -e "${targets[$i]}" || -L "${targets[$i]}" ]]; then
+      cp -pP "${targets[$i]}" "$backup/originals/$i" || {
+        rm -rf -- "$backup"
+        return 1
+      }
+    fi
+  done
+  if _filing_cancelled; then
+    rm -rf -- "$backup"
+    return 1
+  fi
+  for i in "${!targets[@]}"; do
+    mv "${candidates[$i]}" "${targets[$i]}" || rc=1
+    if (( rc != 0 )) || _filing_cancelled; then
+      rc=1
+      break
+    fi
+  done
+  if (( rc != 0 )); then
+    for i in "${!targets[@]}"; do
+      if [[ -e "$backup/originals/$i" || -L "$backup/originals/$i" ]]; then
+        mv "$backup/originals/$i" "${targets[$i]}" || restore_rc=1
+      else
+        rm -f "${targets[$i]}" || restore_rc=1
+      fi
+    done
+  fi
+  if (( restore_rc != 0 )); then
+    echo "_filing_cross_link_promote_payload: restore failed; originals retained under $backup" >&2
+    return 1
+  fi
+  rm -rf -- "$backup"
+  return "$rc"
+}
+
 # Emit complete whitespace tokens carrying bare file/line-shaped references.
 # This is only a classifier: the shared extractor decides supported grammar.
 _filing_action_reference_candidates() {
@@ -556,7 +635,8 @@ _filing_action_reference_candidates() {
 #   the dispatcher does not repeat a POST.
 #
 #   Per-action state machine for each cross-link entry:
-#     1. <key>.done present     -> quarantine and re-attest saved response
+#     1. <key>.done present     -> preserve receipt and payload while re-attesting;
+#                                quarantine only a completed validation failure
 #     2. .failed or .attempted  -> SKIP (requires operator reconciliation)
 #     3. otherwise             -> verify evidence, adapter, target and body;
 #                                dedup new reopen suggestions against one
@@ -667,11 +747,8 @@ _filing_cross_link_enact() {
     # backslashes, tabs, CR, or trailing newlines. Decode to a JSON string;
     # only the citation scan uses Bash text, while the payload stays exact.
     if ! body_json="$(jq -en --arg encoded "$body" '$encoded | @base64d | fromjson | select(type == "string" and length > 0 and (contains("\u0000") | not))')"; then
-      printf 'VERIFICATION_FAILED: invalid cross-link body\n' > "$cross_dir/$action_type-$issue_number.failed"
-      if [[ -e "$cross_dir/$action_type-$issue_number.done" ]]; then
-        mv "$cross_dir/$action_type-$issue_number.done" "$cross_dir/$action_type-$issue_number.unverified-done"
-        : > "$cross_dir/$action_type-$issue_number.attempted"
-      fi
+      _filing_cross_link_fail "$cross_dir/$action_type-$issue_number.done" \
+        "$cross_dir/$action_type-$issue_number.failed" 'VERIFICATION_FAILED: invalid cross-link body' || return 1
       continue
     fi
     body="$(jq -r . <<< "$body_json")"
@@ -687,8 +764,9 @@ _filing_cross_link_enact() {
     rm -f "$cross_dir/$key.deferred"
     reconcile_done=0
     if [[ -e "$sentinel_done" ]]; then
-      mv "$sentinel_done" "$cross_dir/$key.unverified-done" || continue
-      : > "$cross_dir/$key.attempted"
+      # Keep the saved success during read-only reattestation. Its permanent
+      # attempt marker prevents a repeated POST if later invalidation is interrupted.
+      : > "$cross_dir/$key.attempted" || return 1
       reconcile_done=1
     elif [[ -e "$sentinel_failed" || -e "$cross_dir/$key.attempted" ]]; then
       continue
@@ -697,12 +775,13 @@ _filing_cross_link_enact() {
     # If the parent cluster failed and has no .url, skip — a comment that
     # references a non-existent new issue is worse than no comment.
     if [[ -e "$filed_dir/$cluster_id.deferred" && ! -e "$filed_dir/$cluster_id.url" ]]; then
-      printf 'BUDGET_DEFERRED: parent cluster %s deferred\n' "$cluster_id" > "$cross_dir/$key.deferred"
+      _filing_cross_link_fail "$sentinel_done" "$cross_dir/$key.deferred" \
+        "BUDGET_DEFERRED: parent cluster $cluster_id deferred" || return 1
       continue
     fi
     if [[ -n "$cluster_id" && -e "$filed_dir/$cluster_id.failed" && ! -e "$filed_dir/$cluster_id.url" ]]; then
-      printf 'cross_link_skipped_parent_failed: cluster=%s key=%s\n' \
-        "$cluster_id" "$key" > "$sentinel_failed"
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" \
+        "cross_link_skipped_parent_failed: cluster=$cluster_id key=$key" || return 1
       continue
     fi
 
@@ -717,38 +796,39 @@ _filing_cross_link_enact() {
     reason=""
     if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$evidence")" \
         || ! reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$evidence")")"; then
-      printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$sentinel_failed"
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
       continue
     fi
     if [[ ! "$forge_repo" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$ ]] \
         || ! forge_filing_capable "$([[ "$action_type" == comment ]] && printf comment || printf create)" \
+        || _filing_cancelled \
         || ! target="$(forge_issue_read_json "$forge_repo" "$issue_number")" \
         || ! jq -e --arg type "$action_type" 'if $type == "comment" then .state == "open" else .state == "closed" end' <<< "$target" >/dev/null; then
-      printf 'VERIFICATION_FAILED: cross-link target or adapter unavailable\n' > "$sentinel_failed"
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: cross-link target or adapter unavailable' || return 1
       continue
     fi
     # Newly introduced citations in the action itself must also verify.
     if ! action_citations="$(repolens_extract_citations "$body")"; then
-      printf 'VERIFICATION_FAILED: malformed citation list in body\n' > "$sentinel_failed"
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: malformed citation list in body' || return 1
       continue
     fi
     # Classification covers every action, including mixed valid/unsupported
     # references. Candidates never replace the original validation body.
     local action_reference_candidates action_reference candidate_citations
     if ! action_reference_candidates="$(_filing_action_reference_candidates "$body")"; then
-      printf 'VERIFICATION_FAILED: action citation classification failed\n' > "$sentinel_failed"
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: action citation classification failed' || return 1
       continue
     fi
     local unsupported_reference=0
     while IFS= read -r action_reference; do
       [[ -n "$action_reference" ]] || continue
       if ! candidate_citations="$(repolens_extract_citations "$action_reference" | sed '/^quoted:1$/d')"; then
-        printf 'VERIFICATION_FAILED: action citation classification failed\n' > "$sentinel_failed"
+        _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: action citation classification failed' || return 1
         unsupported_reference=1
         break
       fi
       if [[ -z "$candidate_citations" ]]; then
-        printf 'VERIFICATION_FAILED: unsupported action citation; quote the complete path\n' > "$sentinel_failed"
+        _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: unsupported action citation; quote the complete path' || return 1
         unsupported_reference=1
         break
       fi
@@ -757,7 +837,7 @@ _filing_cross_link_enact() {
     if [[ -n "$action_citations" ]]; then
       if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" \
           || ! reason="$(branch_scope_verify_body "$body")"; then
-        printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$sentinel_failed"
+        _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
         continue
       fi
     fi
@@ -785,14 +865,14 @@ _filing_cross_link_enact() {
         fi
       fi
       if [[ "$open_issues_status" == failed ]]; then
-        printf 'VERIFICATION_FAILED: fresh reopen-candidate dedup query failed\n' > "$sentinel_failed"
+        _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: fresh reopen-candidate dedup query failed' || return 1
         continue
       fi
       duplicate="$(jq -r --arg title "$title" '
         [.[] | select(.state == "open") | select(.title == $title)]
         | .[0].number // empty' <<< "$open_issues")"
       if [[ -n "$duplicate" ]]; then
-        printf 'DEDUP_HIT: #%s\n' "$duplicate" > "$sentinel_failed"
+        _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "DEDUP_HIT: #$duplicate" || return 1
         continue
       fi
     fi
@@ -803,10 +883,10 @@ _filing_cross_link_enact() {
         reserve_rc=0
         _filing_reserve_issue_attempt "$filed_dir" "$cross_dir/$key.attempted" || reserve_rc=$?
         if (( reserve_rc == 2 )); then
-          printf 'BUDGET_DEFERRED: new-issue limit %s reached\n' "$MAX_ISSUES" > "$cross_dir/$key.deferred"
+          _filing_cross_link_fail "$sentinel_done" "$cross_dir/$key.deferred" "BUDGET_DEFERRED: new-issue limit $MAX_ISSUES reached" || return 1
           continue
         elif (( reserve_rc != 0 )); then
-          printf 'VERIFICATION_FAILED: unable to reserve new-issue budget\n' > "$sentinel_failed"
+          _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: unable to reserve new-issue budget' || return 1
           continue
         fi
       else
@@ -815,8 +895,14 @@ _filing_cross_link_enact() {
     fi
 
     body_file="$cross_dir/$key.body.md"
+    local reconcile_body_file="" reconcile_banner_file=""
+    if (( reconcile_done )); then
+      reconcile_body_file="$(mktemp "$body_file.reconcile.XXXXXX")" || return 1
+      body_file="$reconcile_body_file"
+    fi
     jq -jr . <<< "$body_json" > "$body_file" || {
       echo "_filing_cross_link_enact: cannot write body file for $key" >&2
+      [[ -z "$reconcile_body_file" ]] || rm -f "$reconcile_body_file"
       if _filing_cancelled; then
         # No POST was attempted by this pass. Preserve older receipts that
         # still require reconciliation, but release a fresh unsent action.
@@ -825,9 +911,14 @@ _filing_cross_link_enact() {
         fi
         return 1
       fi
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: unable to write cross-link body' || return 1
       continue
     }
 
+    if (( reconcile_done )) && _filing_cancelled; then
+      rm -f "$reconcile_body_file"
+      return 1
+    fi
     rc=0
     case "$action_type" in
       comment)
@@ -864,27 +955,45 @@ _filing_cross_link_enact() {
           # reopen suggestion with the source closed issue called out
           # explicitly in the body.
           local banner_file="$cross_dir/$key.body.banner.md"
-          {
-            printf '> Generated by RepoLens run %s\n' "${run_id}"
-            printf '> Source: closed issue #%s\n\n' "$issue_number"
-            cat "$body_file"
-            printf '\n\nLabel suggestion: `%s`\n' "$reopen_label"
-          } > "$banner_file"
           if (( reconcile_done )); then
-            response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
-          else
-            if _filing_cancelled; then
-              rm -f "$cross_dir/$key.attempted" "$body_file" "$banner_file"
+            reconcile_banner_file="$(mktemp "$banner_file.reconcile.XXXXXX")" || {
+              rm -f "$reconcile_body_file"
               return 1
+            }
+            banner_file="$reconcile_banner_file"
+          fi
+          {
+            printf '> Generated by RepoLens run %s\n' "${run_id}" &&
+            printf '> Source: closed issue #%s\n\n' "$issue_number" &&
+            cat "$body_file" &&
+            printf '\n\nLabel suggestion: %s\n' "\`$reopen_label\`"
+          } > "$banner_file" || rc=1
+          if _filing_cancelled; then
+            if (( reconcile_done )); then
+              rm -f "$reconcile_body_file" "$reconcile_banner_file"
+            else
+              # Banner generation may have failed before the pre-POST check.
+              rm -f "$cross_dir/$key.attempted" "$body_file" "$banner_file"
             fi
-            response="$(forge_issue_create_once "$forge_repo" "$title" "$banner_file" 2>>"$cross_dir/$key.log")" || rc=$?
-            printf '%s\n' "$response" > "$cross_dir/$key.created-response"
+            return 1
           fi
           if (( rc == 0 )); then
-            new_number="$(forge_issue_number_from_url "$forge_repo" "$response")" || rc=$?
-            readback="$(forge_issue_read_json "$forge_repo" "$new_number")" || rc=$?
-            jq -e --arg title "$title" --rawfile body "$banner_file" --arg url "$response" \
-              '.title == $title and .body == $body and .url == $url and .state == "open"' <<< "$readback" >/dev/null || rc=1
+            if (( reconcile_done )); then
+              response="$(cat "$cross_dir/$key.created-response" 2>/dev/null)" || rc=1
+            else
+              if _filing_cancelled; then
+                rm -f "$cross_dir/$key.attempted" "$body_file" "$banner_file"
+                return 1
+              fi
+              response="$(forge_issue_create_once "$forge_repo" "$title" "$banner_file" 2>>"$cross_dir/$key.log")" || rc=$?
+              printf '%s\n' "$response" > "$cross_dir/$key.created-response"
+            fi
+            if (( rc == 0 )); then
+              new_number="$(forge_issue_number_from_url "$forge_repo" "$response")" || rc=$?
+              readback="$(forge_issue_read_json "$forge_repo" "$new_number")" || rc=$?
+              jq -e --arg title "$title" --rawfile body "$banner_file" --arg url "$response" \
+                '.title == $title and .body == $body and .url == $url and .state == "open"' <<< "$readback" >/dev/null || rc=1
+            fi
           fi
         else
           echo "_filing_cross_link_enact: forge_issue_create unavailable" >&2
@@ -897,17 +1006,28 @@ _filing_cross_link_enact() {
         ;;
     esac
 
+    if (( reconcile_done )); then
+      if _filing_cancelled; then
+        rm -f "$reconcile_body_file" ${reconcile_banner_file:+"$reconcile_banner_file"}
+        return 1
+      fi
+      if (( rc == 0 )); then
+        _filing_cross_link_promote_payload "$cross_dir/$key" "$reconcile_body_file" "$reconcile_banner_file" || rc=1
+      fi
+      rm -f "$reconcile_body_file" ${reconcile_banner_file:+"$reconcile_banner_file"}
+      _filing_cancelled && return 1
+    fi
     if (( rc == 0 )); then
       printf '%s\n' "$readback" > "$cross_dir/$key.readback.json" || continue
       rm -f "$cross_dir/$key.unverified-done"
       : > "$sentinel_done"
     else
-      printf 'rc=%d action=%s issue=%s\n' "$rc" "$action_type" "$issue_number" \
-        > "$sentinel_failed"
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "rc=$rc action=$action_type issue=$issue_number" || return 1
       echo "_filing_cross_link_enact: $action_type on #$issue_number failed (rc=$rc), continuing" >&2
     fi
   done <<< "$tuples"
 
+  _filing_cancelled && return 1
   return 0
 }
 
