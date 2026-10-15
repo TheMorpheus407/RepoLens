@@ -15,27 +15,31 @@
 
 # Signal the real enactor at serialization/POST boundaries; never contact a forge.
 # shellcheck disable=SC2034,SC2329
-set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$REPO/lib/filing.sh"
-FIXTURE="$(mktemp -d)"
+set -uo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+source "$REPO/lib/filing.sh" || exit 1
+FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 PASS=0 FAIL=0
-for scenario in comment-body reopen-body reopen-banner comment-post reopen-post dispatch-full dispatch-empty ordinary-full ordinary-empty; do
+for scenario in comment-body reopen-body comment-body-fail reopen-body-fail reconciled-comment-body-fail reconciled-reopen-body-fail reopen-banner comment-post reopen-post dispatch-full dispatch-empty ordinary-full ordinary-empty; do
   if (
     LOG_BASE="$FIXTURE/$scenario"
     cross_dir="$LOG_BASE/final/filed/cross-link"
-    mkdir -p "$cross_dir"
+    mkdir -p "$cross_dir" || exit 1
     FORGE_REPO=acme/repo PARALLEL=false CROSS_LINK_MODE=suggest-reopen MAX_ISSUES=1
     REPOLENS_FINAL_STATE=finished
     cancel_enabled=1
     parent_pid="$BASHPID"
     trap 'REPOLENS_FINAL_STATE=interrupted' TERM
     action=comment
-    [[ "$scenario" != reopen-* ]] || action=reopen-suggestion
+    [[ "$scenario" != *reopen-* ]] || action=reopen-suggestion
     key="$action-9"
+    if [[ "$scenario" == reconciled-* ]]; then
+      : > "$cross_dir/$key.done" || exit 1
+      printf 'https://example.invalid/saved-response\n' > "$cross_dir/$key.created-response" || exit 1
+    fi
     command jq -n --arg type "$action" '[{cluster_id:"c1",body:"evidence",cross_link_actions:[
-      {type:$type,issue_number:9,body:"action body"}]}]' > "$LOG_BASE/final/manifest.json"
+      {type:$type,issue_number:9,body:"action body"}]}]' > "$LOG_BASE/final/manifest.json" || exit 1
 
     # Keep validation deterministic; only the local reservation/dispatch is real.
     filing_verify_cluster_citations() { return 0; }
@@ -57,6 +61,11 @@ for scenario in comment-body reopen-body reopen-banner comment-post reopen-post 
     forge_issue_create_once() { forge_issue_comment_once "$@"; }
     # Deliver TERM after a reservation exists but before any POST can begin.
     jq() {
+      if [[ "$cancel_enabled" == 1 && "$1" == -jr && "$scenario" == *-body-fail ]]; then
+        printf 'partial body'
+        kill -TERM "$parent_pid"
+        return 1
+      fi
       command jq "$@" || return 1
       if [[ "$cancel_enabled" == 1 && "$1" == -jr && "$scenario" == *-body ]]; then kill -TERM "$parent_pid"; fi
     }
@@ -71,8 +80,8 @@ for scenario in comment-body reopen-body reopen-banner comment-post reopen-post 
         # Exercise both dispatcher exits; a preserved action survives an empty manifest.
         if [[ "$scenario" == *-empty ]]; then
           command jq '[.[0].cross_link_actions[] + {cluster_id:"c1",evidence_body:"evidence"}]' \
-            "$LOG_BASE/final/manifest.json" > "$LOG_BASE/final/cross-link-actions.preserved.json"
-          printf '[]\n' > "$LOG_BASE/final/manifest.json"
+            "$LOG_BASE/final/manifest.json" > "$LOG_BASE/final/cross-link-actions.preserved.json" || exit 1
+          printf '[]\n' > "$LOG_BASE/final/manifest.json" || exit 1
         fi
         callback() { printf 'mock-success\n' > "$LOG_BASE/final/filed/$2.url"; }
         _FILING_AGENT_CALLBACK=callback
@@ -91,9 +100,22 @@ for scenario in comment-body reopen-body reopen-banner comment-post reopen-post 
         fi
         ;;
       *)
-        _filing_cross_link_enact probe || true
+        rc=0
+        _filing_cross_link_enact probe || rc=$?
         [[ "$REPOLENS_FINAL_STATE" == interrupted ]] || exit 1
-        if [[ "$scenario" == *-post ]]; then
+        if [[ "$scenario" == *-body-fail ]]; then
+          [[ "$rc" != 0 ]] || exit 1
+        fi
+        if [[ "$scenario" == reconciled-* ]]; then
+          # A saved successful POST still needs reconciliation, even if its body write fails.
+          [[ ! -e "$LOG_BASE/writes" && -e "$cross_dir/$key.attempted" ]] || exit 1
+          [[ -e "$cross_dir/$key.unverified-done" && -s "$cross_dir/$key.created-response" ]] || exit 1
+          REPOLENS_FINAL_STATE=finished
+          cancel_enabled=0
+          _filing_cross_link_enact probe || true
+          [[ ! -e "$LOG_BASE/writes" && -e "$cross_dir/$key.attempted" ]] || exit 1
+          exit 0
+        elif [[ "$scenario" == *-post ]]; then
           [[ -e "$cross_dir/$key.attempted" ]] || exit 1
           [[ "$(command cat "$LOG_BASE/writes")" == POST ]] || exit 1
         else

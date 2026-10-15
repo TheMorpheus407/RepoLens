@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Keep post-round filing in the parent process so cancellation stops later callbacks and cleans up the owned workers (repolens-r3-p2-1). Guard setup and polling against returning signal traps, stop sequential and cross-link admission after cancellation, release cross-link reservations cancelled before POST, and return a failed dispatch on cross-link cancellation. Skip the cgroup regressions on unsupported local hosts while requiring both setup and parent-filing cancellation in containment CI.
+- Keep post-round filing in the parent process so cancellation stops later callbacks and cleans up the owned workers (repolens-r3-p2-1). Guard setup and polling against returning signal traps, stop sequential and cross-link admission after cancellation, release cross-link reservations cancelled before POST (including interrupted body-write failures), and return a failed dispatch on cross-link cancellation. Skip the cgroup regressions on unsupported local hosts while requiring both setup and parent-filing cancellation in containment CI.
 
 - Preserve attempt-start diagnostics when a late signal requires reconciliation and the later ledger write fails.
 

@@ -790,6 +790,14 @@ _filing_cross_link_enact() {
     body_file="$cross_dir/$key.body.md"
     jq -jr . <<< "$body_json" > "$body_file" || {
       echo "_filing_cross_link_enact: cannot write body file for $key" >&2
+      if _filing_cancelled; then
+        # No POST was attempted by this pass. Preserve older receipts that
+        # still require reconciliation, but release a fresh unsent action.
+        if (( ! reconcile_done )); then
+          rm -f "$cross_dir/$key.attempted" "$body_file"
+        fi
+        return 1
+      fi
       continue
     }
 

@@ -14,9 +14,9 @@
 # limitations under the License.
 
 # Record containment CI's actual invocations without running the full gate.
-set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE="$(mktemp -d)"
+set -uo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 (
   unset REPOLENS_TEST_PROCESS_SCOPES_REQUIRED
@@ -24,8 +24,8 @@ trap 'rm -rf -- "$FIXTURE"' EXIT
     if [[ "$1" == --version ]]; then printf 'mock Bash\n'; return 0; fi
     printf '%s %s\n' "${REPOLENS_TEST_PROCESS_SCOPES_REQUIRED:-0}" "$1" >> "$FIXTURE/calls"
   }
-  source "$REPO/ci/check-process-scopes.sh"
-)
+  source "$REPO/ci/check-process-scopes.sh" || exit 1
+) || exit 1
 for suite in test_parallel_setup_cancellation test_filing_parent_cancellation; do
   if ! grep -Fx "1 tests/$suite.sh" "$FIXTURE/calls" >/dev/null; then
     printf 'FAIL: containment CI must require %s\n' "$suite"
