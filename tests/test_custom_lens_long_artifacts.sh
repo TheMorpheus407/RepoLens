@@ -50,5 +50,20 @@ check test "$(find "$_REPOLENS_SEM_DIR" -type f | wc -l)" -eq 2
 check test "$(find "$HEARTBEAT_DIR" -type f | wc -l)" -eq 4
 check sem_token_remove "custom/$lens_id"
 check test ! -e "$token"
+# A short caller-supplied ID must not alias the reserved long-ID namespace.
+long_id="$(printf '%0201d' 0 | tr '0' x)"
+short_id="long-$(sha256_text "$long_id")"
+long_token="$(_sem_token_path "$long_id")"
+short_token="$(_sem_token_path "$short_id")"
+check test "$long_token" != "$short_token"
+check sem_token_create "$long_id" 111
+check sem_token_create "$short_id" 222
+check grep -q '^pid=111$' "$long_token"
+check grep -q '^pid=222$' "$short_token"
+check sem_token_remove "$short_id"
+check test -f "$long_token"
+check sem_token_remove "$long_id"
+# Sanitization cannot turn a literal reserved delimiter into a hashed key.
+check test "$(_sem_token_path "long+$(sha256_text "$long_id")")" != "$long_token"
 printf '%s checks passed; %s failed.\n' "$passed" "$failed"
 test "$failed" -eq 0

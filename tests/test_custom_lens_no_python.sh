@@ -53,7 +53,7 @@ test ! -e "$FIXTURE/python-calls"
 printf 'PASS: long materialization, stable IDs and bookkeeping without Python.\n'
 
 # Exercise the SHA fallback cascade using the same real materialization path.
-# The OpenSSL shim validates its invocation and emits its documented -r format.
+# Fallback shims validate arguments and formats without requiring those tools.
 backend=sha256sum
 command() {
   if [[ "${1:-}" == -v && "${2:-}" =~ ^(sha256sum|shasum|openssl)$ ]]; then
@@ -61,6 +61,10 @@ command() {
   else
     builtin command "$@"
   fi
+}
+shasum() {
+  test "$*" = '-a 256' || return 1
+  sha256sum
 }
 openssl() {
   test "$*" = 'dgst -sha256 -r' || return 1

@@ -815,7 +815,7 @@ Inspect the file from another terminal while a run is active:
 jq . logs/<run-id>/.heartbeat/<domain>__<lens-id>.json
 ```
 
-The file is rewritten atomically while the lens is active and removed after clean lens completion. Long internal filenames use a deterministic hash; resuming those lenses retires their older unbounded heartbeat paths. If the process dies abnormally, the last heartbeat is left behind so status tools and operators can treat it as stale. The JSON contains `run_id`, `domain`, `lens_id`, numeric `pid`, current `iteration`, `started_at`, `last_heartbeat_at`, and `state: "running"`.
+The file is rewritten atomically while the lens is active and removed after clean lens completion. Long internal filenames use a deterministic hash; resuming those lenses retires their older unbounded heartbeat paths, including when a completed round skips its lens callbacks. If the process dies abnormally, the last heartbeat is left behind so status tools and operators can treat it as stale. The JSON contains `run_id`, `domain`, `lens_id`, numeric `pid`, current `iteration`, `started_at`, `last_heartbeat_at`, and `state: "running"`.
 
 ### Run Status Snapshot
 

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Retire legacy long-lens heartbeats when completed rounds skip their lens callbacks, and separate hashed semaphore keys from short caller-supplied IDs.
+
 - Retire legacy heartbeat files when resuming long lens IDs, and hash long custom-lens and bookkeeping filenames with standard SHA-256 tools so sequential runs do not require Python.
 
 - Keep long custom-lens collision filenames within the destination filesystem limit while preserving existing valid IDs on resume; use bounded internal keys for their semaphore and heartbeat files.

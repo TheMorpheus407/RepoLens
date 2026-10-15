@@ -308,7 +308,8 @@ _sem_token_path() {
   # the canonical completion ID or ordinary token filenames.
   if (( ${#token_id} > 200 )); then
     token_id="$(sha256_text "$lens_id")" || return 1
-    token_id="long-$token_id"
+    # The + delimiter cannot occur in a sanitized short ID.
+    token_id="long+$token_id"
   fi
   printf '%s/%s.token\n' "$_REPOLENS_SEM_DIR" "$token_id"
 }

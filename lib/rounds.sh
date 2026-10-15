@@ -2645,6 +2645,15 @@ run_rounds() {
     # Eligibility is evaluated before callbacks: newly finished work needs a
     # fresh handoff. Restore saturation before considering completion markers.
     if _rounds_all_lenses_completed "$round_completed_lenses_file" "${active_lens_list[@]}"; then
+      # These shortcuts bypass run_lens, including its legacy heartbeat cleanup.
+      if declare -F retire_legacy_lens_heartbeat >/dev/null 2>&1; then
+        # shellcheck disable=SC2034 # Tuple parser requires outputs for unused dispatch attributes.
+        local completed_entry completed_role completed_focus completed_anchor completed_exclude
+        for lens_entry in "${active_lens_list[@]}"; do
+          _rounds_meta_tuple_parse "$lens_entry" completed_entry completed_role completed_focus completed_anchor completed_exclude
+          retire_legacy_lens_heartbeat "${completed_entry%%/*}" "${completed_entry#*/}" || return 1
+        done
+      fi
       if (( round < rounds_total )); then
         _rounds_meta_restore_success "$current_round_dir"
         round_rc=$?
