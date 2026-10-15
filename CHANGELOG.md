@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve contributor evidence from colliding canonical registry records so duplicate reports retain every validated group while keeping the winning record's other fields.
+
+- Keep finalization guards compatible with the existing triage and forge-rollup regression checks while preserving cancellation checks, and describe generated reports without triggering the README draft-marker check.
+
 - Install returning HUP/INT/TERM handlers before final artifact and summary persistence so early cancellation still publishes the reconciled attempt, latest-result pointer and single Cursor completion event (repolens-r3-p2-2).
 
 - Stop optional finalization work at cancellation boundaries, including receipt readback and local dedupe loops. Preserve previous accounting counts when recounting is interrupted, keep saved receipts intact, and regenerate deferred artifacts on resume.

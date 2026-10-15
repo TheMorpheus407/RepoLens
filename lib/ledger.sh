@@ -746,7 +746,9 @@ _ledger_log_base() {
 #   Ties retain input order (manifest-first — the manifest record carries the
 #   richer cross-run provenance: source_finding_paths passthrough and a
 #   cluster-seeded duplicate_group. Either order satisfies the AC, which mandates
-#   only that identical-id duplicates collapse). jq -s + reduce is single-pass
+#   only that identical-id duplicates collapse). Colliding non-duplicate records
+#   merge their also_reported_by contributors, preserving all other winner fields.
+#   jq -s + reduce is single-pass
 #   and order-preserving (unique_by would sort and lose "keep first").
 #
 #   Atomicity mirrors run_synthesizer's tmp+mv discipline: the registry is
@@ -826,6 +828,11 @@ build_finding_registry() {
               .seen[$r.id] = (.out | length) | .out += [$r]
             elif .out[$pos].status == "duplicate" and $r.status != "duplicate" then
               .out[$pos] = $r
+            elif .out[$pos].status != "duplicate" and $r.status != "duplicate"
+                and (((.out[$pos].also_reported_by // []) + ($r.also_reported_by // [])) | length) > 0 then
+              .out[$pos].also_reported_by =
+                ((.out[$pos].also_reported_by // []) + ($r.also_reported_by // [])
+                  | unique_by([.domain, .lens, .markdown_path]))
             else . end)
         | .out[]' "$candidate" > "$deduped" 2>/dev/null; then
     echo "build_finding_registry: dedup pass failed" >&2

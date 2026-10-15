@@ -5367,8 +5367,8 @@ fi
 # total (issue #246). Parallel workers carry their own _FORGE_WARN_SEEN map and
 # their counts don't cross fork boundaries — what we report here is what the
 # parent process accumulated (baseline calls plus anything that ran serially).
-if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-    && declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 && (( ${#_FORGE_WARN_SEEN[@]} > 0 )); then
+if declare -p _FORGE_WARN_SEEN >/dev/null 2>&1 && (( ${#_FORGE_WARN_SEEN[@]} > 0 )) \
+    && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
   log_info "Forge warning rollup (deduped):"
   while IFS= read -r _rollup_key; do
     [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
@@ -5470,7 +5470,7 @@ fi
 # (warn + continue), matching the verifier/synthesizer/human-review precedent; none
 # of these touch REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
 TRIAGE_FINDINGS="$LOG_BASE/final/findings.jsonl"
-if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && -s "$TRIAGE_FINDINGS" ]] \
+if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && { ! $LOCAL_MODE || $_local_registry_ready; }; then
   for _triage_spec in \
     "generate_todo_md:TODO.md" \

@@ -30,8 +30,10 @@ It is built from the existing finding outputs; it does not replace them.
 
 The registry collapses identical IDs to one record, preferring a non-duplicate
 record over a marked duplicate while preserving the ID's first position.
-Otherwise the first record wins (manifest before local). The human-review digest
-excludes marked duplicates from review buckets and accounts for them separately;
+Otherwise the first record wins (manifest before local). Colliding non-duplicate
+records merge their `also_reported_by` contributor lists, deduplicated by domain,
+lens and markdown path, while retaining the winner's other fields. The human-review
+digest excludes marked duplicates from review buckets and accounts for them separately;
 the registry retains those records when their IDs differ from the canonical ID.
 
 Because the registry is derived, several fields below are **added or derived by
