@@ -5417,9 +5417,9 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
 fi
 
 # --- Local-mode finding registry (non-fatal) ---
-# --local bypasses the synthesizer/manifest path, so the non-local registry hook
-# above ( ! $LOCAL_MODE) never fires. Build the canonical index directly from the
-# NNN-<slug>.md tree under $OUTPUT_DIR. The orchestrator writes only into
+# The non-local registry hook above ( ! $LOCAL_MODE) never fires for --local.
+# Use a synthesized manifest when present, preserving verification filtering;
+# otherwise index the NNN-<slug>.md tree under $OUTPUT_DIR. The orchestrator writes only into
 # logs/<run-id>/final/ (resolved from LOG_BASE, NOT $OUTPUT_DIR), so the user's
 # output dir stays pure md. Build after dedupe and before the digest/triage
 # consumers so fresh runs and the first successful resume render the current
@@ -5427,11 +5427,15 @@ fi
 # REPOLENS_FINAL_STATE or RUN_ROUNDS_RC. Consumers require this invocation's
 # successful rebuild; a failed pre-promotion write may leave an older index.
 _local_registry_ready=false
+_local_registry_source="${OUTPUT_DIR:-}"
+if [[ -f "$LOG_BASE/final/manifest.json" ]]; then
+  _local_registry_source=""
+fi
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
   if branch_scope_filter_directory "$OUTPUT_DIR" \
       && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-      && build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
+      && build_finding_registry "$RUN_ID" "$_local_registry_source"; then
     _local_registry_ready=true
     log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
   else
@@ -5445,7 +5449,9 @@ fi
 # is absent or empty (dry-run, single-round, or any run where the ledger did not
 # produce findings.jsonl): one info line, zero files written. Gating on `-s`
 # (exists AND non-empty) — not on generator return codes — keeps a present-but-empty
-# registry from leaking four placeholder files. Each generator failure is non-fatal
+# registry from leaking four placeholder files. A successful empty local rebuild
+# removes older generated triage reports so a resume cannot retain stale tasks.
+# Each generator failure is non-fatal
 # (warn + continue), matching the verifier/synthesizer/human-review precedent; none
 # of these touch REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
 TRIAGE_FINDINGS="$LOG_BASE/final/findings.jsonl"
@@ -5469,6 +5475,16 @@ if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != inte
   done
   unset _triage_spec _triage_fn _triage_out
 else
+  if [[ -f "$TRIAGE_FINDINGS" && ! -s "$TRIAGE_FINDINGS" \
+      && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+      && $LOCAL_MODE && $_local_registry_ready; then
+    for _triage_empty_out in TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md; do
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
+      rm -f -- "$LOG_BASE/final/$_triage_empty_out" \
+        || log_warn "Triage artifact: failed to remove stale $_triage_empty_out"
+    done
+    unset _triage_empty_out
+  fi
   log_info "Triage artifacts: interrupted, unavailable current registry or no findings at $TRIAGE_FINDINGS; skipping"
 fi
 
@@ -5498,7 +5514,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
   fi
 fi
 
-unset _local_registry_ready _duplicate_report_ready
+unset _local_registry_ready _duplicate_report_ready _local_registry_source
 
 apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"

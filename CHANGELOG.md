@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Keep synthesized local manifests authoritative so verified-away findings do not return through raw Markdown, and remove stale triage reports after successful empty local rebuilds (repolens-r4-p2-3, repolens-r4-p2-4).
+
 - Stop receipt reconciliation after parent cancellation, including sequential runs and interrupted preflight validation, without quarantining saved success receipts or reading later issues (repolens-r4-p2-2).
 
 - Keep semaphore reservations independent for short dispatch tuples whose punctuation sanitizes to the same filename (repolens-r4-p2-1).

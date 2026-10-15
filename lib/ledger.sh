@@ -779,7 +779,8 @@ _ledger_log_base() {
 #   Source selection (both may run, results are concatenated):
 #   - if `<log_base>/final/manifest.json` exists, ingest it via
 #     build_findings_jsonl_from_manifest.
-#   - if a local output dir is supplied (2nd arg, else the OUTPUT_DIR global)
+#   - if a local output dir is supplied (2nd arg, else the OUTPUT_DIR global;
+#     an explicit empty 2nd arg disables local ingestion)
 #     and is a directory, ingest its `*.md` tree via
 #     build_findings_jsonl_from_local.
 #   The concatenation is then collapsed so each `id` appears once, keeping the
@@ -806,7 +807,7 @@ _ledger_log_base() {
 #   Returns 2 on a missing run_id, 1 on a builder/jq/IO/validation failure.
 build_finding_registry() {
   local run_id="${1:-}"
-  local local_dir="${2:-${OUTPUT_DIR:-}}"
+  local local_dir="${2-${OUTPUT_DIR:-}}"
   if [[ -z "$run_id" ]]; then
     echo "build_finding_registry: missing run_id" >&2
     return 2
