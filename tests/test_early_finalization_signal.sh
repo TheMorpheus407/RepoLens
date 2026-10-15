@@ -60,6 +60,7 @@ build_findings_jsonl_from_local() {
   command jq -cn --arg dir "$1" 'range(0;3) | {markdown_path:($dir+"/"+(.|tostring)+".md"),lens:"probe",domain:"test"}' > "$2"
 }
 _synthesize_compute_duplicate_groups() {
+  printf 'grouping\n' >> "$LOG_BASE/groups"
   printf '{"canonical_idx":0,"member_indices":[0,1,2]}\n'
 }
 eval "$(declare -f _local_dedupe_mark_file | sed '1s/_local_dedupe_mark_file/original_mark_file/')"
@@ -80,6 +81,7 @@ generate_duplicates_md() { printf 'duplicates\n' >> "$LOG_BASE/optional"; }
 jq() {
   command jq "$@" || return $?
   if [[ "$hook" == health && "$*" == *'.health = $h'* ]]; then interrupt_once; fi
+  if [[ "$hook" == dedupe-assembly && "${1:-}" == -s && "${2:-}" == '.' ]]; then interrupt_once; fi
 }
 failed=0 cases=0
 check() {
@@ -98,14 +100,14 @@ run_finalization() (
   SCRIPT_DIR="${LOG_BASE%/logs/*}" LOCAL_MODE=false HUMAN_REVIEW=false
   FORGE_PROVIDER=gh FORGE_HOST=github.com FORGE_REPO=acme/probe
   OUTPUT_DIR="$LOG_BASE/output"
-  [[ "$hook" != dedupe ]] || LOCAL_MODE=true
+  [[ "$hook" != dedupe* ]] || LOCAL_MODE=true
   MAX_ISSUES=1 REPOLENS_DEGENERATE_THRESHOLD=90 CURSOR_IDE_ACTIVE=true
   REPOLENS_CURSOR_IDE_CTL_LOG="$LOG_BASE/control.ndjson"
   # Execute the entire production finalization, including early writers.
   # shellcheck source=/dev/null
   source <(sed -n '/^# --- Finalize ---/,$p' "$REPO/repolens.sh")
 )
-for hook in health filing filing-failure reopen reopen-failure dedupe triage; do
+for hook in health filing filing-failure reopen reopen-failure dedupe dedupe-assembly triage; do
 for prior in 0 1; do
   for SIGNAL in HUP INT TERM NONE; do
     LOG_BASE="$FIXTURE/$hook-$SIGNAL-$prior/logs/20261015T000000Z-probe"
@@ -114,6 +116,7 @@ for prior in 0 1; do
     init_summary "$SUMMARY_FILE" probe "$FIXTURE" audit mock
     : > "$LOG_BASE/reads"
     : > "$LOG_BASE/marks"
+    : > "$LOG_BASE/groups"
     : > "$LOG_BASE/optional"
     case "$hook" in
       filing*)
@@ -135,7 +138,7 @@ for prior in 0 1; do
           printf 'https://github.com/acme/probe/issues/%s\n' "$n" > "$prefix.created-response"
           printf body > "$prefix.body.banner.md"
         done ;;
-      dedupe)
+      dedupe*)
         mkdir -p "$LOG_BASE/output"
         for n in 0 1 2; do printf '%s\n' '---' 'title: saved' '---' 'body' > "$LOG_BASE/output/$n.md"; done ;;
       triage)
@@ -190,12 +193,19 @@ for prior in 0 1; do
           check test ! -s "$LOG_BASE/optional"
           check test ! -e "$LOG_BASE/output/2.md.rldedupe.$$"
           check test "$(cat "$LOG_BASE/output/2.md")" = $'---\ntitle: saved\n---\nbody' ;;
+        dedupe-assembly)
+          check test ! -s "$LOG_BASE/groups"
+          check test ! -s "$LOG_BASE/marks"
+          check test ! -s "$LOG_BASE/optional"
+          check test "$(cat "$LOG_BASE/output/2.md")" = $'---\ntitle: saved\n---\nbody' ;;
         triage) check test "$(cat "$LOG_BASE/optional")" = todo ;;
       esac
     else
       case "$hook" in
         filing|reopen) check command jq -e '.totals.governed_issues_created == 3' "$SUMMARY_FILE" ;;
-        dedupe) check test "$(wc -l < "$LOG_BASE/marks")" -eq 3 ;;
+        dedupe*)
+          check test "$(wc -l < "$LOG_BASE/groups")" -eq 1
+          check test "$(wc -l < "$LOG_BASE/marks")" -eq 3 ;;
         triage) check test "$(wc -l < "$LOG_BASE/optional")" -eq 4 ;;
       esac
     fi
@@ -216,6 +226,9 @@ for prior in 0 1; do
       case "$hook" in
         filing|reopen) check command jq -e '.totals.governed_issues_created == 3' "$SUMMARY_FILE" ;;
         dedupe) check test "$(wc -l < "$LOG_BASE/marks")" -eq 4 ;;
+        dedupe-assembly)
+          check test "$(wc -l < "$LOG_BASE/groups")" -eq 1
+          check test "$(wc -l < "$LOG_BASE/marks")" -eq 3 ;;
         triage) check test "$(wc -l < "$LOG_BASE/optional")" -eq 5 ;;
       esac
       SIGNAL="$saved_signal"

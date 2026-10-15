@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Stop optional finalization work at cancellation boundaries, including receipt readback and local dedupe loops. Preserve previous accounting counts when recounting is interrupted, keep saved receipts intact, and regenerate deferred artifacts on resume.
 
+- Check cancellation before local duplicate grouping. Rebuild the local finding registry before review artifacts so fresh runs and the first successful resume generate current reports; preserve markdown duplicate marks in the registry and actionable lists.
+
 - Keep post-round filing in the parent process so cancellation stops later callbacks and cleans up the owned workers (repolens-r3-p2-1). Guard setup and polling against returning signal traps, stop sequential and cross-link admission after cancellation, release fresh cross-link reservations when dispatch observes cancellation before POST (including interrupted body-write failures), and return a failed dispatch on cross-link cancellation. Document that immediate sequential signal exits can retain unsent reservations for manual reconciliation. Skip the cgroup regressions on unsupported local hosts while requiring both setup and parent-filing cancellation in containment CI.
 
 - Preserve attempt-start diagnostics when a late signal requires reconciliation and the later ledger write fails.

@@ -19,7 +19,9 @@ It is built from the existing finding outputs; it does not replace them.
   finding.
 - **`--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
   (`lib/template.sh`, LOCAL MODE OVERRIDE block, ~line 521). The builder reads
-  that frontmatter and emits one normalized record per file.
+  that frontmatter and emits one normalized record per file. It preserves local
+  dedupe's `status: duplicate` marks and uses their relative `duplicate_of` links
+  to reconstruct `also_reported_by` contributors on the canonical records.
 
 Because the registry is derived, several fields below are **added or derived by
 the builder** and are present in neither upstream source (notably `id`,

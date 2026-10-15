@@ -5413,6 +5413,26 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
   fi
 fi
 
+# --- Local-mode finding registry (non-fatal) ---
+# --local bypasses the synthesizer/manifest path, so the non-local registry hook
+# above ( ! $LOCAL_MODE) never fires. Build the canonical index directly from the
+# NNN-<slug>.md tree under $OUTPUT_DIR. The orchestrator writes only into
+# logs/<run-id>/final/ (resolved from LOG_BASE, NOT $OUTPUT_DIR), so the user's
+# output dir stays pure md. Build after dedupe and before the digest/triage
+# consumers so fresh runs and the first successful resume render the current
+# local findings. Non-fatal: a failure warns and NEVER flips
+# REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+    && $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
+  if branch_scope_filter_directory "$OUTPUT_DIR" \
+      && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+      && build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
+    log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
+  else
+    log_warn "Finding registry: build failed (findings index not produced)"
+  fi
+fi
+
 # --- Human review digest (non-fatal) ---
 # When --human-review is set and the finding registry exists, render the curated
 # final/HUMAN_REVIEW.md from the bucketed findings. Non-fatal, matching the
@@ -5464,27 +5484,6 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && -s "$TRIAGE_FINDINGS
   unset _triage_spec _triage_fn _triage_out
 else
   log_info "Triage artifacts: interrupted or no finding registry at $TRIAGE_FINDINGS; skipping"
-fi
-
-# --- Local-mode finding registry (non-fatal) ---
-# --local bypasses the synthesizer/manifest path, so the non-local registry hook
-# above ( ! $LOCAL_MODE) never fires. Build the canonical index directly from the
-# NNN-<slug>.md tree under $OUTPUT_DIR. The orchestrator writes only into
-# logs/<run-id>/final/ (resolved from LOG_BASE, NOT $OUTPUT_DIR), so the user's
-# output dir stays pure md. Placed after the triage block so triage/human-review
-# stay non-local-only (strict issue scope): the local change produces ONLY
-# findings.jsonl + findings.csv. Non-fatal, mirroring the verifier/synthesizer/
-# triage precedent: a failure warns and NEVER flips REPOLENS_FINAL_STATE or
-# RUN_ROUNDS_RC.
-if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-    && $LOCAL_MODE && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
-  if branch_scope_filter_directory "$OUTPUT_DIR" \
-      && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-      && build_finding_registry "$RUN_ID" "$OUTPUT_DIR"; then
-    log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
-  else
-    log_warn "Finding registry: build failed (findings index not produced)"
-  fi
 fi
 
 apply_rate_limit_abort_final_state || true

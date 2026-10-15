@@ -209,6 +209,10 @@ dedupe_local_markdown() {
     rm -rf "$tmpdir"
     return 1
   fi
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    rm -rf "$tmpdir"
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
 
   # 3. Group near-duplicates (union-find over _dedupe_is_match) + pick canonical
   #    (_dedupe_pick_canonical). Empty output for < 2 records or no matches.

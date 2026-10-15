@@ -421,8 +421,10 @@ _ledger_frontmatter_scalar() {
 #     primary_location), so the same finding earns the same id whether it
 #     arrived via a manifest cluster or a local .md file.
 #   - severity is run through _ledger_severity_normalize ("Critical"->"critical").
-#   - type/confidence are null, primary_location is "", validation is {},
-#     status is "new" (owned by sibling agents).
+#   - confidence is null, primary_location is "", validation is {}.
+#   - status preserves the local dedupe pass's "duplicate" mark; otherwise it
+#     defaults to "new", so reports do not present marked duplicates as actions.
+#     Its duplicate_of links reconstruct also_reported_by on canonical records.
 #
 #   jq owns all quoting/escaping: title/domain/lens/markdown_path are passed as
 #   --arg and the object is built inside jq, so titles with quotes, `$()`,
@@ -443,7 +445,7 @@ build_findings_jsonl_from_local() {
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
-  local file rel title severity domain lens id sev type_raw ftype cx
+  local file rel title severity domain lens id sev type_raw ftype cx status duplicate_of
   while IFS= read -r -d '' file; do
     # Skip + warn (not fatal) when there is no valid leading frontmatter block.
     if ! _ledger_has_frontmatter "$file"; then
@@ -456,6 +458,12 @@ build_findings_jsonl_from_local() {
     domain="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" domain)")"
     lens="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" lens)")"
     type_raw="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" type)")"
+    status="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" status)")"
+    [[ "$status" == duplicate ]] || status=new
+    duplicate_of=""
+    if [[ "$status" == duplicate ]]; then
+      duplicate_of="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" duplicate_of)")"
+    fi
     # Complexity (#385): optional 1..5 routing tier from the finding frontmatter.
     # The normalizer trims/de-quotes and range-checks; absent or out-of-range
     # yields "" -> stored as null (parity with the nullable confidence slot).
@@ -479,7 +487,7 @@ build_findings_jsonl_from_local() {
     jq -cn \
       --arg id "$id" --arg title "$title" --arg severity "$sev" \
       --arg domain "$domain" --arg lens "$lens" --arg md "$file" --arg ftype "$ftype" \
-      --arg complexity "$cx" '
+      --arg complexity "$cx" --arg status "$status" --arg duplicate_of "$duplicate_of" '
       {
         id: $id,
         title: $title,
@@ -487,7 +495,8 @@ build_findings_jsonl_from_local() {
         type: $ftype,
         domain: $domain,
         lens: $lens,
-        status: "new",
+        status: $status,
+        __local_duplicate_of: $duplicate_of,
         primary_location: "",
         confidence: null,
         duplicate_group: null,
@@ -497,7 +506,26 @@ build_findings_jsonl_from_local() {
       }' >> "$tmp" || { rm -f "$tmp"; return 1; }
   done < <(find "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z)
 
-  mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }
+  # The local dedupe pass stores canonical paths relative to output_dir. Resolve
+  # only against records in this same tree; no referenced file is opened. Derive
+  # contributor details from those records rather than parsing a YAML list.
+  if ! jq -cs --arg dir "${dir%/}" '
+      (reduce .[] as $r ({};
+        if $r.__local_duplicate_of == "" then .
+        else .[$dir + "/" + $r.__local_duplicate_of] +=
+          [{lens: $r.lens, domain: $r.domain, markdown_path: $r.markdown_path}]
+        end)) as $contributors
+      | .[]
+      | if ($contributors[.markdown_path] // [] | length) > 0 then
+          . + {also_reported_by: ($contributors[.markdown_path] | sort_by(.domain, .lens, .markdown_path))}
+        else . end
+      | del(.__local_duplicate_of)
+    ' "$tmp" > "$tmp.groups"; then
+    rm -f "$tmp" "$tmp.groups"
+    return 1
+  fi
+  rm -f "$tmp"
+  mv "$tmp.groups" "$out" || { rm -f "$tmp.groups"; return 1; }
 }
 
 # build_findings_csv <findings_jsonl_path> <out_csv_path>
