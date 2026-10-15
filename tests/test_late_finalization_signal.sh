@@ -19,7 +19,8 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="$(mktemp -d)"
-trap 'rm -rf -- "$FIXTURE"' EXIT
+# Fixture cleanup uses the real utility, independent of the injected rm below.
+trap 'command rm -rf -- "$FIXTURE"' EXIT
 # shellcheck source=/dev/null
 source "$REPO/lib/parallel.sh"
 # shellcheck source=/dev/null
