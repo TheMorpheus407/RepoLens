@@ -5482,8 +5482,16 @@ case "$RUN_HEALTH" in
     ;;
 esac
 
-# Resolve the process exit code after final presentation: the returning parallel
-# signal traps can still mark this invocation interrupted while output is rendered.
+# Resolve the process exit code after final presentation and durable writes.
+# At this point no lenses remain. HUP must return like INT/TERM so a signal
+# during presentation cannot bypass the attempt ledger and result publication.
+_install_finalization_signal_handlers() {
+  trap 'REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE=129' HUP
+  trap 'REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE=130' INT
+  trap 'REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE=143' TERM
+}
+_install_finalization_signal_handlers
+
 log_info "=============================="
 log_info "RepoLens run $RUN_ID complete"
 log_info "Summary: $SUMMARY_FILE"
@@ -5513,55 +5521,68 @@ echo ""
 echo "=== RepoLens Run Summary ==="
 jq '.' "$SUMMARY_FILE"
 
-# Surface the parent-run + attempts model (#377): when this run dir represents
-# one parent that took more than one attempt (a fresh start plus one or more
-# --resume invocations), print a single legible note pointing at the full
-# continuation history. Include the current invocation, which is recorded after
-# presentation so signals received while rendering remain visible.
-# Non-fatal: jq-guarded and tolerant of an absent/corrupt attempts.json.
-if command -v jq >/dev/null 2>&1 && [[ -f "$LOG_BASE/attempts.json" ]]; then
-  _attempts_n="$(jq -r 'if type == "array" then length + 1 else 0 end' "$LOG_BASE/attempts.json" 2>/dev/null || printf '0')"
-  [[ "$_attempts_n" =~ ^[0-9]+$ ]] || _attempts_n=0
-  if (( _attempts_n > 1 )); then
-    _attempts_latest="${REPOLENS_FINAL_STATE:-finished}"
-    echo "This run took ${_attempts_n} attempts (latest: ${_attempts_latest}). Full continuation history: logs/${RUN_ID}/attempts.json"
+# Reserve this invocation's ledger slot once. Reconciliation replaces that
+# entry rather than appending a second attempt, and keeps the start marker so
+# started_at and the per-attempt completed baseline survive a retry.
+_final_attempt_id=1
+if [[ -f "$LOG_BASE/attempts.json" ]]; then
+  _final_attempt_id="$(jq -er 'if type == "array" then length + 1 else empty end' "$LOG_BASE/attempts.json" 2>/dev/null || printf 'invalid')"
+fi
+
+# A returning signal can change the state inside any serializer or filesystem
+# operation. Repeat publication until all projections describe the same state.
+# The final trap builtin closes the last check-to-freeze race: after it, compare
+# once more and retry if a signal was accepted just before signals were ignored.
+while :; do
+  apply_rate_limit_abort_final_state || true
+  _final_state="${REPOLENS_FINAL_STATE:-finished}"
+  _final_signal="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  RUN_EXIT_CODE="$(resolve_run_exit_code)"
+  attempts_finalize "$LOG_BASE" "$_final_state" "$(resolve_why_stopped)" \
+    "$RUN_EXIT_CODE" "$_final_attempt_id" || true
+
+  # Best effort, as before: storage failures warn and do not change the exit.
+  write_latest_result_pointer "$SCRIPT_DIR/logs" "$RUN_ID" "$MODE" "$AGENT" \
+    "$SUMMARY_FILE" "$_final_state" "$LOG_BASE/final" || true
+
+  # Build the Cursor event while signals are still accepted. Publish only once,
+  # after reconciliation; a stale terminal success cannot be taken back.
+  _final_cursor_json=""
+  if [[ "${CURSOR_IDE_ACTIVE:-false}" == "true" ]]; then
+    _final_cursor_json="$(cursor_ide_run_complete_json "$RUN_ID" "$_final_state" "$SUMMARY_FILE")" || true
   fi
-  unset _attempts_n _attempts_latest
+
+  # Surface only durable continuation history (#377), including on write failure.
+  _attempts_n=0 _attempts_latest=""
+  if command -v jq >/dev/null 2>&1 && [[ -f "$LOG_BASE/attempts.json" ]]; then
+    _attempts_n="$(jq -r 'if type == "array" then length else 0 end' "$LOG_BASE/attempts.json" 2>/dev/null || printf '0')"
+    [[ "$_attempts_n" =~ ^[0-9]+$ ]] || _attempts_n=0
+    if (( _attempts_n > 1 )); then
+      _attempts_latest="$(jq -r 'if type == "array" then (last.status // "") else "" end' "$LOG_BASE/attempts.json" 2>/dev/null || printf '')"
+    fi
+  fi
+
+  trap '' HUP INT TERM
+  if [[ "$_final_state" == "${REPOLENS_FINAL_STATE:-finished}" \
+      && "$_final_signal" == "${REPOLENS_INTERRUPT_EXIT_CODE:-130}" ]]; then
+    break
+  fi
+  _install_finalization_signal_handlers
+done
+
+# Terminal boundary: retain the committed outcome through notification, resume
+# messaging and EXIT cleanup. All rendering, JSON construction and scans above
+# remain interruptible. No further signal can invalidate the one terminal event.
+if [[ -n "$_final_cursor_json" ]]; then cursor_ide_emit "$_final_cursor_json"; fi
+if (( _attempts_n > 1 )); then
+  echo "This run took ${_attempts_n} attempts (latest: ${_attempts_latest}). Full continuation history: logs/${RUN_ID}/attempts.json"
 fi
-
-# Emit the canonical latest-result pointer at the top of the logs tree (#308).
-# Non-fatal: a pointer-write failure logs a warning and never changes exit code.
-write_latest_result_pointer \
-  "$SCRIPT_DIR/logs" \
-  "$RUN_ID" \
-  "$MODE" \
-  "$AGENT" \
-  "$SUMMARY_FILE" \
-  "${REPOLENS_FINAL_STATE:-finished}" \
-  "$LOG_BASE/final" || true
-
-# Cursor Composer watches the durable control stream, so explicitly terminate
-# the handoff queue after final presentation has observed any interruption.
-if [[ "${CURSOR_IDE_ACTIVE:-false}" == "true" ]]; then
-  cursor_ide_emit_run_complete \
-    "$RUN_ID" "${REPOLENS_FINAL_STATE:-finished}" "$SUMMARY_FILE"
+# Keep the start marker when persistence failed so its diagnostic evidence lasts.
+if [[ -f "$LOG_BASE/.attempt-start" && -f "$LOG_BASE/attempts.json" ]] \
+    && jq -e --argjson id "$_final_attempt_id" 'last.attempt_id == $id' "$LOG_BASE/attempts.json" >/dev/null 2>&1; then
+  rm -f "$LOG_BASE/.attempt-start" 2>/dev/null || true
 fi
-
-# Refresh interruption diagnostics and resolve the exit immediately before the
-# attempt record, after all final presentation and completion notifications.
-apply_rate_limit_abort_final_state || true
-RUN_EXIT_CODE="$(resolve_run_exit_code)"
-
-# Record this invocation in the per-attempt audit trail (#371), enriched for
-# triage (#375), after presentation and result publication. summary.json exists;
-# why_stopped prefers its stopped_reason and
-# falls back to the present abort sentinel; exit_code is the resolved code above.
-# Non-fatal: a write failure logs a warning and never changes the exit code.
-attempts_finalize \
-  "$LOG_BASE" \
-  "${REPOLENS_FINAL_STATE:-finished}" \
-  "$(resolve_why_stopped)" \
-  "$RUN_EXIT_CODE" || true
+unset _final_attempt_id _final_state _final_signal _final_cursor_json _attempts_n _attempts_latest
 
 # Exit-code ladder. The numeric code comes from RUN_EXIT_CODE (resolved above by
 # resolve_run_exit_code) so it can never drift from the attempts.json record;

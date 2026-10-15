@@ -1025,7 +1025,9 @@ Each pass at a run — the initial start and every `--resume` — is recorded as
 This run took 2 attempts (latest: finished). Full continuation history: logs/<run-id>/attempts.json
 ```
 
-A run that completed in a single attempt prints no such note.
+A run that completed in a single attempt prints no such note. The note reflects the persisted history; a failed attempt write warns without adding to the displayed count.
+
+HUP, INT, and TERM remain effective during final summary rendering and result persistence. RepoLens reconciles the current attempt and latest-result pointer before committing the outcome. Immediately before terminal notification, it freezes that outcome and ignores those signals through the remaining notification, resume message, and cleanup, keeping the recorded attempt and process exit consistent.
 
 ## Post-audit validation
 
