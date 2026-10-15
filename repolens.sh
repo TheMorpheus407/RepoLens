@@ -4717,13 +4717,21 @@ run_lens() {
   local heartbeat_interval heartbeat_file heartbeat_iteration_file heartbeat_started_at heartbeat_owner_pid heartbeat_writer_pid
   local previous_exit_trap previous_exit_action
   heartbeat_interval="$(resolve_lens_heartbeat_interval)"
-  heartbeat_file="$(lens_heartbeat_path "$domain" "$lens_id")"
-  heartbeat_iteration_file="$(lens_heartbeat_iteration_path "$domain" "$lens_id")"
   heartbeat_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   heartbeat_owner_pid="$BASHPID"
   heartbeat_writer_pid=""
 
   if (( heartbeat_interval > 0 )); then
+    # Resolve both destinations before installing traps or starting either writer.
+    # A failed hash must leave this lens pending, never write relative .tmp files.
+    if ! heartbeat_file="$(lens_heartbeat_path "$domain" "$lens_id")" \
+        || ! heartbeat_iteration_file="$(lens_heartbeat_iteration_path "$domain" "$lens_id")"; then
+      log_error "[$domain/$lens_id] Unable to derive heartbeat paths; stopping before agent dispatch."
+      printf '%s\n' 'lens-execution-failed' > "$LOG_BASE/.systemic-failure-abort"
+      set_stop_reason "$SUMMARY_FILE" "lens-execution-failed" || true
+      record_lens "$SUMMARY_FILE" "$domain" "$lens_id" 0 "lens-execution-failed" 0 0
+      return 1
+    fi
     previous_exit_trap="$(trap -p EXIT || true)"
     previous_exit_action="$(extract_exit_trap_action "$previous_exit_trap")"
     _REPOLENS_LENS_PREVIOUS_EXIT_ACTION="$previous_exit_action"

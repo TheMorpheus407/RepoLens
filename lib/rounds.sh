@@ -2346,7 +2346,7 @@ _rounds_agent_abort_reason() {
     local systemic_reason
     systemic_reason="$(head -n 1 "$LOG_BASE/.systemic-failure-abort" 2>/dev/null || true)"
     case "$systemic_reason" in
-      auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error|prompt-render-failed)
+      auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error|prompt-render-failed|lens-execution-failed)
         printf '%s\n' "$systemic_reason"
         ;;
       *)

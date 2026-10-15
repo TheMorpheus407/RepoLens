@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Stop before lens dispatch when heartbeat path hashing fails, keeping the lens pending without writing temporary files outside the run directory. Disabled heartbeats skip path hashing.
+
 - Bound semaphore filenames by bytes so custom dispatches with multibyte focus text remain usable in parallel rounds.
 
 - Retire legacy long-lens heartbeats when completed rounds skip their lens callbacks, and separate hashed semaphore keys from short caller-supplied IDs.
