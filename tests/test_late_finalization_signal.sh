@@ -26,6 +26,15 @@ interrupt_once() {
   fi
 }
 
+# Interrupt after the quota/child-state check but before its assignment. DEBUG
+# inheritance is enabled only for these cases; the production code stays intact.
+interrupt_during_recovery() {
+  case "$hook:$1" in
+    rate-race:'REPOLENS_FINAL_STATE="$final_state"'|phase-race:'REPOLENS_FINAL_STATE="$final_state"'|sleep-state-race:'REPOLENS_FINAL_STATE="$final_state"'|sleep-code-race:'REPOLENS_INTERRUPT_EXIT_CODE="$exit_code"')
+      interrupt_once ;;
+  esac
+}
+
 # Probe the final check-to-freeze race without changing production logic.
 trap() {
   if [[ "${hook:-}" == before-freeze && "$*" == ' HUP INT TERM' ]]; then interrupt_once; fi
@@ -137,7 +146,7 @@ for SIGNAL in INT TERM HUP; do
   expected_signal=130
   case "$SIGNAL" in TERM) expected_signal=143 ;; HUP) expected_signal=129 ;; esac
   for prior in 0 1; do
-    for hook in filtered time summary history pointer cursor attempt attempt-move before-freeze reconcile signal-cycle terminal cleanup write-failure count-failure corrupt non-array clean; do
+    for hook in filtered time summary history pointer cursor attempt attempt-move before-freeze reconcile signal-cycle terminal cleanup write-failure count-failure corrupt non-array rate-race phase-race sleep-state-race sleep-code-race rate-clean phase-clean sleep-clean clean; do
       if [[ "$hook" == history && "$prior" == 0 ]]; then continue; fi
       # Optional case selection makes each before/after failure reproducible.
       if [[ -n "${REPOLENS_LATE_TEST_HOOK:-}" && "$hook" != "$REPOLENS_LATE_TEST_HOOK" ]]; then continue; fi
@@ -148,6 +157,21 @@ for SIGNAL in INT TERM HUP; do
       if [[ "$prior" == 1 ]]; then
         printf '[{"attempt_id":1,"status":"finished","exit_code":0}]\n' > "$LOG_BASE/attempts.json"
       fi
+      child_exit=130
+      if [[ "$SIGNAL" == INT ]]; then child_exit=143; fi
+      case "$hook" in
+        rate-*|phase-*)
+          : > "$LOG_BASE/.rate-limit-abort"
+          if [[ "$hook" == phase-* ]]; then
+            printf '{"health":"ok","stopped_reason":"rate-limited-meta"}\n' > "$SUMMARY_FILE"
+          fi
+          ;;
+        sleep-*)
+          child_reason=interrupted-sigint
+          if [[ "$child_exit" == 143 ]]; then child_reason=interrupted-sigterm; fi
+          printf 'exit_code=%s\nstopped_reason=%s\n' "$child_exit" "$child_reason" > "$LOG_BASE/.rate-limit-sleep-interrupt"
+          ;;
+      esac
       case "$hook" in
         corrupt) printf 'invalid history\n' > "$LOG_BASE/attempts.json" ;;
         non-array) printf '{"prior":"data"}\n' > "$LOG_BASE/attempts.json" ;;
@@ -169,12 +193,23 @@ for SIGNAL in INT TERM HUP; do
         attempts_begin "$LOG_BASE"
         cp "$LOG_BASE/.attempt-start" "$LOG_BASE/start-before"
         printf 'three\n' >> "$LOG_BASE/.completed"
+        case "$hook" in
+          *-race)
+            set -T
+            trap 'interrupt_during_recovery "$BASH_COMMAND"' DEBUG
+            ;;
+        esac
         # shellcheck source=/dev/null
         source "$FIXTURE/tail.sh"
       ) > "$LOG_BASE/output" 2>&1 || rc=$?
       cases=$((cases + 1))
       expected_exit="$expected_signal" expected_state=interrupted
       case "$hook" in clean|write-failure|count-failure|corrupt|non-array|terminal|cleanup) expected_exit=0; expected_state=finished ;; esac
+      case "$hook" in
+        rate-clean) expected_exit=3; expected_state=rate-limit-pending ;;
+        phase-clean) expected_exit=1; expected_state=failed ;;
+        sleep-clean) expected_exit="$child_exit" ;;
+      esac
       printf '%s/%s/%s: exit=%s expected=%s\n' "$SIGNAL" "$prior" "$hook" "$rc" "$expected_exit"
       check test "$rc" -eq "$expected_exit"
       if [[ "$hook" == corrupt || "$hook" == non-array ]]; then
@@ -216,11 +251,16 @@ for SIGNAL in INT TERM HUP; do
         clean|write-failure|count-failure|corrupt|non-array|terminal|cleanup) ;;
         *)
           check grep -q 'resume hint' "$LOG_BASE/output"
-          check command jq -e 'last.why_stopped | startswith("interrupted-sig")' "$LOG_BASE/attempts.json" >/dev/null
           expected_reason="interrupted-sig${SIGNAL,,}"
+          case "$hook" in
+            rate-clean) expected_reason=rate-limited ;;
+            phase-clean) expected_reason=rate-limited-meta ;;
+            sleep-clean) expected_reason="$child_reason" ;;
+          esac
           check command jq -e --arg reason "$expected_reason" 'last.why_stopped == $reason' "$LOG_BASE/attempts.json"
           check command jq -e --arg reason "$expected_reason" '.stopped_reason == $reason' "$SUMMARY_FILE"
           if [[ "$hook" == signal-cycle ]]; then check test -e "$LOG_BASE/cycle-end"; fi
+          if [[ "$hook" == *-race ]]; then check test -e "$LOG_BASE/signalled"; fi
           ;;
       esac
     done

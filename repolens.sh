@@ -5486,10 +5486,11 @@ esac
 # At this point no lenses remain. HUP must return like INT/TERM so a signal
 # during presentation cannot bypass the attempt ledger and result publication.
 _final_signal_generation=0
+_final_interrupt_exit_code=""
 _install_finalization_signal_handlers() {
-  trap 'REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE=129; _final_signal_generation=$((_final_signal_generation + 1))' HUP
-  trap 'REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE=130; _final_signal_generation=$((_final_signal_generation + 1))' INT
-  trap 'REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE=143; _final_signal_generation=$((_final_signal_generation + 1))' TERM
+  trap '_final_interrupt_exit_code=129; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' HUP
+  trap '_final_interrupt_exit_code=130; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' INT
+  trap '_final_interrupt_exit_code=143; REPOLENS_FINAL_STATE="interrupted"; REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"; _final_signal_generation=$((_final_signal_generation + 1))' TERM
 }
 _install_finalization_signal_handlers
 
@@ -5538,6 +5539,13 @@ while :; do
   # Snapshot before diagnostic I/O too. Comparing only state/signal misses a
   # sequence such as INT -> TERM -> INT that leaves an intermediate stop reason.
   _final_generation="$_final_signal_generation"
+  # Recovery can overwrite state/code if a parent signal lands between its
+  # check and assignment. Replay the last accepted parent signal on retry;
+  # its trap-owned value survives quota and child-sleep recovery unchanged.
+  if [[ -n "$_final_interrupt_exit_code" ]]; then
+    REPOLENS_FINAL_STATE="interrupted"
+    REPOLENS_INTERRUPT_EXIT_CODE="$_final_interrupt_exit_code"
+  fi
   apply_rate_limit_abort_final_state || true
   _final_state="${REPOLENS_FINAL_STATE:-finished}"
   _final_signal="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
@@ -5587,7 +5595,7 @@ if [[ -f "$LOG_BASE/.attempt-start" && -f "$LOG_BASE/attempts.json" ]] \
     && jq -e --argjson id "$_final_attempt_id" 'last.attempt_id == $id' "$LOG_BASE/attempts.json" >/dev/null 2>&1; then
   rm -f "$LOG_BASE/.attempt-start" 2>/dev/null || true
 fi
-unset _final_attempt_id _final_state _final_signal _final_generation _final_signal_generation _final_cursor_json _attempts_n _attempts_latest
+unset _final_attempt_id _final_state _final_signal _final_generation _final_signal_generation _final_interrupt_exit_code _final_cursor_json _attempts_n _attempts_latest
 
 # Exit-code ladder. The numeric code comes from RUN_EXIT_CODE (resolved above by
 # resolve_run_exit_code) so it can never drift from the attempts.json record;
