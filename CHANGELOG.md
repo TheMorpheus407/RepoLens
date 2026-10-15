@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve attempt-start diagnostics when a late signal requires reconciliation and the later ledger write fails.
+
 - Retain accepted finalization signals across concurrent quota or child-sleep recovery, preserving the parent signal outcome and stop reason.
 
 - Reconcile every accepted finalization signal, including sequences that return to the original signal, so attempt stop reasons agree with the summary and exit code.

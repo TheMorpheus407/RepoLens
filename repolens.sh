@@ -5550,7 +5550,8 @@ while :; do
   _final_state="${REPOLENS_FINAL_STATE:-finished}"
   _final_signal="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   RUN_EXIT_CODE="$(resolve_run_exit_code)"
-  attempts_finalize "$LOG_BASE" "$_final_state" "$(resolve_why_stopped)" \
+  _final_why_stopped="$(resolve_why_stopped)"
+  attempts_finalize "$LOG_BASE" "$_final_state" "$_final_why_stopped" \
     "$RUN_EXIT_CODE" "$_final_attempt_id" || true
 
   # Best effort, as before: storage failures warn and do not change the exit.
@@ -5590,12 +5591,16 @@ if [[ -n "$_final_cursor_json" ]]; then cursor_ide_emit "$_final_cursor_json"; f
 if (( _attempts_n > 1 )); then
   echo "This run took ${_attempts_n} attempts (latest: ${_attempts_latest}). Full continuation history: logs/${RUN_ID}/attempts.json"
 fi
-# Keep the start marker when persistence failed so its diagnostic evidence lasts.
+# An earlier write can have succeeded before a signal required reconciliation.
+# Remove the start evidence only when the ledger matches the committed outcome.
 if [[ -f "$LOG_BASE/.attempt-start" && -f "$LOG_BASE/attempts.json" ]] \
-    && jq -e --argjson id "$_final_attempt_id" 'last.attempt_id == $id' "$LOG_BASE/attempts.json" >/dev/null 2>&1; then
+    && jq -e --argjson id "$_final_attempt_id" --arg status "$_final_state" \
+      --arg why "$_final_why_stopped" --argjson code "$RUN_EXIT_CODE" \
+      'last | .attempt_id == $id and .status == $status and .why_stopped == $why and .exit_code == $code' \
+      "$LOG_BASE/attempts.json" >/dev/null 2>&1; then
   rm -f "$LOG_BASE/.attempt-start" 2>/dev/null || true
 fi
-unset _final_attempt_id _final_state _final_signal _final_generation _final_signal_generation _final_interrupt_exit_code _final_cursor_json _attempts_n _attempts_latest
+unset _final_attempt_id _final_state _final_signal _final_why_stopped _final_generation _final_signal_generation _final_interrupt_exit_code _final_cursor_json _attempts_n _attempts_latest
 
 # Exit-code ladder. The numeric code comes from RUN_EXIT_CODE (resolved above by
 # resolve_run_exit_code) so it can never drift from the attempts.json record;

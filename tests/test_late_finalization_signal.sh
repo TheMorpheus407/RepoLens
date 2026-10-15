@@ -82,6 +82,7 @@ jq() {
       ;;
     history:*'if type == "array" then length else'*) interrupt_once ;;
     pointer:*'.started_at //'* ) interrupt_once ;;
+    reconcile-write-failure:*'.started_at //'*|reconcile-move-failure:*'.started_at //'* ) interrupt_once ;;
     cursor:*'--arg kind run_complete'* ) interrupt_once ;;
     attempt:*'--argjson attempt_id'* ) interrupt_once ;;
     reconcile:*'--arg kind run_complete'*)
@@ -100,6 +101,12 @@ jq() {
       ;;
     count-failure:'length + 1'*) return 1 ;;
     write-failure:*'--argjson attempt_id'* ) return 1 ;;
+    reconcile-write-failure:*'--argjson attempt_id'* )
+      if [[ -e "$LOG_BASE/signalled" ]]; then
+        : > "$LOG_BASE/reconciliation-failed"
+        return 1
+      fi
+      ;;
   esac
   command jq "$@"
 }
@@ -117,6 +124,10 @@ resolve_run_exit_code() {
 }
 # Exercise interruption after an append has reached disk, too.
 mv() {
+  if [[ "$hook" == reconcile-move-failure && "${*: -1}" == "$LOG_BASE/attempts.json" && -e "$LOG_BASE/signalled" ]]; then
+    : > "$LOG_BASE/reconciliation-failed"
+    return 1
+  fi
   command mv "$@" || return
   if [[ "$hook" == attempt-move && "${*: -1}" == "$LOG_BASE/attempts.json" ]]; then
     interrupt_once
@@ -146,7 +157,7 @@ for SIGNAL in INT TERM HUP; do
   expected_signal=130
   case "$SIGNAL" in TERM) expected_signal=143 ;; HUP) expected_signal=129 ;; esac
   for prior in 0 1; do
-    for hook in filtered time summary history pointer cursor attempt attempt-move before-freeze reconcile signal-cycle terminal cleanup write-failure count-failure corrupt non-array rate-race phase-race sleep-state-race sleep-code-race rate-clean phase-clean sleep-clean clean; do
+    for hook in filtered time summary history pointer cursor attempt attempt-move before-freeze reconcile signal-cycle terminal cleanup write-failure reconcile-write-failure reconcile-move-failure count-failure corrupt non-array rate-race phase-race sleep-state-race sleep-code-race rate-clean phase-clean sleep-clean clean; do
       if [[ "$hook" == history && "$prior" == 0 ]]; then continue; fi
       # Optional case selection makes each before/after failure reproducible.
       if [[ -n "${REPOLENS_LATE_TEST_HOOK:-}" && "$hook" != "$REPOLENS_LATE_TEST_HOOK" ]]; then continue; fi
@@ -217,6 +228,7 @@ for SIGNAL in INT TERM HUP; do
         check test -e "$LOG_BASE/.attempt-start"
         if grep -q 'This run took' "$LOG_BASE/output"; then check false; fi
       elif [[ "$hook" == write-failure || "$hook" == count-failure ]]; then
+        check cmp "$LOG_BASE/start-before" "$LOG_BASE/.attempt-start"
         if [[ "$prior" == 1 ]]; then
           check command jq -e 'length == 1' "$LOG_BASE/attempts.json"
         else
@@ -226,6 +238,13 @@ for SIGNAL in INT TERM HUP; do
         if grep -q 'This run took 2 attempts' "$LOG_BASE/output"; then
           check false
         fi
+      elif [[ "$hook" == reconcile-*-failure ]]; then
+        # The initial append succeeded. A later signal requires a rewrite that
+        # fails, leaving stale history and its original start evidence intact.
+        check test -e "$LOG_BASE/reconciliation-failed"
+        check cmp "$LOG_BASE/start-before" "$LOG_BASE/.attempt-start"
+        check command jq -e --argjson count "$((prior + 1))" \
+          'length == $count and last.status == "finished" and last.exit_code == 0 and last.why_stopped == ""' "$LOG_BASE/attempts.json"
       else
         check command jq -e --arg state "$expected_state" --argjson code "$expected_exit" --argjson count "$((prior + 1))" \
           'length == $count and last.status == $state and last.exit_code == $code' "$LOG_BASE/attempts.json" >/dev/null
@@ -234,9 +253,11 @@ for SIGNAL in INT TERM HUP; do
         check command jq -e 'last.lenses_completed_this_attempt == 1 and last.lenses_completed_total == 3' "$LOG_BASE/attempts.json"
         expected_start="$(sed -n 's/^started_at=//p' "$LOG_BASE/start-before")"
         check command jq -e --arg start "$expected_start" 'last.started_at == $start' "$LOG_BASE/attempts.json"
-        check test ! -e "$LOG_BASE/.attempt-start"
+        if [[ "$hook" != reconcile-*-failure ]]; then check test ! -e "$LOG_BASE/.attempt-start"; fi
         if [[ "$prior" == 1 ]]; then
-          check grep -q "This run took 2 attempts (latest: $expected_state)" "$LOG_BASE/output"
+          notice_state="$expected_state"
+          if [[ "$hook" == reconcile-*-failure ]]; then notice_state=finished; fi
+          check grep -q "This run took 2 attempts (latest: $notice_state)" "$LOG_BASE/output"
         fi
       fi
       check test "$(cat "$LOG_BASE/cleanup-state")" = "$expected_state|$expected_exit"
@@ -257,7 +278,9 @@ for SIGNAL in INT TERM HUP; do
             phase-clean) expected_reason=rate-limited-meta ;;
             sleep-clean) expected_reason="$child_reason" ;;
           esac
-          check command jq -e --arg reason "$expected_reason" 'last.why_stopped == $reason' "$LOG_BASE/attempts.json"
+          if [[ "$hook" != reconcile-*-failure ]]; then
+            check command jq -e --arg reason "$expected_reason" 'last.why_stopped == $reason' "$LOG_BASE/attempts.json"
+          fi
           check command jq -e --arg reason "$expected_reason" '.stopped_reason == $reason' "$SUMMARY_FILE"
           if [[ "$hook" == signal-cycle ]]; then check test -e "$LOG_BASE/cycle-end"; fi
           if [[ "$hook" == *-race ]]; then check test -e "$LOG_BASE/signalled"; fi
