@@ -16,7 +16,7 @@
 # RepoLens — verifier dispatcher and manifest validator.
 #
 # Implements the post-rounds / pre-synthesizer accuracy gate from issue #168.
-# Walks logs/<run-id>/rounds/round-*/lens-outputs/*.md, dispatches the active
+# Recursively walks Markdown under each round's lens-outputs/, dispatches the active
 # agent against prompts/_base/verifier.md, captures a JSON array from stdout,
 # validates it, and atomically promotes it to
 # logs/<run-id>/final/verification.json.
