@@ -148,13 +148,18 @@ branch_scope_verify_body() {
 
 # Side effect: preserve rejected findings as <name>.md.out-of-scope with a
 # companion reason, so all downstream *.md consumers exclude them, including
-# local registries, round digests, verifier, and synthesizer.
+# local registries, round digests, verifier, and synthesizer. Read failures
+# abort filtering without quarantining the unreadable source.
 branch_scope_filter_directory() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local dir="$1" file reason
+  local dir="$1" file reason body
   [[ -d "$dir" ]] || return 0
   while IFS= read -r -d '' file; do
-    if ! reason="$(branch_scope_verify_body "$(cat "$file")")"; then
+    if ! body="$(cat -- "$file")"; then
+      printf 'branch_scope_filter_directory: cannot read finding: %s\n' "$file" >&2
+      return 1
+    fi
+    if ! reason="$(branch_scope_verify_body "$body")"; then
       mv -- "$file" "$file.out-of-scope" || return 1
       printf '%s\n' "$reason" > "$file.out-of-scope.reason"
     fi

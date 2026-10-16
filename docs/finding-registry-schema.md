@@ -65,7 +65,13 @@ non-stable grouping handle) with the registry `id` (content-derived, stable).
 is an **empty `findings.jsonl`** (zero lines) plus a **header-only `findings.csv`**.
 After a successful empty local rebuild, finalization removes stale `TODO.md`,
 `SUMMARY.md`, `NEEDS_REVIEW.md` and `DUPLICATES.md`. Failed or interrupted rebuilds
-retain existing reports. Raw Markdown evidence is retained in every case.
+retain existing reports. Failed traversal or an unreadable local finding also
+preserves the prior registry, CSV and reports. Branch-review scope filtering
+aborts on a failed read without quarantining that source. Readable malformed
+frontmatter still produces a warning and is skipped. Each local finding is
+parsed from one complete temporary snapshot created with owner-only permissions;
+normal success and failure paths remove the snapshot. Raw Markdown evidence is
+retained in every case.
 
 Triage reports replace their requested file paths atomically. A directory or
 symlink to a directory at a report path causes generation to fail, preserving

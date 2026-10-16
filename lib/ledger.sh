@@ -464,7 +464,9 @@ _ledger_frontmatter_scalar() {
 #   byte-identical. Output is written atomically (tmp + mv). Returns non-zero on
 #   missing args or a missing <output_dir>, and on a missing out-path parent dir
 #   (the atomic write fails). Failed enumeration (find or sort) returns non-zero,
-#   cleans staging files and preserves any previously published output.
+#   cleans staging files and preserves any previously published output. A failed
+#   source-file read has the same failure semantics; malformed readable files
+#   continue to be skipped.
 build_findings_jsonl_from_local() {
   local dir="${1:-}" out="${2:-}"
   [[ -n "$dir" ]] || { echo "build_findings_jsonl_from_local: missing output_dir" >&2; return 2; }
@@ -485,29 +487,42 @@ build_findings_jsonl_from_local() {
     rm -f "$tmp" "$tmp.files"
     return 1
   fi
-  local ingest_failed=0
+  # Unlike the projected metadata, this file holds the complete private body.
+  # mktemp creates it exclusively with owner-only permissions, regardless of umask.
+  local ingest_failed=0 snapshot
+  if ! snapshot="$(mktemp "$tmp.source.XXXXXX")"; then
+    rm -f "$tmp" "$tmp.files"
+    return 1
+  fi
   while IFS= read -r -d '' file; do
+    # Parse one fully read snapshot. IO failure is not malformed frontmatter:
+    # never publish a partial tree or mix scalar reads from different versions.
+    if ! cat -- "$file" > "$snapshot"; then
+      echo "build_findings_jsonl_from_local: cannot read finding: $file" >&2
+      ingest_failed=1
+      break
+    fi
     # Skip + warn (not fatal) when there is no valid leading frontmatter block.
-    if ! _ledger_has_frontmatter "$file"; then
+    if ! _ledger_has_frontmatter "$snapshot"; then
       echo "build_findings_jsonl_from_local: no valid frontmatter, skipping: $file" >&2
       continue
     fi
 
-    title="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" title)")"
-    severity="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" severity)")"
-    domain="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" domain)")"
-    lens="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" lens)")"
-    type_raw="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" type)")"
-    status="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" status)")"
+    title="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" title)")"
+    severity="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" severity)")"
+    domain="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" domain)")"
+    lens="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" lens)")"
+    type_raw="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" type)")"
+    status="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" status)")"
     [[ "$status" == duplicate ]] || status=new
     duplicate_of=""
     if [[ "$status" == duplicate ]]; then
-      duplicate_of="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$file" duplicate_of)")"
+      duplicate_of="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" duplicate_of)")"
     fi
     # Complexity (#385): optional 1..5 routing tier from the finding frontmatter.
     # The normalizer trims/de-quotes and range-checks; absent or out-of-range
     # yields "" -> stored as null (parity with the nullable confidence slot).
-    cx="$(_ledger_complexity_normalize "$(_ledger_frontmatter_scalar "$file" complexity)")"
+    cx="$(_ledger_complexity_normalize "$(_ledger_frontmatter_scalar "$snapshot" complexity)")"
 
     # Directory fallback only when the <domain>/<lens> nesting actually exists.
     # Findings may be nested further in a dispatch-specific directory.
@@ -547,7 +562,7 @@ build_findings_jsonl_from_local() {
         complexity: (if $complexity == "" then null else ($complexity | tonumber) end)
       }' >> "$tmp" || { ingest_failed=1; break; }
   done < "$tmp.files"
-  rm -f "$tmp.files"
+  rm -f "$tmp.files" "$snapshot"
   if (( ingest_failed )); then
     rm -f "$tmp"
     return 1
