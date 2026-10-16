@@ -245,8 +245,8 @@ _human_review_log_base() {
 #   tests set it to a temp dir), else <repo_root>/logs/<run_id>. So the test drives
 #   the function by just setting LOG_BASE and dropping a fixture findings.jsonl.
 #
-#   ATOMIC WRITE: builds the document into <out>.tmp.$$ and `mv -f`s it into place
-#   on success (the promote pattern from lib/synthesize.sh / lib/triage.sh). On a
+#   ATOMIC WRITE: builds the document into <out>.tmp.$$ and replaces the exact
+#   output path via lib/artifacts.sh (directory targets are rejected). On a
 #   render/IO failure the tmp file is removed and the function returns 1, leaving
 #   NO partial HUMAN_REVIEW.md behind.
 #
@@ -372,11 +372,19 @@ render_human_review_digest() {
           + section(.not_actionable_without_scanner; "Not Actionable Without a Scanner") + "\n"
           + remainder_section(.remainder)
       ' >"$tmp" 2>/dev/null; then
-    if mv -f -- "$tmp" "$out" 2>/dev/null; then
+    # Load the shared exact-path promoter in a subshell: this module remains
+    # sourceable alone without changing the caller's functions or shell state.
+    if (
+      # shellcheck source=lib/artifacts.sh
+      source "$(_human_review_repo_root)/lib/artifacts.sh" || exit 1
+      _artifacts_replace_report "$tmp" "$out"
+    ) 2>/dev/null; then
       return 0
     fi
   fi
 
+  # Imported artifact functions have their own local tmp; this path is unchanged.
+  # shellcheck disable=SC2031
   rm -f -- "$tmp"
   return 1
 }
