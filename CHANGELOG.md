@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve valid Markdown findings, manifest proposals and existing reports when branch scope is missing, invalid or unreadable; retry filtering after scope access is repaired (repolens-r9-p4-3).
+
 - Preserve the local finding registry, CSV and reports when a staged file list disappears or cannot be fully read, and allow a repaired resume to refresh them (repolens-r9-p3-1).
 
 - Stop resume on unreadable lens completion receipts (including path lookup failures), preserving accepted meta handoffs and preventing repeated agent work. Receipt matching also works when temporary-file writes are unavailable (repolens-r9-p1-2).

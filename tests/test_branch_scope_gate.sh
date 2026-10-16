@@ -75,9 +75,11 @@ check 'empty delta accepts no findings' test "$(count_dry_run_issues "$TMP/findi
 printf 'src/changed.sh:1\n' > "$TMP/findings/missing-scope.md"
 rm "$BRANCH_SCOPE_FILE"
 check 'missing scope fails closed at ingestion' test "$(count_dry_run_issues "$TMP/findings")" = 0
+check 'missing scope preserves pending source for retry' test -f "$TMP/findings/missing-scope.md"
 MODE=audit
-printf 'anything\n' > "$TMP/findings/audit.md"
-check 'audit findings retain their existing behavior' test "$(count_dry_run_issues "$TMP/findings")" = 1
+mkdir "$TMP/audit-findings"
+printf 'anything\n' > "$TMP/audit-findings/audit.md"
+check 'audit findings retain their existing behavior' test "$(count_dry_run_issues "$TMP/audit-findings")" = 1
 
 echo "Results: $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

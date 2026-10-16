@@ -235,13 +235,22 @@ _repolens_scan_citations() {
       ' <<< "$body"
 }
 
+# Read trusted configuration separately from finding validation. Missing,
+# invalid or unreadable scope evidence must leave findings eligible for retry.
+_branch_scope_read_paths() {
+  local scope="${BRANCH_SCOPE_FILE:-${LOG_BASE:-}/branch-scope.json}"
+  [[ -f "$scope" && ! -L "$scope" ]] || return 1
+  jq -ce 'select(type == "array" and all(.[]; type == "string"))' "$scope" 2>/dev/null
+}
+
+# Returns 0 for an accepted body, 1 for a rejected body, 2 if scope evidence is
+# unavailable. Callers must not record an operational failure as a rejection.
 branch_scope_verify_body() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local body="${1:-}" scope="${BRANCH_SCOPE_FILE:-${LOG_BASE:-}/branch-scope.json}" paths citations path
-  if [[ ! -f "$scope" || -L "$scope" ]] \
-      || ! paths="$(jq -ce 'select(type == "array" and all(.[]; type == "string"))' "$scope" 2>/dev/null)"; then
+  local body="${1:-}" paths citations path
+  if ! paths="$(_branch_scope_read_paths)"; then
     printf 'branch scope missing or invalid\n'
-    return 1
+    return 2
   fi
   if ! citations="$(repolens_extract_citations "$body")"; then
     printf 'malformed citation list in body\n'
@@ -261,12 +270,17 @@ branch_scope_verify_body() {
 # Side effect: preserve rejected findings as <name>.md.out-of-scope with a
 # companion reason, so all downstream *.md consumers exclude them, including
 # local registries, round digests, verifier, and synthesizer. Read failures
-# abort filtering without quarantining the unreadable source.
+# abort filtering without quarantining the unreadable source. Unavailable scope
+# evidence aborts filtering and preserves every pending finding.
 branch_scope_filter_directory() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local dir="$1" file reason body files files_fd filter_rc=0 list_complete=false
+  local dir="$1" file reason body files files_fd verification_rc filter_rc=0 list_complete=false
   local -a finding_files=()
   [[ -d "$dir" ]] || return 0
+  if ! _branch_scope_read_paths >/dev/null; then
+    printf 'branch_scope_filter_directory: branch scope unavailable; retry after repair\n' >&2
+    return 1
+  fi
   # Complete enumeration before filtering. A failed producer can emit a valid
   # prefix, but that prefix cannot authorize publication of the whole tree.
   files="$(mktemp "$dir/.branch-scope-files.XXXXXX")" || return 1
@@ -303,7 +317,15 @@ branch_scope_filter_directory() {
       filter_rc=1
       break
     fi
-    if ! reason="$(branch_scope_verify_body "$body")"; then
+    if reason="$(branch_scope_verify_body "$body")"; then
+      continue
+    else
+      verification_rc=$?
+      if (( verification_rc != 1 )); then
+        printf 'branch_scope_filter_directory: %s; leaving finding pending\n' "$reason" >&2
+        filter_rc=1
+        break
+      fi
       # Keep the source eligible for retry until its diagnostic is saved.
       if ! printf '%s\n' "$reason" > "$file.out-of-scope.reason"; then
         filter_rc=1
@@ -323,8 +345,9 @@ branch_scope_filter_directory() {
 # rejected proposals, and retain the branch title convention mechanically.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local manifest="$1" entry reason kept rejected
+  local manifest="$1" entry reason kept rejected verification_rc
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
+  _branch_scope_read_paths >/dev/null || return 1
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
   rejected="${kept}.rejected"
   : > "$rejected"
@@ -336,6 +359,11 @@ branch_scope_filter_manifest() {
             | sub("^\\[(?i:critical|high|medium|low)\\][[:space:]]*"; "")))
       ' <<< "$entry" >> "$kept" || { rm -f "$kept" "$rejected"; return 1; }
     else
+      verification_rc=$?
+      if (( verification_rc != 1 )); then
+        rm -f "$kept" "$rejected"
+        return 1
+      fi
       jq -cn --argjson finding "$entry" --arg reason "$reason" '{finding:$finding,reason:$reason}' >> "$rejected"
     fi
   done < <(jq -c '.[]' "$manifest")
