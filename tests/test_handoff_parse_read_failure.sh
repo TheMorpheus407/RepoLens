@@ -187,5 +187,50 @@ for ending in none one two; do
   must _rounds_meta_parse_output "$FIXTURE/eof-input" "$FIXTURE/eof-dispatch" "$FIXTURE/eof-hypotheses"
   check cmp -s "$FIXTURE/eof-expected" "$FIXTURE/eof-hypotheses"
 done
+# A failed hypothesis append must not publish the temporary file, even when
+# later lines would write successfully. Exercise header-inline and body writes.
+for write_kind in inline body; do
+  if [[ "$write_kind" == inline ]]; then
+    must printf 'HYPOTHESES_TO_VERIFY: rejected hypothesis\nsubsequent hypothesis\n' > "$FIXTURE/write-input"
+  else
+    must printf 'HYPOTHESES_TO_VERIFY:\naccepted prefix\nrejected hypothesis\n' > "$FIXTURE/write-input"
+  fi
+  must printf 'saved hypotheses\n' > "$FIXTURE/write-hypotheses"
+  printf() {
+    if [[ "${FUNCNAME[1]:-}" == _rounds_meta_extract_hypotheses && "${2:-}" == 'rejected hypothesis' ]]; then return 1; fi
+    # shellcheck disable=SC2059 # Forward the mocked printf's format and arguments.
+    builtin printf "$@"
+  }
+  rc=0
+  _rounds_meta_extract_hypotheses "$FIXTURE/write-input" "$FIXTURE/write-hypotheses" || rc=$?
+  unset -f printf
+  check test "$rc" -eq 1
+  check test "$(command cat "$FIXTURE/write-hypotheses")" = 'saved hypotheses'
+  check test ! -e "$FIXTURE/write-hypotheses.tmp.$$"
+done
+# Full resume must keep accepted artifacts and avoid new calls until the
+# failed hypothesis write can be retried successfully.
+proof_before="$(command cat "$saved/meta-orchestrator-success.json")" || exit 1
+dispatch_before="$(command cat "$saved/dispatch.md")" || exit 1
+hypotheses_before="$(command cat "$saved/hypotheses.md")" || exit 1
+printf() {
+  if [[ "${FUNCNAME[1]:-}" == _rounds_meta_extract_hypotheses && "${2:-}" == 'accepted hypothesis' ]]; then return 1; fi
+  # shellcheck disable=SC2059 # Forward the mocked printf's format and arguments.
+  builtin printf "$@"
+}
+rc=0
+run_rounds 2 LENSES || rc=$?
+unset -f printf
+check test "$rc" -ne 0
+check test "$(command cat "$saved/meta-orchestrator-success.json")" = "$proof_before"
+check test "$(command cat "$saved/dispatch.md")" = "$dispatch_before"
+check test "$(command cat "$saved/hypotheses.md")" = "$hypotheses_before"
+check test "$(find "$saved" -maxdepth 1 -name '.handoff.*' | wc -l)" -eq 0
+check test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1
+check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 2
+must run_rounds 2 LENSES
+check test "$(command cat "$saved/hypotheses.md")" = "$hypotheses_before"
+check test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1
+check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 2
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

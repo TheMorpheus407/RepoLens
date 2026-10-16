@@ -1410,7 +1410,10 @@ _rounds_meta_extract_hypotheses() {
       if [[ "$trimmed" =~ ^#*[[:space:]]*HYPOTHESES[_[:space:]-]*TO[_[:space:]-]*VERIFY[[:space:]]*:?[[:space:]]*(.*)$ ]]; then
         in_block=1
         rest="$(_rounds_meta_trim "${BASH_REMATCH[1]}")"
-        [[ -n "$rest" ]] && printf '%s\n' "$rest" >> "$tmp_file"
+        if [[ -n "$rest" ]] && ! printf '%s\n' "$rest" >> "$tmp_file"; then
+          rm -f "$tmp_file"
+          return 1
+        fi
       fi
       continue
     fi
@@ -1420,7 +1423,11 @@ _rounds_meta_extract_hypotheses() {
       break
     fi
 
-    printf '%s\n' "$line" >> "$tmp_file"
+    # A later successful iteration must not hide an earlier append failure.
+    if ! printf '%s\n' "$line" >> "$tmp_file"; then
+      rm -f "$tmp_file"
+      return 1
+    fi
   done <<< "${output%$'\n'}"
 
   mv "$tmp_file" "$hypotheses_file"
