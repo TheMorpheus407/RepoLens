@@ -28,13 +28,19 @@ source "$REPO/lib/summary.sh"
 source "$REPO/lib/filing.sh"
 eval "$(sed -n '/^_handle_hangup() {/,/^trap _handle_termination TERM/p' "$REPO/repolens.sh")"
 trap - HUP INT TERM
+# Suppress the CLI resume hint during receipt-read cases; takes no arguments.
 print_resume_hint() { :; }
+# Execute the production startup counter in this shell using fixture globals.
+# Takes no arguments; preserves the counter's status and signal-driven exit.
 startup_count() {
   # Run the exact startup block, stopping before the status-updater startup.
   # shellcheck source=/dev/null
   source <(sed -n '/^# --- Global issue counter ---/,/^if \[\[ -n "$RESUME_RUN_ID" \]\]; then/p' "$REPO/repolens.sh" | sed '$d')
 }
+# Mock URL parsing: ignore the repository argument and print the URL's last part.
 forge_issue_number_from_url() { printf '%s\n' "${2##*/}"; }
+# Mock a read for repository $1 and issue number $2, logging it under LOG_BASE.
+# For issue 1, optionally signal the parent and fail; otherwise print issue JSON.
 forge_issue_read_json() {
   printf '%s\n' "$2" >> "$LOG_BASE/reads"
   if [[ "$2" == 1 && "$cancel_read" == true ]]; then
@@ -44,6 +50,8 @@ forge_issue_read_json() {
   jq -cn --argjson n "$2" '{url:("https://github.com/acme/probe/issues/"+($n|tostring)),number:$n,title:("Finding "+($n|tostring)),body:"src/probe.sh:1",labels:[],state:"open"}'
 }
 PASS=0 FAIL=0
+# Run the supplied assertion command, update PASS/FAIL and print any failure.
+# Return success so all assertions run before the suite checks FAIL.
 check() {
   if "$@"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); printf 'FAIL: %s\n' "$*"; fi
 }
@@ -105,6 +113,7 @@ for signal in HUP INT TERM; do
     trap '_handle_hangup' HUP
     trap '_handle_interrupt' INT
     trap '_handle_termination' TERM
+    # Record a no-argument resume-hint call for the final-return boundary case.
     print_resume_hint() { : > "$LOG_BASE/resume-hint"; }
     set -T
     # shellcheck disable=SC2154 # Match the sourced helper's command literally.
