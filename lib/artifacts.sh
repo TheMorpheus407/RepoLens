@@ -27,6 +27,25 @@
 # dedupe.sh). Wiring into repolens.sh finalize is a separate issue.
 set -uo pipefail
 
+# _artifacts_replace_report <staged_file> <out_file>
+# Exact-path rename: unlike plain mv, os.replace never treats a destination
+# directory as a container. Python also avoids GNU-only mv -T on BSD/macOS.
+# Reject existing directory symlinks; a symlink appearing after that check can
+# only be replaced itself, never followed into its directory. The caller owns
+# scratch cleanup on failure. Both paths share a directory/filesystem.
+_artifacts_replace_report() {
+  python3 -c '
+import os
+import sys
+try:
+    if os.path.isdir(sys.argv[2]):
+        sys.exit(1)
+    os.replace(sys.argv[1], sys.argv[2])
+except OSError:
+    sys.exit(1)
+' "$1" "$2"
+}
+
 # generate_todo_md <findings_jsonl> <out_file>
 #   Renders the "act on these now" list to <out_file> as Markdown, one entry per
 #   actionable finding showing severity, type, primary_location and (when present)
@@ -66,7 +85,7 @@ set -uo pipefail
 #   writes nothing (no crash). A present-but-empty or all-excluded registry
 #   writes a valid file with a "no actionable findings" note and returns 0.
 #
-#   Pure apart from the documented write of <out_file> (atomic tmp+mv). Returns
+#   Pure apart from the documented write of <out_file> (atomic tmp+rename). Returns
 #   0 on success, 2 on bad/unreadable input, 1 on a render/IO failure.
 generate_todo_md() {
   local findings_jsonl="${1:-}" out_file="${2:-}"
@@ -114,8 +133,7 @@ generate_todo_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    # mv treats a directory destination as a container, not a replacement.
-    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
+    if [[ ! -d "$out_file" ]] && _artifacts_replace_report "$tmp" "$out_file"; then
       return 0
     fi
   fi
@@ -172,7 +190,7 @@ generate_todo_md() {
 #   writes nothing (no crash). A present-but-empty or all-excluded registry
 #   writes a valid file with a "no findings" note and returns 0.
 #
-#   Pure apart from the documented write of <out_file> (atomic tmp+mv). Returns
+#   Pure apart from the documented write of <out_file> (atomic tmp+rename). Returns
 #   0 on success, 2 on bad/unreadable input, 1 on a render/IO failure.
 generate_summary_md() {
   local findings_jsonl="${1:-}" out_file="${2:-}"
@@ -225,8 +243,7 @@ generate_summary_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    # mv treats a directory destination as a container, not a replacement.
-    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
+    if [[ ! -d "$out_file" ]] && _artifacts_replace_report "$tmp" "$out_file"; then
       return 0
     fi
   fi
@@ -293,7 +310,7 @@ generate_summary_md() {
 #   writes nothing (no crash). A present-but-empty or all-excluded registry
 #   writes a valid file with a "nothing needs review" note and returns 0.
 #
-#   Pure apart from the documented write of <out_file> (atomic tmp+mv). Returns
+#   Pure apart from the documented write of <out_file> (atomic tmp+rename). Returns
 #   0 on success, 2 on bad/unreadable input, 1 on a render/IO failure.
 generate_needs_review_md() {
   local findings_jsonl="${1:-}" out_file="${2:-}"
@@ -356,8 +373,7 @@ generate_needs_review_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    # mv treats a directory destination as a container, not a replacement.
-    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
+    if [[ ! -d "$out_file" ]] && _artifacts_replace_report "$tmp" "$out_file"; then
       return 0
     fi
   fi
@@ -418,7 +434,7 @@ generate_needs_review_md() {
 #   nothing (no crash). A present-but-empty or all-singleton registry writes a valid
 #   file with a "no duplicate groups" note and returns 0.
 #
-#   Pure apart from the documented write of <out_file> (atomic tmp+mv). Returns 0 on
+#   Pure apart from the documented write of <out_file> (atomic tmp+rename). Returns 0 on
 #   success, 2 on bad/unreadable input, 1 on a render/IO failure.
 generate_duplicates_md() {
   local findings_jsonl="${1:-}" out_file="${2:-}"
@@ -486,8 +502,7 @@ generate_duplicates_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    # mv treats a directory destination as a container, not a replacement.
-    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
+    if [[ ! -d "$out_file" ]] && _artifacts_replace_report "$tmp" "$out_file"; then
       return 0
     fi
   fi

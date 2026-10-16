@@ -62,9 +62,9 @@ run_finalization() (
     }
   fi
   if [[ "$scenario" == *report-promote-failure ]]; then
-    mv() {
+    python3() {
       [[ "${*: -1}" != "$LOG_BASE/final/DUPLICATES.md" ]] || return 1
-      command mv "$@"
+      command python3 "$@"
     }
   fi
   # shellcheck source=/dev/null
@@ -116,7 +116,7 @@ EOF
       original_dedupe "$OUTPUT_DIR"
       build_finding_registry local "$OUTPUT_DIR"
     fi
-    # Model retained output from an earlier attempt. Actual jq/mv failures must
+    # Model retained output from an earlier attempt. Render/rename failures must
     # preserve it without advertising it as provenance for the rebuilt registry.
     retained_report=false
     if [[ "$scenario" == *report-*-failure ]]; then

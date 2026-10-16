@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Failed atomic promotion must retain prior output and report failure honestly.
-# shellcheck disable=SC2329 # mv is called indirectly by the generators.
+# shellcheck disable=SC2329 # Promotion commands are called by the generators.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
@@ -29,9 +29,40 @@ check() {
     failed=$((failed + 1))
   fi
 }
-mv() {
+promotion_boundary() {
   [[ "$fail_promotion" == false ]] || return 1
+  # Simulate another writer creating an obstruction after the shell guard.
+  if [[ "${race_kind:-}" != "" ]]; then
+    mkdir "$target"
+    printf 'Keep this existing content\n' > "$target/sentinel"
+    if [[ "$race_kind" == symlink ]]; then ln -s "$target" "$out"; fi
+  fi
+}
+mv() {
+  promotion_boundary || return 1
   command mv "$@"
+}
+python3() {
+  [[ "$fail_promotion" == false ]] || return 1
+  if [[ "${race_kind:-}" == directory ]]; then
+    # Also exercise the exact rename boundary, after Python's directory check.
+    command python3 -c '
+import os
+import sys
+code = sys.argv.pop(1)
+replace = os.replace
+def obstruct_then_replace(source, destination):
+    os.mkdir(destination)
+    with open(os.path.join(destination, "sentinel"), "w") as sentinel:
+        sentinel.write("Keep this existing content\n")
+    replace(source, destination)
+os.replace = obstruct_then_replace
+exec(code)
+' "${@:2}"
+    return $?
+  fi
+  promotion_boundary || return 1
+  command python3 "$@"
 }
 printf '%s\n' '{"id":"probe","title":"Current finding","severity":"high","status":"new","also_reported_by":[{"domain":"security","lens":"probe"}]}' > "$FIXTURE/findings.jsonl"
 for generator in generate_todo_md generate_summary_md generate_needs_review_md generate_duplicates_md; do
@@ -74,6 +105,22 @@ for generator in generate_todo_md generate_summary_md generate_needs_review_md g
     done
     rm -rf -- "$out"
     if [[ "$kind" == symlink ]]; then rm -rf -- "$target"; fi
+    check "$generator" "$FIXTURE/findings.jsonl" "$out"
+    check test -s "$out"
+  done
+  for race_kind in directory symlink; do
+    rm -f "$out"
+    target="$out"
+    if [[ "$race_kind" == symlink ]]; then target="$FIXTURE/$generator/target"; fi
+    rc=0
+    "$generator" "$FIXTURE/findings.jsonl" "$out" || rc=$?
+    check test "$rc" -eq 1
+    check test -d "$out"
+    check test "$(cat "$out/sentinel")" = 'Keep this existing content'
+    check test "$(find "$FIXTURE/$generator" -type f -name '.*' | wc -l)" -eq 0
+    rm -rf -- "$out"
+    if [[ "$race_kind" == symlink ]]; then rm -rf -- "$target"; fi
+    race_kind=""
     check "$generator" "$FIXTURE/findings.jsonl" "$out"
     check test -s "$out"
   done
