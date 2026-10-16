@@ -5163,7 +5163,7 @@ run_lens() {
   log_info "[$domain/$lens_id] Finished after $iteration iteration(s), $lens_issues issue(s)"
   # The callback is an independent failure channel when marker persistence fails.
   case "$exit_status" in
-    lens-execution-failed|prompt-render-failed|auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error)
+    rate-limited|agent-no-progress|lens-execution-failed|prompt-render-failed|auth-expired|model-unavailable|budget-exhausted|agent-refused|max-tokens-truncation|agent-error)
       return 1 ;;
   esac
   return "$completion_rc"
