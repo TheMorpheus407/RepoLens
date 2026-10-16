@@ -173,8 +173,8 @@ for mode in audit branch-review; do
 done
 # repolens-r8-p3-1: fail only the scope traversal. Later registry traversal
 # succeeds, so ignoring the first failure would publish an out-of-scope source.
-# Also exercise opening the completed list and both quarantine writes.
-for fault in empty partial reason reopen move; do
+# Also exercise opening/reading the completed list and both quarantine writes.
+for fault in empty partial reason reopen move read-empty read-partial; do
 (
   LOG_BASE="$TMP/scope-$fault-run" OUTPUT_DIR="$TMP/scope-$fault-output"
   check cp -R "$TMP/output" "$OUTPUT_DIR"
@@ -198,6 +198,22 @@ for fault in empty partial reason reopen move; do
     if [[ "$fault" == move && "${2:-}" == "$rejected" ]]; then return 1; fi
     command mv "$@"
   }
+  scope_reads=0
+  read() {
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_directory ]]; then
+      case "$fault" in
+        read-empty) return 1 ;;
+        read-partial)
+          # The first filename is rejected. Fail on the next read, before
+          # the remaining filenames or a completion marker can be consumed.
+          if (( scope_reads > 0 )); then return 1; fi
+          scope_reads=$((scope_reads + 1))
+          ;;
+      esac
+    fi
+    # shellcheck disable=SC2162 # Delegate the caller's flags, including -r.
+    builtin read "$@"
+  }
   # Every consumer except the scope filter sees a successful complete find.
   find() {
     if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_directory ]]; then
@@ -213,16 +229,24 @@ for fault in empty partial reason reopen move; do
           command rm -f -- "$OUTPUT_DIR"/.branch-scope-files.*
           return "$?"
           ;;
+        read-partial)
+          printf '%s\0' "$rejected" "$OUTPUT_DIR/security/injection/001.md" "$OUTPUT_DIR/security/injection/002.md"
+          return 0
+          ;;
       esac
     fi
     command find "$@"
   }
   check finalize_local
   printf 'scope fault=%s registry_records=%s\n' "$fault" "$(jq -s length "$LOG_BASE/final/findings.jsonl")"
+  # A failed list read must precede every quarantine and preserve publication.
+  check test -f "$rejected"
+  check test ! -e "$rejected.out-of-scope"
+  scope_reads=0
   rc=0
   branch_scope_filter_directory "$OUTPUT_DIR" || rc=$?
   check test "$rc" -ne 0
-  unset -f find mv
+  unset -f find mv read
   check test -f "$rejected"
   check test ! -e "$rejected.out-of-scope"
   if [[ "$fault" == reason ]]; then

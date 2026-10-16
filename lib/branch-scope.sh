@@ -264,12 +264,15 @@ branch_scope_verify_body() {
 # abort filtering without quarantining the unreadable source.
 branch_scope_filter_directory() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local dir="$1" file reason body files files_fd filter_rc=0
+  local dir="$1" file reason body files files_fd filter_rc=0 list_complete=false
+  local -a finding_files=()
   [[ -d "$dir" ]] || return 0
   # Complete enumeration before filtering. A failed producer can emit a valid
   # prefix, but that prefix cannot authorize publication of the whole tree.
   files="$(mktemp "$dir/.branch-scope-files.XXXXXX")" || return 1
-  if ! find "$dir" -type f -name '*.md' -print0 > "$files"; then
+  # An empty record cannot be a filename. It proves the reader consumed the
+  # successful producer's entire list, rather than stopping on an I/O error.
+  if ! { find "$dir" -type f -name '*.md' -print0 && printf '\0'; } > "$files"; then
     printf 'branch_scope_filter_directory: cannot enumerate findings: %s\n' "$dir" >&2
     rm -f -- "$files"
     return 1
@@ -280,6 +283,21 @@ branch_scope_filter_directory() {
     return 1
   fi
   while IFS= read -r -d '' file; do
+    if [[ -z "$file" ]]; then
+      list_complete=true
+      break
+    fi
+    finding_files+=("$file")
+  done <&"$files_fd"
+  exec {files_fd}<&- || filter_rc=1
+  rm -f -- "$files" || return 1
+  if ! $list_complete; then
+    printf 'branch_scope_filter_directory: cannot read complete findings list: %s\n' "$files" >&2
+    return 1
+  fi
+  (( filter_rc == 0 )) || return 1
+  # No finding is checked or quarantined until the whole list is available.
+  for file in "${finding_files[@]}"; do
     if ! body="$(cat -- "$file")"; then
       printf 'branch_scope_filter_directory: cannot read finding: %s\n' "$file" >&2
       filter_rc=1
@@ -297,9 +315,7 @@ branch_scope_filter_directory() {
         break
       fi
     fi
-  done <&"$files_fd"
-  exec {files_fd}<&- || filter_rc=1
-  rm -f -- "$files" || return 1
+  done
   return "$filter_rc"
 }
 
