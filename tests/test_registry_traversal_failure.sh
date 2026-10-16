@@ -77,6 +77,34 @@ check test "$(command find "$TMP" -name '*.tmp.*' | wc -l)" -eq 0
 check build_findings_jsonl_from_local "$TMP/output" "$OUT"
 check test "$(cat "$OUT")" = "$expected"
 
+# repolens-r7-p2-2 / repolens-r7-p3-1: enumeration success does not
+# excuse a read failure for one valid source file. Preserve the whole projection.
+unreadable="$TMP/output/security/injection/002.md"
+check chmod 000 "$unreadable"
+# Root can bypass mode bits; keep the same IO failure at both read boundaries.
+if [[ -r "$unreadable" ]]; then
+  cat() {
+    local arg
+    for arg in "$@"; do [[ "$arg" != "$unreadable" ]] || return 1; done
+    command cat "$@"
+  }
+  awk() {
+    local arg
+    for arg in "$@"; do [[ "$arg" != "$unreadable" ]] || return 2; done
+    command awk "$@"
+  }
+fi
+rc=0
+build_findings_jsonl_from_local "$TMP/output" "$OUT" || rc=$?
+check test "$rc" -ne 0
+check test "$(cat "$OUT")" = "$expected"
+check test "$(command find "$TMP" -name '*.tmp.*' | wc -l)" -eq 0
+check chmod 600 "$unreadable"
+unset -f cat awk
+check build_findings_jsonl_from_local "$TMP/output" "$OUT"
+check test "$(cat "$OUT")" = "$expected"
+printf 'PASS: unreadable finding preserves the complete registry and retries\n'
+
 # Exercise the actual finalization callers, including the non-fatal dedupe and
 # registry failures. Published CSV and all five reports must also survive.
 for lib in core synthesize local-dedupe human_review artifacts branch-scope; do
@@ -104,6 +132,25 @@ finalize_local() {
   unset -f find
   for artifact in "${artifacts[@]}"; do check cmp "$TMP/published/$artifact" "$LOG_BASE/final/$artifact"; done
   check test "$(command find "$LOG_BASE/final" -type f | wc -l)" -eq "${#artifacts[@]}"
+  check chmod 000 "$unreadable"
+  if [[ -r "$unreadable" ]]; then
+    cat() {
+    local arg
+    for arg in "$@"; do [[ "$arg" != "$unreadable" ]] || return 1; done
+    command cat "$@"
+  }
+    awk() {
+      local arg
+      for arg in "$@"; do [[ "$arg" != "$unreadable" ]] || return 2; done
+      command awk "$@"
+    }
+  fi
+  check finalize_local
+  check chmod 600 "$unreadable"
+  unset -f cat awk
+  for artifact in "${artifacts[@]}"; do check cmp "$TMP/published/$artifact" "$LOG_BASE/final/$artifact"; done
+  check test "$(command find "$LOG_BASE/final" -type f | wc -l)" -eq "${#artifacts[@]}"
+  printf 'PASS: unreadable finding preserves registry, CSV and all five reports\n'
   # A successful retry must rebuild from current findings rather than leaving
   # the preserved registry/report snapshot in place forever.
   check rm "$OUTPUT_DIR/security/injection/002.md"

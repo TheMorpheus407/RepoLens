@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve the complete local finding registry, CSV and reports when an individual Markdown finding cannot be read, parsing each successfully read file from one snapshot (repolens-r7-p2-2, repolens-r7-p3-1).
+
 - Propagate rate-limit and no-progress lens failures even when their abort marker cannot be written, keeping failed rounds resumable (repolens-r7-p1-1, repolens-r7-p2-1).
 
 - Keep the default-rounds baseline test portable to BSD date by using its native parsing options when GNU date parsing is unavailable, and preserve numeric result summaries for test runners (repolens-r6-p3-3).
