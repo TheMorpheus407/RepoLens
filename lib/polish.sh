@@ -454,6 +454,10 @@ run_polish_issue_emission() {
   local base_dir polish_dir ranked_file groups_file filed_dir group_json
   local emitted=0 forge_rc=0 emission_rc=0
 
+  # Sequential CLI handlers must return while an in-flight POST is being
+  # reconciled, so its successful URL and counters survive before signal exit.
+  local _REPOLENS_FILING_RECONCILING=1
+
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
   if [[ -z "$run_id" ]]; then
@@ -483,6 +487,18 @@ run_polish_issue_emission() {
     [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     return 1
   }
+
+  # The CLI resets its in-memory counter on resume. Durable successes still
+  # consume this run's budget, even if the shortlist order has changed.
+  local saved_issues=0 saved_receipt current_issues="${GLOBAL_ISSUES_CREATED:-0}"
+  for saved_receipt in "$filed_dir"/*.url; do
+    [[ -s "$saved_receipt" ]] || continue
+    saved_issues=$((saved_issues + 1))
+  done
+  [[ "$current_issues" =~ ^[0-9]+$ ]] || current_issues=0
+  if (( saved_issues > current_issues )); then
+    GLOBAL_ISSUES_CREATED="$saved_issues"
+  fi
 
   if ! _polish_build_issue_groups "$ranked_file" "$top_n" > "$groups_file"; then
     rm -f "$groups_file"
