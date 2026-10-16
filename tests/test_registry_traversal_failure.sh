@@ -171,4 +171,52 @@ for mode in audit branch-review; do
   printf 'PASS: finalization preserves published artifacts and retry refreshes them\n'
 ) || exit 1
 done
+# repolens-r8-p3-1: fail only the scope traversal. Later registry traversal
+# succeeds, so ignoring the first failure would publish an out-of-scope source.
+for fault in empty partial; do
+(
+  LOG_BASE="$TMP/scope-$fault-run" OUTPUT_DIR="$TMP/scope-$fault-output"
+  check cp -R "$TMP/output" "$OUTPUT_DIR"
+  BRANCH_SCOPE_FILE="$TMP/scope-$fault.json"
+  check printf '["src/changed.sh"]\n' > "$BRANCH_SCOPE_FILE"
+  RUN_ID=probe MODE=branch-review LOCAL_MODE=true OUTPUT_DIR_SET=true
+  HUMAN_REVIEW=true REPOLENS_FINAL_STATE=finished
+  check finalize_local
+  artifacts=(findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md HUMAN_REVIEW.md)
+  check mkdir "$TMP/scope-$fault-published"
+  for artifact in "${artifacts[@]}"; do
+    check cp "$LOG_BASE/final/$artifact" "$TMP/scope-$fault-published/$artifact"
+  done
+  rejected="$OUTPUT_DIR/security/injection/003.md"
+  check printf -- '---\ntitle: Unchanged source\nseverity: high\n---\nsrc/unchanged.sh:1 Evidence\n' > "$rejected"
+  # Every consumer except the scope filter sees a successful complete find.
+  find() {
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_directory ]]; then
+      if [[ "$fault" == partial ]]; then
+        printf '%s\0' "$OUTPUT_DIR/security/injection/001.md"
+      fi
+      printf 'find: injected scope traversal failure\n' >&2
+      return 1
+    fi
+    command find "$@"
+  }
+  check finalize_local
+  printf 'scope fault=%s registry_records=%s\n' "$fault" "$(jq -s length "$LOG_BASE/final/findings.jsonl")"
+  rc=0
+  branch_scope_filter_directory "$OUTPUT_DIR" || rc=$?
+  check test "$rc" -ne 0
+  unset -f find
+  check test -f "$rejected"
+  check test ! -e "$rejected.out-of-scope"
+  for artifact in "${artifacts[@]}"; do
+    check cmp "$TMP/scope-$fault-published/$artifact" "$LOG_BASE/final/$artifact"
+  done
+  check test "$(command find "$OUTPUT_DIR" -name '.branch-scope-files.*' | wc -l)" -eq 0
+  check finalize_local
+  check test ! -e "$rejected"
+  check test -f "$rejected.out-of-scope"
+  check jq -se 'length == 2 and all(.[]; .title != "Unchanged source")' "$LOG_BASE/final/findings.jsonl"
+  printf 'PASS: %s scope traversal failure preserves all published artifacts; retry filters before publishing\n' "$fault"
+) || exit 1
+done
 printf 'Results: registry traversal failure checks passed\n'
