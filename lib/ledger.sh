@@ -480,7 +480,7 @@ build_findings_jsonl_from_local() {
   local tmp="${out}.tmp.$$"
   : > "$tmp" || return 1
 
-  local file rel lens_rel title severity domain lens id sev type_raw ftype cx status duplicate_of
+  local file rel lens_rel title severity domain lens id sev type_raw ftype cx status duplicate_of generic_source_id
   # Finish enumeration before ingestion: process substitution hides find's
   # failure and could otherwise promote an empty or partial registry.
   # Follow only an explicitly supplied symlink root.
@@ -542,7 +542,14 @@ build_findings_jsonl_from_local() {
       [[ -z "$domain" ]] && domain="${rel%%/*}"
     fi
 
-    id="$(finding_id "$domain" "$lens" "$title")"
+    generic_source_id="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" generic_source_id)")"
+    if [[ "$domain" == generic && "$generic_source_id" =~ ^[a-f0-9]{64}$ ]]; then
+      # Projected blocks may share title/lens while owning separate evidence.
+      title="$(jq -r . <<< "$(_ledger_frontmatter_scalar "$snapshot" title)")" || { ingest_failed=1; break; }
+      id="$(finding_id "$domain" "$lens" "$title" "generic:$generic_source_id")"
+    else
+      id="$(finding_id "$domain" "$lens" "$title")"
+    fi
     sev="$(_ledger_severity_normalize "$severity")"
     # Resolve from the POST directory-fallback $domain (not a fresh file read) so
     # a type:-less file under <domain>/<lens>/NNN.md still gets the right default.
@@ -840,14 +847,16 @@ _ledger_log_base() {
   printf '%s/logs/%s' "$(_ledger_repo_root)" "$run_id"
 }
 
-# build_finding_registry <run_id> [local_dir]
+# build_finding_registry <run_id> [local_dir] [include_manifest=true]
 #   Orchestrates the four source-specific builders above into the canonical
 #   finding registry under `<log_base>/final/`: findings.jsonl (full fidelity)
 #   plus findings.csv (flat projection). This is the single producer of
 #   final/findings.jsonl — consumed by result_pointer.sh / human_review.sh /
 #   triage. It is GLUE ONLY; no new parsing logic lives here.
 #
-#   Source selection (both may run, results are concatenated):
+#   Source selection (both may run, results are concatenated). The optional
+#   third argument false selects only the supplied local tree, as required for
+#   explicit output outside the private synthesis inventory.
 #   - if `<log_base>/final/manifest.json` exists, ingest it via
 #     build_findings_jsonl_from_manifest.
 #   - if a local output dir is supplied (2nd arg, else the OUTPUT_DIR global;
@@ -879,6 +888,7 @@ _ledger_log_base() {
 build_finding_registry() {
   local run_id="${1:-}"
   local local_dir="${2-${OUTPUT_DIR:-}}"
+  local include_manifest="${3:-true}"
   if [[ -z "$run_id" ]]; then
     echo "build_finding_registry: missing run_id" >&2
     return 2
@@ -906,7 +916,7 @@ build_finding_registry() {
 
   # Source 1: synthesizer manifest, when present.
   local manifest="$final_dir/manifest.json"
-  if [[ -f "$manifest" ]]; then
+  if [[ "$include_manifest" == true && -f "$manifest" ]]; then
     if build_findings_jsonl_from_manifest "$manifest" "$m_tmp"; then
       cat "$m_tmp" >> "$candidate"
     else

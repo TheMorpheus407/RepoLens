@@ -1997,6 +1997,54 @@ _round_digest_finding_segments() {
   ' "$file"
 }
 
+# Deliver Generic raw segments as ordinary local findings. The private source
+# remains canonical for digest/verification; publication can be retried even
+# after all lens/round completion receipts have been written.
+export_generic_local_findings() (
+  local output_dir="$1" stage source segments segment frontmatter body title lens domain relative index list_complete=0
+  local rounds_dir="${LOG_BASE:-}/rounds"
+  [[ -d "$rounds_dir" ]] || return 0
+  mkdir -p "$LOG_BASE/final" || return 1
+  stage="$(mktemp -d "$LOG_BASE/final/.generic-plan.XXXXXX")" || return 1
+  trap 'rm -rf -- "$stage"' EXIT
+  if ! { (set -o pipefail; find -H "$rounds_dir" -type f -path '*/lens-outputs/*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$stage/files"; then
+    return 1
+  fi
+  : > "$stage/plan.jsonl" || return 1
+  while IFS= read -r -d '' source; do
+    if [[ -z "$source" ]]; then list_complete=1; break; fi
+    cat -- "$source" > "$stage/source" || return 1
+    # Other lenses retain their own local-output contract; malformed ordinary
+    # drafts must not prevent delivery of independent Generic evidence.
+    frontmatter="$(_round_digest_frontmatter_block "$stage/source")" || continue
+    domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)"
+    [[ "$domain" == generic ]] || continue
+    segments="$(_round_digest_finding_segments "$stage/source")" || return 1
+    relative="${source#"$rounds_dir/"}" index=0
+    while [[ "$segments" == *$'\036'* ]]; do
+      segment="${segments%%$'\036'*}"; segments="${segments#*$'\036'}"
+      frontmatter="${segment%%$'\037'*}" body="${segment#*$'\037'}"
+      index=$((index + 1))
+      domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)"
+      [[ "$domain" == generic ]] || continue
+      lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens_id)"
+      [[ -n "$lens" ]] || lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens)"
+      [[ -n "$lens" ]] || return 1
+      title="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar title)"
+      if [[ -z "$title" ]]; then
+        title="$(printf '%s' "$body" | _round_digest_section_text_from_stream hypothesis | _round_digest_inline_text 200)"
+      fi
+      [[ -n "$title" ]] || { echo "Generic delivery: missing title/hypothesis in $source" >&2; return 1; }
+      jq -cn --arg source "$source" --arg relative "$relative" --argjson segment "$index" \
+        --arg frontmatter "$frontmatter" --arg body "$body" --arg title "$title" --arg lens "$lens" \
+        '{source:$source,relative:$relative,segment:$segment,frontmatter:$frontmatter,body:$body,title:$title,lens:$lens}' \
+        >> "$stage/plan.jsonl" || return 1
+    done
+  done < "$stage/files" || return 1
+  (( list_complete )) || return 1
+  python3 "$(_round_digest_repo_root)/lib/generic_output.py" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}"
+)
+
 _round_digest_trim_yaml_value() {
   local value="$*"
 

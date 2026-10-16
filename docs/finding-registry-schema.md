@@ -41,6 +41,17 @@ It is built from the existing finding outputs; it does not replace them.
   links reconstruct `also_reported_by` contributors on canonical records;
   referenced paths are never opened.
 
+For Generic investigators with `bugreport --local --output`, finalization converts
+private multi-finding evidence to one ordinary Markdown file per segment in the
+requested output. Each projection records `source_finding_path`,
+`source_finding_segment` and `generic_source_id`; its `lens` comes from `lens_id`
+and its title comes from a supplied title or the hypothesis. The registry uses
+that source/segment identity alongside title/domain/lens, preserving distinct
+records when titles match. Private evidence, digests and verifier IDs are unchanged.
+Only generated, receipt-owned projection paths may be replaced or retired.
+Failed delivery keeps the previous registry and reports; resume retries it from
+saved evidence without rerunning completed investigations.
+
 An explicit `--output` uses a shared Markdown directory outside the round-only
 verifier/synthesizer inventory. It retains direct Markdown indexing, even when
 round synthesis writes an empty manifest; these findings have not been checked
