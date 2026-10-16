@@ -192,7 +192,7 @@ _repolens_scan_citations() {
           span_count = 0
           value = mask_spans($0)
           # Keep masked offsets stable when hiding URLs as well.
-          while (match(value, /https?:\/\/[^[:space:]<>`]+/)) {
+          while (match(value, /[[:alpha:]][[:alnum:]+.-]*:\/\/[^[:space:]<>`]+/)) {
             replacement = substr(value, RSTART, RLENGTH)
             gsub(/./, "@", replacement)
             value = substr(value, 1, RSTART - 1) replacement substr(value, RSTART + RLENGTH)
