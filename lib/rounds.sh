@@ -511,6 +511,7 @@ _rounds_meta_certify_success() {
 # finish. Matching artifacts retain their bytes and modification times.
 _rounds_meta_restore_success() {
   local dir="$1" fingerprint saved_proof staging="" rc=0 name legacy_format
+  local snapshot output_hash hash_context="$1" scan_rc=0
   META_ORCH_SATURATED=0
   [[ -f "$dir/meta-orchestrator-success.json" ]] || return 1
   # Reject missing/non-file output only in a searchable directory. A
@@ -538,6 +539,7 @@ _rounds_meta_restore_success() {
       rm -rf "$staging"
       return 2
     fi
+    hash_context="$staging/hash-context"
     if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
         <<< "$saved_proof" >/dev/null 2>&1; then
       rm -rf "$staging"
@@ -547,11 +549,28 @@ _rounds_meta_restore_success() {
   if [[ -z "$staging" ]]; then
     staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
   fi
-  if _rounds_meta_no_fresh_angles "$dir/meta-orchestrator-output.txt"; then
+  # Parsing must consume the same bytes that the proof accepted. A late read
+  # error is pending verification, never an empty dispatch or new model call.
+  # staging is a private mktemp directory and is removed on every exit below.
+  snapshot="$staging/meta-orchestrator-output.txt"
+  if ! cat -- "$dir/meta-orchestrator-output.txt" > "$snapshot" \
+      || ! output_hash="$(_rounds_meta_git -C "$hash_context" hash-object --stdin < "$snapshot")"; then
+    rm -rf "$staging"
+    return 2
+  fi
+  if ! jq -e --arg output "$output_hash" '.output == $output' \
+      <<< "$fingerprint" >/dev/null 2>&1; then
+    rm -rf "$staging"
+    return 1
+  fi
+  _rounds_meta_no_fresh_angles "$snapshot" || scan_rc=$?
+  if (( scan_rc == 0 )); then
     _rounds_meta_write_no_fresh_dispatch "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
     META_ORCH_SATURATED=1
+  elif (( scan_rc == 1 )); then
+    _rounds_meta_parse_output "$snapshot" "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
   else
-    _rounds_meta_parse_output "$dir/meta-orchestrator-output.txt" "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
+    rc=2
   fi
   if (( rc == 0 )); then
     for name in dispatch.md hypotheses.md; do
@@ -1356,51 +1375,99 @@ _rounds_meta_dispatch_has_entries() {
 }
 
 _rounds_meta_no_fresh_angles() {
-  local output_file="$1" line trimmed
-
+  local output_file="$1"
+  local -a read_status
   [[ -f "$output_file" ]] || return 1
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    trimmed="$(_rounds_meta_trim "$line")"
-    if [[ "$trimmed" == "NO_FRESH_ANGLES" ]]; then
-      return 0
-    fi
-  done < "$output_file"
-
-  return 1
+  # Drain the producer after finding the marker too: its status certifies the
+  # complete read. awk scans lines without a response-sized shell allocation.
+  if cat -- "$output_file" | awk '
+      { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "")
+        if ($0 == "NO_FRESH_ANGLES") found=1 }
+      END { exit(found ? 0 : 1) }'; then
+    read_status=("${PIPESTATUS[@]}")
+  else
+    read_status=("${PIPESTATUS[@]}")
+  fi
+  (( read_status[0] == 0 )) || return 2
+  return "${read_status[1]}"
 }
 
 _rounds_meta_extract_hypotheses() {
   local output_file="$1" hypotheses_file="$2"
-  local line trimmed rest in_block=0 tmp_file
+  local line trimmed rest in_block=0 tmp_file input_fd producer_pid parse_rc=0
 
   tmp_file="${hypotheses_file}.tmp.$$"
   : > "$tmp_file" || return 1
 
+  exec {input_fd}< <(cat -- "$output_file") || { rm -f "$tmp_file"; return 1; }
+  producer_pid=$!
   while IFS= read -r line || [[ -n "$line" ]]; do
+    (( in_block != 2 )) || continue
     trimmed="$(_rounds_meta_trim "$line")"
 
     if (( in_block == 0 )); then
       if [[ "$trimmed" =~ ^#*[[:space:]]*HYPOTHESES[_[:space:]-]*TO[_[:space:]-]*VERIFY[[:space:]]*:?[[:space:]]*(.*)$ ]]; then
         in_block=1
         rest="$(_rounds_meta_trim "${BASH_REMATCH[1]}")"
-        [[ -n "$rest" ]] && printf '%s\n' "$rest" >> "$tmp_file"
+        if [[ -n "$rest" ]] && ! printf '%s\n' "$rest" >> "$tmp_file"; then
+          parse_rc=1
+          break
+        fi
       fi
       continue
     fi
 
     if [[ "$trimmed" =~ ^#{1,6}[[:space:]]+ ]] \
         || [[ "$trimmed" =~ ^-?[[:space:]]*(LENS|CUSTOM|GENERIC):[[:space:]]* ]]; then
-      break
+      in_block=2
+      continue
     fi
 
-    printf '%s\n' "$line" >> "$tmp_file"
-  done < "$output_file"
+    # A later successful iteration must not hide an earlier append failure.
+    if ! printf '%s\n' "$line" >> "$tmp_file"; then
+      parse_rc=1
+      break
+    fi
+  done <&"$input_fd"
+  exec {input_fd}<&-
+  wait "$producer_pid" || parse_rc=1
+  if (( parse_rc != 0 )); then
+    rm -f "$tmp_file"
+    return 1
+  fi
 
   mv "$tmp_file" "$hypotheses_file"
 }
 
 _rounds_meta_parse_output() {
+  local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
+  local staging name target input_fd producer_pid parse_rc=0
+  mkdir -p "${dispatch_file%/*}" "${hypotheses_file%/*}" || return 1
+  staging="$(mktemp -d "${dispatch_file%/*}/.meta-parse.XXXXXX")" || return 1
+  # Parsing may produce candidates while cat is still reading. Publish only
+  # after BOTH producer and parser succeed, with no whole-response shell copy.
+  exec {input_fd}< <(cat -- "$output_file") || { rm -rf "$staging"; return 1; }
+  producer_pid=$!
+  _rounds_meta_parse_output_stream "$output_file" "$staging/dispatch.md" \
+    "$staging/hypotheses.md" "$lenses_dir" <&"$input_fd" || parse_rc=1
+  exec {input_fd}<&-
+  wait "$producer_pid" || parse_rc=1
+  if (( parse_rc != 0 )); then
+    rm -rf "$staging"
+    return 1
+  fi
+  for name in dispatch.md hypotheses.md; do
+    if [[ "$name" == dispatch.md ]]; then target="$dispatch_file"; else target="$hypotheses_file"; fi
+    if [[ -d "$target" ]] || ! mv "$staging/$name" "$target"; then
+      rm -rf "$staging"
+      return 1
+    fi
+  done
+  rm -rf "$staging"
+}
+
+# Internal stdin parser; the public wrapper owns read verification/promotion.
+_rounds_meta_parse_output_stream() {
   local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
   local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_identity
   local lens_attrs lens_dispatch_line generic_attrs generic_dispatch_line stripped attr_body
@@ -1505,7 +1572,7 @@ _rounds_meta_parse_output() {
       in_custom=1
       in_fence=0
     fi
-  done < "$output_file"
+  done
 
   if (( in_custom )); then
     if (( in_fence )); then

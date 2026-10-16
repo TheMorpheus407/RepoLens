@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Keep certified meta restoration streaming while checking complete producer reads, avoiding response-sized shell buffers and repeated resume allocation failures; stage derived files until reads and parsing succeed.
+
+- Preserve accepted meta dispatch, hypotheses and saturation across parse-time output read failures; parse a verified private snapshot with checked complete reads, reject late content changes and keep failed restores pending without extra model calls or rounds. Reject failed hypothesis writes before publishing partial results (repolens-r7-p3-2).
+
 - Preserve the complete local finding registry, CSV and reports when an individual Markdown finding cannot be read, including during branch-review scope filtering. Parse each successfully read file from an owner-only temporary snapshot (repolens-r7-p2-2, repolens-r7-p3-1).
 
 - Propagate rate-limit and no-progress lens failures even when their abort marker cannot be written, keeping failed rounds resumable (repolens-r7-p1-1, repolens-r7-p2-1).
