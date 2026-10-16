@@ -1394,12 +1394,13 @@ _rounds_meta_no_fresh_angles() {
 
 _rounds_meta_extract_hypotheses() {
   local output_file="$1" hypotheses_file="$2"
-  local line trimmed rest in_block=0 tmp_file
+  local line trimmed rest in_block=0 tmp_file input_fd producer_pid parse_rc=0
 
   tmp_file="${hypotheses_file}.tmp.$$"
   : > "$tmp_file" || return 1
 
-  if ! (set -o pipefail; cat -- "$output_file" | (
+  exec {input_fd}< <(cat -- "$output_file") || { rm -f "$tmp_file"; return 1; }
+  producer_pid=$!
   while IFS= read -r line || [[ -n "$line" ]]; do
     (( in_block != 2 )) || continue
     trimmed="$(_rounds_meta_trim "$line")"
@@ -1409,8 +1410,8 @@ _rounds_meta_extract_hypotheses() {
         in_block=1
         rest="$(_rounds_meta_trim "${BASH_REMATCH[1]}")"
         if [[ -n "$rest" ]] && ! printf '%s\n' "$rest" >> "$tmp_file"; then
-          rm -f "$tmp_file"
-          return 1
+          parse_rc=1
+          break
         fi
       fi
       continue
@@ -1424,11 +1425,13 @@ _rounds_meta_extract_hypotheses() {
 
     # A later successful iteration must not hide an earlier append failure.
     if ! printf '%s\n' "$line" >> "$tmp_file"; then
-      rm -f "$tmp_file"
-      return 1
+      parse_rc=1
+      break
     fi
-  done
-  )); then
+  done <&"$input_fd"
+  exec {input_fd}<&-
+  wait "$producer_pid" || parse_rc=1
+  if (( parse_rc != 0 )); then
     rm -f "$tmp_file"
     return 1
   fi
@@ -1438,13 +1441,18 @@ _rounds_meta_extract_hypotheses() {
 
 _rounds_meta_parse_output() {
   local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
-  local staging name target
+  local staging name target input_fd producer_pid parse_rc=0
   mkdir -p "${dispatch_file%/*}" "${hypotheses_file%/*}" || return 1
   staging="$(mktemp -d "${dispatch_file%/*}/.meta-parse.XXXXXX")" || return 1
   # Parsing may produce candidates while cat is still reading. Publish only
   # after BOTH producer and parser succeed, with no whole-response shell copy.
-  if ! (set -o pipefail; cat -- "$output_file" | _rounds_meta_parse_output_stream \
-      "$output_file" "$staging/dispatch.md" "$staging/hypotheses.md" "$lenses_dir"); then
+  exec {input_fd}< <(cat -- "$output_file") || { rm -rf "$staging"; return 1; }
+  producer_pid=$!
+  _rounds_meta_parse_output_stream "$output_file" "$staging/dispatch.md" \
+    "$staging/hypotheses.md" "$lenses_dir" <&"$input_fd" || parse_rc=1
+  exec {input_fd}<&-
+  wait "$producer_pid" || parse_rc=1
+  if (( parse_rc != 0 )); then
     rm -rf "$staging"
     return 1
   fi
