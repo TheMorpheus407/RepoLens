@@ -135,11 +135,6 @@ RUN_ID=probe MODE=polish LOCAL_MODE=false MAX_ISSUES=1 GLOBAL_ISSUES_CREATED=0 R
 mkdir -p "$LOG_BASE/polish"
 : > "$LOG_BASE/posts"
 init_summary "$SUMMARY_FILE" probe "$FIXTURE" polish mock '' 1 github ''
-printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
-forge_issue_create() {
-  builtin printf 'created\n' >> "$LOG_BASE/posts"
-  builtin printf 'https://github.com/fixture/repo/issues/%s\n' "$(wc -l < "$LOG_BASE/posts")"
-}
 printf() {
   if [[ "${FUNCNAME[1]:-}" == run_polish_issue_emission && "${2:-}" == https://github.com/fixture/repo/issues/* ]]; then
     builtin printf '%s\n' "$2" > /dev/full
@@ -147,6 +142,12 @@ printf() {
   fi
   # shellcheck disable=SC2059 # Transparent wrapper must forward the caller's format and arguments.
   builtin printf "$@"
+}
+
+printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+forge_issue_create() {
+  builtin printf 'created\n' >> "$LOG_BASE/posts"
+  builtin printf 'https://github.com/fixture/repo/issues/%s\n' "$(wc -l < "$LOG_BASE/posts")"
 }
 rc=0
 run_polish_issue_emission probe 3 || rc=$?
