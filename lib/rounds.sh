@@ -414,11 +414,17 @@ run_meta_orchestrator() {
     return 1
   fi
 
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   # A fresh invocation must never inherit another attempt's accepted result.
   rm -f "$prev_round_dir/meta-orchestrator-success.json" "$output_path.envelope.json" || return 1
 
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
     _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
     printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
     ROUNDS_FAILURE_REASON="prompt-render-failed"
@@ -429,10 +435,18 @@ run_meta_orchestrator() {
     fi
     return 1
   fi
+  # Prompt rendering runs in a command substitution. Its return can deliver a
+  # pending parent signal whose returning trap has already cancelled the run.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   printf '%s\n' "$prompt" > "$prompt_path" || return 1
 
   log_info "[round $round] Running meta-orchestrator for round $next_round"
   local envelope_path="$output_path.envelope.json"
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   run_agent "$AGENT" "$prompt" "$project_path" "${AGENT_TIMEOUT_SECS:-}" "${AGENT_KILL_GRACE_SECS:-30}" "$envelope_path" > "$output_path" 2>&1 || agent_rc=$?
   if declare -F handle_agent_failure_in_phase >/dev/null 2>&1; then
     local phase_rc
@@ -496,19 +510,28 @@ _rounds_meta_certify_success() {
 # Return 1 for absent/invalid proof; 2 when verification or installation cannot
 # finish. Matching artifacts retain their bytes and modification times.
 _rounds_meta_restore_success() {
-  local dir="$1" fingerprint staging="" rc=0 name legacy_format
+  local dir="$1" fingerprint saved_proof staging="" rc=0 name legacy_format
   META_ORCH_SATURATED=0
   [[ -f "$dir/meta-orchestrator-success.json" ]] || return 1
-  fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 1
+  # Reject missing/non-file output only in a searchable directory. A
+  # certificate alone cannot recover it; a replacement invocation is required.
+  if [[ ! -f "$dir/meta-orchestrator-output.txt" && -r "$dir" && -x "$dir" ]]; then
+    return 1
+  fi
+  # A failed read/hash cannot disprove an accepted handoff. Keep it pending
+  # so resume preserves the proof instead of admitting a fresh model call.
+  fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 2
+  # Read once, distinguishing IO failure from a readable invalid certificate.
+  saved_proof="$(cat "$dir/meta-orchestrator-success.json")" || return 2
   if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
-      "$dir/meta-orchestrator-success.json" >/dev/null 2>&1; then
+      <<< "$saved_proof" >/dev/null 2>&1; then
     # Older v1 proofs used the invocation repository's object format. Verify
     # their exact bytes in that format without rewriting accepted certificates.
     legacy_format="$(jq -er --argjson expected "$fingerprint" '
       select((.output | length) != ($expected.output | length)) | .output | strings |
       if test("^[0-9a-f]{40}$") then "sha1"
       elif test("^[0-9a-f]{64}$") then "sha256" else empty end' \
-      "$dir/meta-orchestrator-success.json" 2>/dev/null)" || return 1
+      <<< "$saved_proof" 2>/dev/null)" || return 1
     staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
     if ! _rounds_meta_git init -q --bare --template= --object-format="$legacy_format" "$staging/hash-context" \
         || ! fingerprint="$(_rounds_meta_result_fingerprint "$dir" "$staging/hash-context")"; then
@@ -516,7 +539,7 @@ _rounds_meta_restore_success() {
       return 2
     fi
     if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
-        "$dir/meta-orchestrator-success.json" >/dev/null 2>&1; then
+        <<< "$saved_proof" >/dev/null 2>&1; then
       rm -rf "$staging"
       return 1
     fi
@@ -714,31 +737,47 @@ _rounds_meta_tuple_parse() {
 # and key=`path/to/file:line` style tokens that contain backticks.
 # Writes the extracted value to stdout. Returns 0 if the key was found.
 _rounds_meta_extract_kv() {
-  local key="$1" haystack="$2"
-  local pattern_dq pattern_sq pattern_bt pattern_token
+  local key="$1" haystack="$2" pattern matched_key matched_value consumed
+  # Consume whole attributes from left to right, so quoted contents cannot
+  # masquerade as sibling attributes (for example focus='see anchor="decoy"').
+  pattern="^[[:space:]]*([[:alnum:]_]+)=(\"[^\"]*\"|'[^']*'|\`[^\`]*\`|[^[:space:]\"\`']+)"
+  while [[ -n "$haystack" ]]; do
+    if [[ "$haystack" =~ $pattern ]]; then
+      consumed="${BASH_REMATCH[0]}"
+      matched_key="${BASH_REMATCH[1]}"
+      matched_value="${BASH_REMATCH[2]}"
+      if [[ "$matched_key" == "$key" ]]; then
+        case "${matched_value:0:1}" in
+          '"'|"'"|'`') matched_value="${matched_value:1:${#matched_value}-2}" ;;
+        esac
+        printf '%s' "$matched_value"
+        return 0
+      fi
+      haystack="${haystack:${#consumed}}"
+    else
+      # Retain compatibility with non-attribute tokens surrounding attributes.
+      haystack="$(_rounds_meta_trim "$haystack")"
+      if [[ "$haystack" != *[[:space:]]* ]]; then break; fi
+      haystack="${haystack#*[[:space:]]}"
+    fi
+  done
+  return 1
+}
 
-  pattern_dq="(^|[[:space:]])${key}=\"([^\"]*)\""
-  pattern_sq="(^|[[:space:]])${key}='([^']*)'"
-  pattern_bt="(^|[[:space:]])${key}=\`([^\`]*)\`"
-  pattern_token="(^|[[:space:]])${key}=([^[:space:]\"\`']+)"
-
-  if [[ "$haystack" =~ $pattern_dq ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
+# Render one parsed attribute in the syntax understood by extract_kv. A value
+# accepted from quoted input always has at least one available delimiter.
+_rounds_meta_format_kv() {
+  local key="$1" value="$2" quote
+  if [[ "$value" != *[[:space:]]* && "$value" != *'"'* && "$value" != *"'"* && "$value" != *'`'* ]]; then
+    printf '%s=%s' "$key" "$value"
     return 0
   fi
-  if [[ "$haystack" =~ $pattern_sq ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
-    return 0
-  fi
-  if [[ "$haystack" =~ $pattern_bt ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
-    return 0
-  fi
-  if [[ "$haystack" =~ $pattern_token ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
-    return 0
-  fi
-
+  for quote in '"' "'" '`'; do
+    if [[ "$value" != *"$quote"* ]]; then
+      printf '%s=%s%s%s' "$key" "$quote" "$value" "$quote"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -746,13 +785,20 @@ _rounds_meta_extract_kv() {
 # remaining text is purely the attribute key=value section. The trailing
 # " - " separator is the canonical rationale boundary used in the schema.
 _rounds_meta_strip_rationale() {
-  local value="$1"
+  local value="$1" quote="" char previous="" i
 
-  if [[ "$value" =~ ^(.+)[[:space:]]-[[:space:]] ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-    return 0
-  fi
-
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    if [[ -n "$quote" ]]; then
+      if [[ "$char" == "$quote" ]]; then quote=""; fi
+    elif [[ "$previous" == '=' && ( "$char" == '"' || "$char" == "'" || "$char" == '`' ) ]]; then
+      quote="$char"
+    elif [[ "$char" == '-' && "$previous" == [[:space:]] && "${value:i+1:1}" == [[:space:]] ]]; then
+      printf '%s' "${value:0:i-1}"
+      return 0
+    fi
+    previous="$char"
+  done
   printf '%s' "$value"
 }
 
@@ -982,7 +1028,7 @@ _rounds_meta_dispatch_lens_entries() {
 
       if lens_entry="$(_rounds_meta_lens_entry_for_id "$lens_id" "$lenses_dir")"; then
         tuple="$(_rounds_meta_tuple_serialize "$lens_entry" "$role" "$focus" "$anchor" "$exclude")"
-        dedup_key="${lens_entry}|${role}|${focus}|${anchor}|${exclude}"
+        dedup_key="$tuple"
         if [[ -z "${seen_entries[$dedup_key]:-}" ]]; then
           seen_entries["$dedup_key"]=1
           printf '%s\n' "$tuple"
@@ -1017,7 +1063,7 @@ _rounds_meta_dispatch_generic_entries() {
         focus="$missed_angle"
       fi
 
-      dedup_key="${role}|${focus}|${anchor}|${exclude}"
+      dedup_key="$(_rounds_meta_tuple_serialize generic "$role" "$focus" "$anchor" "$exclude")"
       if [[ -n "${seen_entries[$dedup_key]:-}" ]]; then
         continue
       fi
@@ -1411,20 +1457,14 @@ _rounds_meta_parse_output() {
       fi
 
       if _rounds_meta_validate_lens_id "$lens_id" "$lenses_dir"; then
-        dedup_key="${lens_id}|${role}|${focus}|${anchor}|${exclude}"
+        dedup_key="$(_rounds_meta_tuple_serialize "$lens_id" "$role" "$focus" "$anchor" "$exclude")"
         if [[ -z "${seen_lens_keys[$dedup_key]:-}" ]]; then
           seen_lens_keys["$dedup_key"]=1
           lens_dispatch_line="LENS: $lens_id"
-          [[ -n "$role" ]] && lens_dispatch_line+=" role=$role"
-          if [[ -n "$focus" ]]; then
-            if [[ "$focus" == *[[:space:]]* ]]; then
-              lens_dispatch_line+=" focus=\"$focus\""
-            else
-              lens_dispatch_line+=" focus=$focus"
-            fi
-          fi
-          [[ -n "$anchor" ]] && lens_dispatch_line+=" anchor=$anchor"
-          [[ -n "$exclude" ]] && lens_dispatch_line+=" exclude=$exclude"
+          [[ -n "$role" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv role "$role")"
+          [[ -n "$focus" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv focus "$focus")"
+          [[ -n "$anchor" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv anchor "$anchor")"
+          [[ -n "$exclude" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv exclude "$exclude")"
           lens_dispatch_lines+=("$lens_dispatch_line")
         fi
       else
@@ -1447,20 +1487,14 @@ _rounds_meta_parse_output() {
         focus="$missed_angle"
       fi
 
-      dedup_key="${role}|${focus}|${anchor}|${exclude}"
+      dedup_key="$(_rounds_meta_tuple_serialize generic "$role" "$focus" "$anchor" "$exclude")"
       if [[ -z "${seen_generic_keys[$dedup_key]:-}" ]]; then
         seen_generic_keys["$dedup_key"]=1
         generic_dispatch_line="GENERIC:"
-        [[ -n "$role" ]] && generic_dispatch_line+=" role=$role"
-        if [[ -n "$focus" ]]; then
-          if [[ "$focus" == *[[:space:]]* ]]; then
-            generic_dispatch_line+=" focus=\"$focus\""
-          else
-            generic_dispatch_line+=" focus=$focus"
-          fi
-        fi
-        [[ -n "$anchor" ]] && generic_dispatch_line+=" anchor=$anchor"
-        [[ -n "$exclude" ]] && generic_dispatch_line+=" exclude=$exclude"
+        [[ -n "$role" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv role "$role")"
+        [[ -n "$focus" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv focus "$focus")"
+        [[ -n "$anchor" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv anchor "$anchor")"
+        [[ -n "$exclude" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv exclude "$exclude")"
         generic_dispatch_lines+=("$generic_dispatch_line")
       fi
       continue

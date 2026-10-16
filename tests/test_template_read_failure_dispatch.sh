@@ -267,16 +267,18 @@ check json_matches '.stopped_reason == "prompt-render-failed"' "$SUMMARY_FILE"
 check test -s "$LOG_BASE/.systemic-failure-abort"
 check test "$(_rounds_agent_abort_reason)" = prompt-render-failed
 
-# Missing templates must use the same diagnostic path, including signal precedence.
+# An already accepted signal stops before inspecting a missing template.
+# The signal reason remains available without fabricating a prompt failure.
 BASE_PROMPTS_DIR="$TEST_DIR/no-templates"
 rm -f "$LOG_BASE/.systemic-failure-abort"
 printf '{"stopped_reason":null}\n' > "$SUMMARY_FILE"
 REPOLENS_FINAL_STATE=interrupted
 run_meta_orchestrator "$TEST_DIR/meta/missing/round-1" "$TEST_DIR/meta/missing/round-2"
-check test "$?" -ne 0
+check test "$?" -eq "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 check test "$REPOLENS_FINAL_STATE" = interrupted
-check json_matches '.stopped_reason == "interrupted-sigint"' "$SUMMARY_FILE"
-check test -f "$LOG_BASE/.systemic-failure-abort"
+check test "$(_rounds_agent_abort_reason)" = interrupted-sigint
+check json_matches '.stopped_reason == null' "$SUMMARY_FILE"
+check test ! -e "$LOG_BASE/.systemic-failure-abort"
 check test ! -e "$AGENT_CALLS"
 
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"

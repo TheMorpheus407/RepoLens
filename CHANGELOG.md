@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Stop cancelled meta calls before dispatch even when rendering fails, retain accepted handoffs on output/certificate read errors while regenerating missing output, and preserve quoted dispatch attributes (including rationale separators and embedded attribute text) and distinct pipe-valued tuples (repolens-r6-p1-1, repolens-r6-p2-2, repolens-r6-p2-3, repolens-r6-p2-4).
+
 - Preserve the previous local finding registry and triage reports when finding-tree enumeration fails (repolens-r6-p2-1).
 
 - Preserve saved cross-link success receipts and stage both body and banner payloads during interrupted reattestation, rolling back interrupted quarantine and failed or cancelled payload promotion; release fresh unsent reopen reservations even when banner generation fails; quarantine completed validation failures and stop final receipt recount reads after cancellation (repolens-r5-p1-2, repolens-r5-p2-1).
