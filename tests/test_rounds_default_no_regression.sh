@@ -76,7 +76,11 @@ done
 # Keep real date parsing and formatted timestamps; freshness behavior has its
 # own boundary tests in test_pricing_freshness.sh.
 BASELINE_REAL_DATE="$(command -v date)"
-BASELINE_NOW_EPOCH="$("$BASELINE_REAL_DATE" -d "$(jq -er '.updated_at' "$SCRIPT_DIR/config/agent-pricing.json")" +%s)" || exit 1
+BASELINE_UPDATED_AT="$(jq -er '.updated_at' "$SCRIPT_DIR/config/agent-pricing.json")" || exit 1
+if ! BASELINE_NOW_EPOCH="$("$BASELINE_REAL_DATE" -d "$BASELINE_UPDATED_AT" +%s 2>/dev/null)"; then
+  # BSD date retains unspecified time fields; specify midnight to match GNU.
+  BASELINE_NOW_EPOCH="$("$BASELINE_REAL_DATE" -j -f '%Y-%m-%d %H:%M:%S' "$BASELINE_UPDATED_AT 00:00:00" +%s 2>/dev/null)" || exit 1
+fi
 export BASELINE_REAL_DATE BASELINE_NOW_EPOCH
 cat > "$FAKE_BIN/date" <<'DATE'
 #!/usr/bin/env bash
