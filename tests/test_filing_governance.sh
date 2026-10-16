@@ -629,5 +629,99 @@ mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
 _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
 check 'cross-link comment succeeds with canonical-cased comment URL' test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
 check 'canonical-cased comment performs exactly one comment POST' test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+# repolens-r8-p1-2: each same-line citation owns its following snippet.
+for variant in valid invalid reversed quoted repeated prefix-valid prefix-invalid; do
+  fresh
+  CROSS_LINK_MODE=comment
+  printf 'Source alpha\n' > "$test_project_path/src/a.sh"
+  printf 'Source beta\n' > "$test_project_path/src/b.sh"
+  evidence='src/a.sh:1 — `Source alpha`; src/b.sh:1 — `Source beta`'
+  expected=valid
+  case "$variant" in
+    invalid) printf 'Source alpha\n' > "$test_project_path/src/b.sh"; expected=invalid ;;
+    reversed) evidence='src/b.sh:1 — `Source beta`; src/a.sh:1 — `Source alpha`' ;;
+    quoted) evidence='`src/a.sh:1` — `Source alpha`; ``src/b.sh:1`` — `Source beta`' ;;
+    prefix-valid) evidence='`Source alpha` at src/a.sh:1' ;;
+    prefix-invalid) evidence='`Source ghost` at src/a.sh:1'; expected=invalid ;;
+    repeated) evidence='src/a.sh:1 — `Source alpha`; src/a.sh:1 — `Source ghost`'; expected=invalid ;;
+  esac
+  jq --arg evidence "$evidence" '.[0].body="src/a.sh:1" | .[0].cross_link_actions=[{type:"comment",issue_number:9,body:$evidence}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  if [[ "$expected" == valid ]]; then
+    check "same-line snippets publish valid evidence: $variant" test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
+    check "same-line valid evidence publishes once: $variant" test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+  else
+    check "same-line invalid snippet records failure: $variant" test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+    check "same-line invalid snippet never publishes: $variant" test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+    check "same-line invalid snippet leaves no receipt: $variant" test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  fi
+done
+# Parsed occurrence boundaries must match the shared citation grammar, for
+# both new issues and cross-link comments. Only the forge CLI above is mocked.
+for variant in emphasis-single emphasis-double embedded-self embedded-quoted-text embedded-other repeated-quoted repeated-prefix double-snippet literal-tick literal-tick-valid triple-snippet-valid mixed-quotes multiline prefix-path prefix-line opaque-url quoted-spaces adjacent-list; do
+  for publication in issue comment; do
+    fresh
+    CROSS_LINK_MODE=comment
+    printf 'Source alpha\n' > "$test_project_path/src/a.sh"
+    printf 'Source beta\n' > "$test_project_path/src/b.sh"
+    printf 'Source beta\n' > "$test_project_path/src/with spaces.sh"
+    expected=invalid
+    case "$variant" in
+      emphasis-single) evidence='_src/a.sh:1_ — `Source ghost`' ;;
+      emphasis-double) evidence='__src/a.sh:1__ — `Source ghost`' ;;
+      embedded-self) evidence='src/a.sh:1 — `ghost src/a.sh:1 evidence`' ;;
+      embedded-quoted-text) evidence='src/a.sh:1 — `echo "src/a.sh:1"`' ;;
+      embedded-other) evidence='src/a.sh:1 — `ghost src/b.sh:1 evidence`; src/b.sh:1 — `Source beta`' ;;
+      repeated-quoted) evidence='`src/a.sh:1` and `src/a.sh:1`'; expected=valid ;;
+      repeated-prefix) evidence='`Source alpha` at `src/a.sh:1` and `src/a.sh:1`'; expected=valid ;;
+      double-snippet) evidence='src/a.sh:1 — ``Source ghost``' ;;
+      literal-tick) evidence='src/a.sh:1 — ``Source `alpha` ghost``' ;;
+      literal-tick-valid) evidence='src/a.sh:1 — ``Source `alpha` correct``'
+        printf 'Source `alpha` correct\n' > "$test_project_path/src/a.sh"
+        expected=valid ;;
+      triple-snippet-valid) evidence='src/a.sh:1 — ```Source ``alpha`` correct```'
+        printf 'Source ``alpha`` correct\n' > "$test_project_path/src/a.sh"
+        expected=valid ;;
+      mixed-quotes) evidence='src/a.sh:1 and ``src/a.sh:1``'; expected=valid ;;
+      multiline) evidence=$'src/a.sh:1 — `Source alpha`\nsrc/a.sh:1 — `Source ghost`' ;;
+      prefix-path) evidence='`other/src/a.sh:1` — `Source beta`; src/a.sh:1 — `Source alpha`'
+        mkdir -p "$test_project_path/other/src"
+        printf 'Source beta\n' > "$test_project_path/other/src/a.sh"
+        expected=valid ;;
+      prefix-line) evidence='src/a.sh:10 — `Source beta`; src/a.sh:1 — `Source alpha`'
+        printf 'Source alpha\n\n\n\n\n\n\n\n\nSource beta\n' > "$test_project_path/src/a.sh"
+        expected=valid ;;
+      opaque-url) evidence='src/a.sh:1 https://example.org/src/b.sh:1 — `Source ghost`; src/b.sh:1 — `Source beta`' ;;
+      quoted-spaces) evidence='`src/with spaces.sh:1` — `Source beta`; src/a.sh:1 — `Source alpha`'; expected=valid ;;
+      adjacent-list) evidence='__src/a.sh:1__,__src/b.sh:1__ — `Source ghost`' ;;
+    esac
+    if [[ "$publication" == issue ]]; then
+      set_body "$evidence"
+      run || true
+      receipt="$LOG_BASE/final/filed/test::cluster.url"
+      failure="$LOG_BASE/final/filed/test::cluster.failed"
+      post='issue create'
+    else
+      jq --arg evidence "$evidence" '.[0].body="src/a.sh:1" | .[0].cross_link_actions=[{type:"comment",issue_number:9,body:$evidence}]' \
+        "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+      mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+      _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+      receipt="$LOG_BASE/final/filed/cross-link/comment-9.done"
+      failure="$LOG_BASE/final/filed/cross-link/comment-9.failed"
+      post='issue comment'
+    fi
+    if [[ "$expected" == valid ]]; then
+      check "parsed snippets publish $publication: $variant" test -f "$receipt"
+      check "parsed snippets publish $publication once: $variant" test "$(grep -c "^$post\$" "$TMP/calls")" = 1
+    else
+      check "parsed snippets reject $publication: $variant" test -f "$failure"
+      check "parsed snippets prevent $publication POST: $variant" test "$(grep -c "^$post\$" "$TMP/calls")" = 0
+      check "parsed snippets leave no $publication receipt: $variant" test ! -e "$receipt"
+      check "parsed snippets diagnose mismatch for $publication: $variant" grep -q 'snippet not found near cited line' "$failure"
+    fi
+  done
+done
 echo "Results: $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

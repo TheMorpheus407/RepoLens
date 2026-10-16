@@ -309,24 +309,24 @@ filing_verify_cluster_citations() {
       return 1
     fi
 
-    # Optional snippet check: look for a backtick-quoted snippet attached to
-    # this citation on the same logical body line. Use grep on the body so
-    # multi-line bodies are searched line-by-line.
-    snippet="$(grep -F -- "$citation" <<<"$body" \
-      | grep -oE "\`[^\`]+\`" \
-      | sed -e 's/^`//' -e 's/`$//' \
-      | grep -vE '^.+:[0-9]+(-[0-9]+)?$' \
-      | head -1)"
-    if [[ -n "$snippet" ]]; then
+    # Verify the snippet attached to every occurrence of this citation.
+    local snippets
+    if ! snippets="$(repolens_citation_snippets "$body" "$citation")"; then
+      printf 'could not bind citation snippets\n'
+      return 1
+    fi
+    if [[ -n "$snippets" ]]; then
       context_start=$(( lstart - 20 ))
       (( context_start < 1 )) && context_start=1
       context_end=$(( lend + 20 ))
       (( context_end > line_count )) && context_end=$line_count
       snippet_pattern="$(sed -n "${context_start},${context_end}p" "$file_path")"
-      if [[ "$snippet_pattern" != *"$snippet"* ]]; then
-        printf '%s snippet not found near cited line\n' "$citation"
-        return 1
-      fi
+      while IFS= read -r snippet; do
+        if [[ "$snippet_pattern" != *"$snippet"* ]]; then
+          printf '%s snippet not found near cited line\n' "$citation"
+          return 1
+        fi
+      done <<< "$snippets"
     fi
   done <<< "$citations"
 
