@@ -1665,25 +1665,28 @@ _rounds_meta_parse_output_stream() {
     _rounds_meta_warn "Meta-orchestrator dispatch cap enforced: kept $dispatch_cap of $total_dispatches dispatches (cap=$dispatch_cap)."
   fi
 
+  local dispatch_write_rc=0
   tmp_dispatch="${dispatch_file}.tmp.$$"
   {
-    printf '# Meta-Orchestrator Dispatch\n\n'
+    printf '# Meta-Orchestrator Dispatch\n\n' || dispatch_write_rc=1
     local _cap_idx=0
     if (( lens_kept > 0 )); then
       for ((_cap_idx = 0; _cap_idx < lens_kept; _cap_idx++)); do
-        printf '%s\n' "${lens_dispatch_lines[$_cap_idx]}"
+        printf '%s\n' "${lens_dispatch_lines[$_cap_idx]}" || dispatch_write_rc=1
       done
     fi
     if (( generic_kept > 0 )); then
       for ((_cap_idx = 0; _cap_idx < generic_kept; _cap_idx++)); do
-        printf '%s\n' "${generic_dispatch_lines[$_cap_idx]}"
+        printf '%s\n' "${generic_dispatch_lines[$_cap_idx]}" || dispatch_write_rc=1
       done
     fi
     if (( custom_kept > 0 )); then
       for ((_cap_idx = 0; _cap_idx < custom_kept; _cap_idx++)); do
-        printf '%s\n' "${custom_payloads[$_cap_idx]}"
+        printf '%s\n' "${custom_payloads[$_cap_idx]}" || dispatch_write_rc=1
       done
     fi
+    # A later successful printf or empty CUSTOM branch cannot erase failure.
+    (( dispatch_write_rc == 0 ))
   } > "$tmp_dispatch" || {
     rm -f "$tmp_dispatch"
     return 1
