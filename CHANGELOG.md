@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Keep every explicitly requested specification required during prompt composition, so a disappearing file stops the next lens and remains resumable in audit and spec-change as well as greenfield (repolens-r8-p1-3).
+
 - Preserve successful Polish issue receipts and counters across sequential HUP/INT/TERM, and restore the run-wide issue budget from saved receipts on resume (repolens-r8-p2-1, repolens-r8-p2-2).
 - Recover interrupted Polish summary counts from saved receipts on resume, including when the issue cap is exhausted or the shortlist is empty.
 

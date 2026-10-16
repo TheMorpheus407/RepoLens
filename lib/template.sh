@@ -863,12 +863,12 @@ Read the source file using your file reading capabilities (cat, head, or equival
   # Step 8 (LAST): Build and insert spec section
   # Done last so spec content is never subject to variable substitution
   spec_section=""
-  if [[ "$mode" == greenfield && -n "$spec_file" && ! -f "$spec_file" ]]; then
+  if [[ -n "$spec_file" && ! -f "$spec_file" ]]; then
     printf 'Unable to read required specification: %s\n' "$spec_file" >&2
     return 1
   fi
-  # A required spec must still be read if it vanishes after the check above.
-  if [[ -n "$spec_file" && ( "$mode" == greenfield || -f "$spec_file" ) ]]; then
+  # Every requested spec must still be read if it vanishes after this check.
+  if [[ -n "$spec_file" ]]; then
     local spec_content spec_guidance=""
     if ! spec_content="$(read_spec_file "$spec_file")"; then
       printf 'Unable to read specification: %s\n' "$spec_file" >&2
