@@ -289,5 +289,52 @@ for signal in HUP INT TERM; do
   check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 1
   printf 'cancelled fresh reservation %s: released and resumed\n' "$signal"
 done
+# A provider can create the issue, then fail to parse its URL. Retain that
+# uncertain POST across resumes until its outcome is independently reconciled.
+LOG_BASE="$FIXTURE/forge-failure-after-post" SUMMARY_FILE="$FIXTURE/forge-failure-after-post/summary.json"
+RUN_ID=probe MODE=polish LOCAL_MODE=false MAX_ISSUES=1 GLOBAL_ISSUES_CREATED=0 REPOLENS_FINAL_STATE=finished
+mkdir -p "$LOG_BASE/polish"
+: > "$LOG_BASE/posts"
+init_summary "$SUMMARY_FILE" probe "$FIXTURE" polish mock '' 1 github ''
+printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+# Record the provider side effect while returning no usable URL, as a failed
+# response parser does. Every unexpected retry remains visible in the log.
+forge_issue_create() {
+  printf 'created\n' >> "$LOG_BASE/posts"
+  return 42
+}
+rc=0
+run_polish_issue_emission probe 3 || rc=$?
+check test "$rc" -eq 42
+check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+check test -f "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted"
+check test ! -e "$LOG_BASE/polish/filed/fluency-spacing-consistency.url"
+check test "$GLOBAL_ISSUES_CREATED" -eq 0
+check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 0
+for retry_case in same changed empty; do
+  case "$retry_case" in
+    changed) printf '[{"domain":"fluency","lens_id":"new-lens","title":"Changed","body":"Suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json" ;;
+    empty) printf '[]\n' > "$LOG_BASE/polish/ranked-suggestions.json" ;;
+  esac
+  GLOBAL_ISSUES_CREATED=0
+  rc=0
+  run_polish_issue_emission probe 3 || rc=$?
+  check test "$rc" -ne 0
+  check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+  check test -f "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted"
+  check test ! -e "$LOG_BASE/polish/filed/fluency-spacing-consistency.url"
+  check test "$GLOBAL_ISSUES_CREATED" -eq 0
+  check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 0
+done
+# A verified receipt resolves the uncertainty without invoking the failing
+# provider again, including when the current ranking is empty.
+printf 'https://github.com/fixture/repo/issues/1\n' > "$LOG_BASE/polish/filed/fluency-spacing-consistency.url"
+GLOBAL_ISSUES_CREATED=0
+rc=0
+run_polish_issue_emission probe 3 || rc=$?
+check test "$rc" -eq 0
+check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+check test "$GLOBAL_ISSUES_CREATED" -eq 1
+check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 1
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))
