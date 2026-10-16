@@ -281,6 +281,7 @@ To contribute to RepoLens, you need:
 
 - **Bash 4.0+** — the shell runtime
 - **jq** — for JSON processing
+- **Python 3** — for atomic triage report replacement and process containment
 - **git** — for repository operations
 - At least one supported **agent CLI** (`claude`, `codex`, `opencode`, `sparc`, `antigravity`, or `copilot`)
 
