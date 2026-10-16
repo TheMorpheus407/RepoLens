@@ -487,7 +487,13 @@ build_findings_jsonl_from_local() {
     rm -f "$tmp" "$tmp.files"
     return 1
   fi
-  local ingest_failed=0 snapshot="$tmp.source"
+  # Unlike the projected metadata, this file holds the complete private body.
+  # mktemp creates it exclusively with owner-only permissions, regardless of umask.
+  local ingest_failed=0 snapshot
+  if ! snapshot="$(mktemp "$tmp.source.XXXXXX")"; then
+    rm -f "$tmp" "$tmp.files"
+    return 1
+  fi
   while IFS= read -r -d '' file; do
     # Parse one fully read snapshot. IO failure is not malformed frontmatter:
     # never publish a partial tree or mix scalar reads from different versions.

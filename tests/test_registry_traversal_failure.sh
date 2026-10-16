@@ -25,8 +25,8 @@ TMP="$(mktemp -d)" || exit 1
 cleanup() { chmod -R u+rwx "$TMP"; rm -rf "$TMP"; }
 trap cleanup EXIT
 check mkdir -p "$TMP/output/security/injection"
-check printf -- '---\ntitle: Unsafe query\nseverity: high\n---\nEvidence\n' > "$TMP/output/security/injection/001.md"
-check printf -- '---\ntitle: Missing authorization\nseverity: high\n---\nEvidence\n' > "$TMP/output/security/injection/002.md"
+check printf -- '---\ntitle: Unsafe query\nseverity: high\n---\nsrc/changed.sh:1 Evidence\n' > "$TMP/output/security/injection/001.md"
+check printf -- '---\ntitle: Missing authorization\nseverity: high\n---\nsrc/changed.sh:1 Evidence\n' > "$TMP/output/security/injection/002.md"
 OUT="$TMP/findings.jsonl"
 check build_findings_jsonl_from_local "$TMP/output" "$OUT"
 expected="$(cat "$OUT")" || exit 1
@@ -117,28 +117,33 @@ finalize_local() {
   # shellcheck source=/dev/null
   source <(sed -n '/^# --- Local-mode deterministic dedupe/,/^unset _local_registry_ready _duplicate_report_ready/p' "$ROOT/repolens.sh")
 }
+for mode in audit branch-review; do
 (
-  LOG_BASE="$TMP/run" OUTPUT_DIR="$TMP/output"
-  RUN_ID=probe MODE=audit LOCAL_MODE=true OUTPUT_DIR_SET=true
+  LOG_BASE="$TMP/$mode-run" OUTPUT_DIR="$TMP/$mode-output"
+  check cp -R "$TMP/output" "$OUTPUT_DIR"
+  unreadable="$OUTPUT_DIR/security/injection/002.md"
+  BRANCH_SCOPE_FILE="$TMP/scope.json"
+  check printf '["src/changed.sh"]\n' > "$BRANCH_SCOPE_FILE"
+  RUN_ID=probe MODE="$mode" LOCAL_MODE=true OUTPUT_DIR_SET=true
   HUMAN_REVIEW=true REPOLENS_FINAL_STATE=finished
   check finalize_local
   artifacts=(findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md HUMAN_REVIEW.md)
   for artifact in "${artifacts[@]}"; do check test -s "$LOG_BASE/final/$artifact"; done
-  check mkdir "$TMP/published"
-  for artifact in "${artifacts[@]}"; do check cp "$LOG_BASE/final/$artifact" "$TMP/published/$artifact"; done
+  check mkdir "$TMP/$mode-published"
+  for artifact in "${artifacts[@]}"; do check cp "$LOG_BASE/final/$artifact" "$TMP/$mode-published/$artifact"; done
   # Fail with no output, the case that previously removed the triage reports.
   find() { return 1; }
   check finalize_local
   unset -f find
-  for artifact in "${artifacts[@]}"; do check cmp "$TMP/published/$artifact" "$LOG_BASE/final/$artifact"; done
+  for artifact in "${artifacts[@]}"; do check cmp "$TMP/$mode-published/$artifact" "$LOG_BASE/final/$artifact"; done
   check test "$(command find "$LOG_BASE/final" -type f | wc -l)" -eq "${#artifacts[@]}"
   check chmod 000 "$unreadable"
   if [[ -r "$unreadable" ]]; then
     cat() {
-    local arg
-    for arg in "$@"; do [[ "$arg" != "$unreadable" ]] || return 1; done
-    command cat "$@"
-  }
+      local arg
+      for arg in "$@"; do [[ "$arg" != "$unreadable" ]] || return 1; done
+      command cat "$@"
+    }
     awk() {
       local arg
       for arg in "$@"; do [[ "$arg" != "$unreadable" ]] || return 2; done
@@ -146,11 +151,14 @@ finalize_local() {
     }
   fi
   check finalize_local
+  check test -f "$unreadable"
+  check test ! -e "$unreadable.out-of-scope"
+  check test ! -e "$unreadable.out-of-scope.reason"
   check chmod 600 "$unreadable"
   unset -f cat awk
-  for artifact in "${artifacts[@]}"; do check cmp "$TMP/published/$artifact" "$LOG_BASE/final/$artifact"; done
+  for artifact in "${artifacts[@]}"; do check cmp "$TMP/$mode-published/$artifact" "$LOG_BASE/final/$artifact"; done
   check test "$(command find "$LOG_BASE/final" -type f | wc -l)" -eq "${#artifacts[@]}"
-  printf 'PASS: unreadable finding preserves registry, CSV and all five reports\n'
+  printf 'PASS: %s unreadable finding preserves source, registry, CSV and all five reports\n' "$mode"
   # A successful retry must rebuild from current findings rather than leaving
   # the preserved registry/report snapshot in place forever.
   check rm "$OUTPUT_DIR/security/injection/002.md"
@@ -162,4 +170,5 @@ finalize_local() {
   check test "$rc" -eq 1
   printf 'PASS: finalization preserves published artifacts and retry refreshes them\n'
 ) || exit 1
+done
 printf 'Results: registry traversal failure checks passed\n'
