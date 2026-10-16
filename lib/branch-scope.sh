@@ -30,25 +30,49 @@
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
-  local body="$1" token path quoted_marker='quoted'
+  local body="$1" quoted_marker='quoted'
   # Use a letter sequence absent from the input. Masking excluded spans with
   # '@' cannot fabricate that sequence or impersonate a quoted list member.
   while [[ "$body" == *"$quoted_marker"* ]]; do quoted_marker+='q'; done
   quoted_marker="@$quoted_marker@"
-  {
-    while IFS= read -r token; do
-      path="${token%:*}"
-      [[ "$path" == *://* || "$path" =~ ^[0-9:]+$ ]] && continue
-      printf '%s\n' "$token"
-    done < <(grep -oE '`[^`]+:[0-9]+(-[0-9]+)?`' <<< "$body" | sed 's/^`//; s/`$//')
-    # Keep recognized quoted citations as opaque list members, while masking
-    # excluded spans. Neither replacement can join text into a bare path.
-    sed -E -e 's#https?://[^[:space:]<>`]+#@#g' \
-      -e 's#`[^`]*://[^`]*`#@#g' \
-      -e 's/`[0-9:]+:[0-9]+(-[0-9]+)?`/@/g' \
-      -e "s/\`[^\`]+:[0-9]+(-[0-9]+)?\`/$quoted_marker/g" \
-      -e 's/`[^`]*`/@/g' <<< "$body" \
-      | awk -v quoted_marker="$quoted_marker" '
+  awk -v quoted_marker="$quoted_marker" '
+        # Consume complete, equal-length tick runs from left to right. Shorter
+        # runs inside a span are literal and cannot manufacture a citation.
+        # Scan each line independently so multiline fences leave their source
+        # references available to the existing bare/quoted citation grammar.
+        function mask_spans(value, result, start, width, tail, offset, run, content, path) {
+          result = ""
+          while (match(value, /`+/)) {
+            start = RSTART
+            width = RLENGTH
+            result = result substr(value, 1, start - 1)
+            tail = substr(value, start + width)
+            offset = run = 0
+            while (match(tail, /`+/)) {
+              run = RLENGTH
+              offset += RSTART + run - 1
+              tail = substr(tail, RSTART + run)
+              if (run == width) break
+            }
+            if (run != width) {
+              # An unmatched run is literal. Later complete spans can still
+              # supply independent evidence, but cannot reuse its ticks.
+              result = result substr(value, start, width)
+              value = substr(value, start + width)
+              continue
+            }
+            content = substr(value, start + width, offset - width)
+            path = content
+            sub(/:[0-9]+(-[0-9]+)?$/, "", path)
+            if (content ~ /^[^`]+:[0-9]+(-[0-9]+)?$/ &&
+                path !~ /:\/\// && path !~ /^[0-9:]+$/) {
+              print content
+              result = result quoted_marker
+            } else result = result "@"
+            value = substr(value, start + width + offset)
+          }
+          return result value
+        }
         function unwrap(value, first, last) {
           first = substr(value, 1, 1)
           last = substr(value, length(value), 1)
@@ -101,7 +125,9 @@ repolens_extract_citations() {
           return invalid ? "" : result
         }
         {
-          token_count = split($0, tokens, /[[:space:]]+/)
+          value = mask_spans($0)
+          gsub(/https?:\/\/[^[:space:]<>`]+/, "@", value)
+          token_count = split(value, tokens, /[[:space:]]+/)
           for (token_index = 1; token_index <= token_count; token_index++) {
             value = tokens[token_index]
             token_malformed = 0
@@ -119,8 +145,7 @@ repolens_extract_citations() {
           }
         }
         END { exit extraction_failed ? 1 : 0 }
-      '
-  } | sort -u
+      ' <<< "$body" | sort -u
 }
 
 branch_scope_verify_body() {

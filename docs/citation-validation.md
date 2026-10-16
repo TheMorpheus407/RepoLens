@@ -60,6 +60,15 @@ does not exist.
 Commas and semicolons within URL tokens remain URL bytes. A following bare
 source reference requires whitespace and is checked independently.
 
+Inline citation spans use complete matching backtick runs on the same line,
+including double or longer delimiters. Shorter runs inside a span are literal
+text; ticks from distinct spans cannot form a new citation. Noncitation spans
+remain opaque and never join surrounding path fragments. Multiline fences
+leave each content line available for citation extraction, preserving N23.
+The citation suite tests matching runs of one through four ticks, supporting
+references, and shorter literal ticks; filing governance also tests missing
+and invalid-line double-backtick action references with zero comment POSTs.
+
 “Citation suite” means `tests/test_branch_scope_plus_citation.sh`; “filing
 governance” means `tests/test_filing_governance.sh`. The existing separate product
 decisions require atomic complete lists and body-level malformed-list rejection.

@@ -590,4 +590,60 @@ assert_eq "N15 nested evidence is preserved verbatim" "$nested_body" \
 assert_eq "N15 nested rejection names the supporting path" 'out-of-scope citation: src/missing.sh' \
   "$(cat "$TMP/malformed-findings/nested.md.out-of-scope.reason" 2>/dev/null)"
 
+# repolens-r8-p1-1: closing/opening ticks from distinct spans are not a quote.
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for body in 'src/routes/`note`page.svelte:1`detail`' '`note`page.svelte:1`detail`'; do
+  extracted="$(repolens_extract_citations "$body")"
+  assert_eq "distinct code spans cannot manufacture a suffix citation" "" "$extracted"
+  rc=0
+  branch_scope_verify_body "$body" >/dev/null 2>&1 || rc=$?
+  assert_failure "manufactured suffix cannot pass branch scope" "$rc"
+  rc=0
+  entry="$(jq -n --arg body "$body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$entry" >/dev/null 2>&1 || rc=$?
+  assert_failure "manufactured suffix cannot pass live verification" "$rc"
+done
+assert_eq "an independent actual quoted citation survives earlier code spans" \
+  'page.svelte:1' "$(repolens_extract_citations 'src/`note`page.svelte:1`detail` and `page.svelte:1`')"
+
+# Delimiters are whole runs: shorter ticks inside a span are literal text.
+for ticks in '`' '``' '```' '````'; do
+  body="See ${ticks}src/routes/+page.svelte:1-2${ticks}"
+  assert_eq "complete citation survives $ticks delimiters" \
+    'src/routes/+page.svelte:1-2' "$(repolens_extract_citations "$body")"
+  printf '["src/routes/+page.svelte"]\n' > "$SCOPE_FILE"
+  rc=0
+  branch_scope_verify_body "$body" >/dev/null 2>&1 || rc=$?
+  assert_success "whole-run quote passes scope: $ticks" "$rc"
+  entry="$(jq -n --arg body "$body" '{body:$body}')"
+  rc=0
+  filing_verify_cluster_citations "$PROJECT_A" "$entry" >/dev/null 2>&1 || rc=$?
+  assert_success "whole-run quote verifies its own lines: $ticks" "$rc"
+
+  body="${ticks}src/routes/+page.svelte:1${ticks} and ${ticks}src/missing.sh:1${ticks}"
+  assert_eq "whole-run quotes retain supporting reference: $ticks" \
+    $'src/missing.sh:1\nsrc/routes/+page.svelte:1' "$(repolens_extract_citations "$body")"
+  rc=0
+  branch_scope_verify_body "$body" >/dev/null 2>&1 || rc=$?
+  assert_failure "whole-run support fails scope: $ticks" "$rc"
+  entry="$(jq -n --arg body "$body" '{body:$body}')"
+  reason="$(filing_verify_cluster_citations "$PROJECT_A" "$entry" 2>/dev/null)"
+  assert_eq "whole-run support verifies the missing file: $ticks" \
+    'src/missing.sh:1 file not found' "$reason"
+done
+for body in 'src/routes/``note`page.svelte:1`detail``' \
+    'src/routes/```note``page.svelte:1``detail```' \
+    'src/routes/````note```page.svelte:1```detail````'; do
+  printf '["page.svelte"]\n' > "$SCOPE_FILE"
+  assert_eq "shorter interior ticks cannot fabricate a citation: $body" \
+    '' "$(repolens_extract_citations "$body")"
+  rc=0
+  branch_scope_verify_body "$body" >/dev/null 2>&1 || rc=$?
+  assert_failure "literal interior ticks cannot pass scope" "$rc"
+  entry="$(jq -n --arg body "$body" '{body:$body}')"
+  reason="$(filing_verify_cluster_citations "$PROJECT_A" "$entry" 2>/dev/null)"
+  assert_eq "literal interior ticks cannot verify a suffix file" \
+    'no citations found in body' "$reason"
+done
+
 finish
