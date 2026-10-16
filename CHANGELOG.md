@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Verify each same-line citation against its own attached code snippet, including repeated references, before publishing issues or cross-links (repolens-r8-p1-2).
+
 - Respect complete inline backtick-span boundaries when extracting citations, preventing unrelated path suffixes from passing branch scope while retaining double-backtick and fenced supporting references for validation (repolens-r8-p1-1).
 
 - Keep local duplicate links relative and preserve actionable status and contributor provenance when library callers supply trailing slashes or a symlinked output root (repolens-r7-p2-3).

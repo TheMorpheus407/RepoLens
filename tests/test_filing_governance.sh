@@ -629,5 +629,34 @@ mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
 _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
 check 'cross-link comment succeeds with canonical-cased comment URL' test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
 check 'canonical-cased comment performs exactly one comment POST' test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+# repolens-r8-p1-2: each same-line citation owns its following snippet.
+for variant in valid invalid reversed quoted repeated prefix-valid prefix-invalid; do
+  fresh
+  CROSS_LINK_MODE=comment
+  printf 'Source alpha\n' > "$PROJECT_PATH/src/a.sh"
+  printf 'Source beta\n' > "$PROJECT_PATH/src/b.sh"
+  evidence='src/a.sh:1 — `Source alpha`; src/b.sh:1 — `Source beta`'
+  expected=valid
+  case "$variant" in
+    invalid) printf 'Source alpha\n' > "$PROJECT_PATH/src/b.sh"; expected=invalid ;;
+    reversed) evidence='src/b.sh:1 — `Source beta`; src/a.sh:1 — `Source alpha`' ;;
+    quoted) evidence='`src/a.sh:1` — `Source alpha`; ``src/b.sh:1`` — `Source beta`' ;;
+    prefix-valid) evidence='`Source alpha` at src/a.sh:1' ;;
+    prefix-invalid) evidence='`Source ghost` at src/a.sh:1'; expected=invalid ;;
+    repeated) evidence='src/a.sh:1 — `Source alpha`; src/a.sh:1 — `Source ghost`'; expected=invalid ;;
+  esac
+  jq --arg evidence "$evidence" '.[0].body="src/a.sh:1" | .[0].cross_link_actions=[{type:"comment",issue_number:9,body:$evidence}]' \
+    "$LOG_BASE/final/manifest.json" > "$TMP/change.json"
+  mv "$TMP/change.json" "$LOG_BASE/final/manifest.json"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  if [[ "$expected" == valid ]]; then
+    check "same-line snippets publish valid evidence: $variant" test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
+    check "same-line valid evidence publishes once: $variant" test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
+  else
+    check "same-line invalid snippet records failure: $variant" test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+    check "same-line invalid snippet never publishes: $variant" test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+    check "same-line invalid snippet leaves no receipt: $variant" test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
+  fi
+done
 echo "Results: $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

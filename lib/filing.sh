@@ -217,6 +217,50 @@ _filing_lock_age() {
 #   If the body contains zero parseable citations the helper treats that as a
 #   verification failure ("no citations to verify"), matching the prompt rule
 #   that an issue must be backed by at least one verified citation.
+# Print the optional snippet following each occurrence of a citation, stopping
+# at the next cited source on that logical line. Repeated citations keep their
+# own evidence, rather than being collapsed with the extractor's unique list.
+_filing_citation_snippets() {
+  local body="$1" citation="$2" citations="$3"
+  local line remaining prefix segment other snippet has_previous
+  while IFS= read -r line; do
+    remaining="$line"
+    while [[ "$remaining" == *"$citation"* ]]; do
+      prefix="${remaining%%"$citation"*}"
+      remaining="${remaining#*"$citation"}"
+      # Do not bind a shorter reference to a longer path or line number.
+      [[ "$prefix" != *[a-zA-Z0-9_+./-] && "$remaining" != [0-9-]* ]] || continue
+      segment="$remaining"
+      if [[ "$prefix" == *\` ]]; then
+        # The citation itself was code-quoted; skip its closing delimiter.
+        while [[ "$segment" == \`* ]]; do segment="${segment#\`}"; done
+      fi
+      while IFS= read -r other; do
+        [[ -n "$other" && "$segment" == *"$other"* ]] || continue
+        segment="${segment%%"$other"*}"
+      done <<< "$citations"
+      snippet="$(grep -oE '`[^`]+`' <<< "$segment" \
+        | sed -e 's/^`//' -e 's/`$//' \
+        | grep -vE '^.+:[0-9]+(-[0-9]+)?$' | head -1)" || snippet=''
+      # Preserve the legacy snippet-before-location form for the first
+      # citation, without borrowing a previous citation's evidence.
+      if [[ -z "$snippet" ]]; then
+        has_previous=0
+        while IFS= read -r other; do
+          [[ -z "$other" || "$prefix" != *"$other"* ]] || has_previous=1
+        done <<< "$citations"
+        if (( has_previous == 0 )); then
+          snippet="$(grep -oE '`[^`]+`' <<< "$prefix" \
+            | sed -e 's/^`//' -e 's/`$//' \
+            | grep -vE '^.+:[0-9]+(-[0-9]+)?$' | head -1)" || snippet=''
+        fi
+      fi
+      [[ -z "$snippet" ]] || printf '%s\n' "$snippet"
+    done
+  done <<< "$body"
+  return 0
+}
+
 filing_verify_cluster_citations() {
   local project_path="${1:-}"
   local entry_json="${2:-}"
@@ -309,24 +353,21 @@ filing_verify_cluster_citations() {
       return 1
     fi
 
-    # Optional snippet check: look for a backtick-quoted snippet attached to
-    # this citation on the same logical body line. Use grep on the body so
-    # multi-line bodies are searched line-by-line.
-    snippet="$(grep -F -- "$citation" <<<"$body" \
-      | grep -oE "\`[^\`]+\`" \
-      | sed -e 's/^`//' -e 's/`$//' \
-      | grep -vE '^.+:[0-9]+(-[0-9]+)?$' \
-      | head -1)"
-    if [[ -n "$snippet" ]]; then
+    # Verify the snippet attached to every occurrence of this citation.
+    local snippets
+    snippets="$(_filing_citation_snippets "$body" "$citation" "$citations")"
+    if [[ -n "$snippets" ]]; then
       context_start=$(( lstart - 20 ))
       (( context_start < 1 )) && context_start=1
       context_end=$(( lend + 20 ))
       (( context_end > line_count )) && context_end=$line_count
       snippet_pattern="$(sed -n "${context_start},${context_end}p" "$file_path")"
-      if [[ "$snippet_pattern" != *"$snippet"* ]]; then
-        printf '%s snippet not found near cited line\n' "$citation"
-        return 1
-      fi
+      while IFS= read -r snippet; do
+        if [[ "$snippet_pattern" != *"$snippet"* ]]; then
+          printf '%s snippet not found near cited line\n' "$citation"
+          return 1
+        fi
+      done <<< "$snippets"
     fi
   done <<< "$citations"
 

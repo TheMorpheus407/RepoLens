@@ -73,3 +73,5 @@ and invalid-line double-backtick action references with zero comment POSTs.
 governance” means `tests/test_filing_governance.sh`. The existing separate product
 decisions require atomic complete lists and body-level malformed-list rejection.
 Nested formatting implements those same rules and adds no new product policy.
+
+Optional inline snippets bind to the preceding citation on the same logical line, before the next source reference. Repeated references each retain their own snippet check. The first citation also retains the snippet-before-location form when it has no following snippet. These checks apply to issue and cross-link bodies alike (filing governance same-line snippet cases).
