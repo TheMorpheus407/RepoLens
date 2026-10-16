@@ -61,4 +61,48 @@ test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
 rc=0
 _rounds_all_lenses_completed "$FIXTURE/absent" "${LENSES[@]}" || rc=$?
 test "$rc" -eq 1 || exit 1
+mkdir "$FIXTURE/non-file"
+ln -s absent "$FIXTURE/dangling"
+for unavailable in "$FIXTURE/non-file" "$FIXTURE/dangling" "$receipt/child"; do
+  rc=0
+  _rounds_all_lenses_completed "$unavailable" "${LENSES[@]}" || rc=$?
+  test "$rc" -eq 2 || exit 1
+done
+
+# Failed lookup is unavailable evidence, not proof of missing work. ELOOP is
+# deterministic even as root; permission loss also exercises the full resume.
+ln -s loop "$FIXTURE/loop"
+rc=0
+_rounds_all_lenses_completed "$FIXTURE/loop/receipt" "${LENSES[@]}" || rc=$?
+test "$rc" -eq 2 || exit 1
+python3() { return 1; }
+rc=0
+_rounds_all_lenses_completed "$FIXTURE/loop/receipt" "${LENSES[@]}" || rc=$?
+unset -f python3
+test "$rc" -eq 2 || exit 1
+chmod 000 "$LOG_BASE/.rounds"
+if [[ ! -x "$LOG_BASE/.rounds" ]]; then
+  rc=0
+  run_rounds 2 LENSES || rc=$?
+  test "$rc" -ne 0 || exit 1
+  test "$(cat "$saved")" = "$proof_before" || exit 1
+fi
+chmod 700 "$LOG_BASE/.rounds"
+run_rounds 2 LENSES || exit 1
+test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 1 || exit 1
+test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
+
+# Large here-strings require temporary files. Receipt matching must still
+# work when such writes fail, rather than invalidate the accepted handoff.
+printf -v padding '%65536s' ''
+long_tuple="security/injection|deeper|${padding// /x}|anchor\\|pipe|exclude"
+printf '%s\n' "$long_tuple" >> "$receipt"
+(
+  trap '' XFSZ
+  ulimit -f 0
+  _rounds_all_lenses_completed "$receipt" security/injection "$long_tuple"
+) || exit 1
+rc=0
+_rounds_all_lenses_completed "$receipt" 'security/injection|other' || rc=$?
+test "$rc" -eq 1 || exit 1
 printf 'PASS: completion I/O errors preserve work and retry without agent calls\n'

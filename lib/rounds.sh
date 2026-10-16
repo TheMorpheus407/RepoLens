@@ -140,17 +140,34 @@ _rounds_restore_completed_lenses_file() {
 _rounds_all_lenses_completed() {
   local completion_file="$1"
   shift
-  local lens_entry receipts
+  local lens_entry receipts lookup
 
   [[ -n "$completion_file" ]] || return 1
-  [[ -e "$completion_file" || -L "$completion_file" ]] || return 1
+  if [[ ! -e "$completion_file" && ! -L "$completion_file" ]]; then
+    # Bash file predicates hide lookup errors (EACCES, ELOOP, ENOTDIR, ...).
+    # Only ENOENT establishes absence; all other failures preserve acceptance.
+    lookup="$(python3 -c '
+import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    print("absent")
+    sys.exit(0)
+except OSError:
+    sys.exit(2)
+' "$completion_file")" || return 2
+    [[ "$lookup" == absent ]] && return 1
+    return 2
+  fi
   [[ -f "$completion_file" ]] || return 2
   # Snapshot all bytes before checking membership; grep -q may hide read errors.
   receipts="$(cat "$completion_file")" || return 2
+  receipts=$'\n'"$receipts"$'\n'
 
   for lens_entry in "$@"; do
     # Receipts bind the full dispatch, including its role/focus/anchor/exclusions.
-    grep -qxF -- "$lens_entry" <<< "$receipts" || return 1
+    # Literal whole-line matching needs no subprocess or here-string temp file.
+    [[ "$receipts" == *$'\n'"$lens_entry"$'\n'* ]] || return 1
   done
 
   return 0
