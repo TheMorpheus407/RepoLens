@@ -283,6 +283,11 @@ render_human_review_digest() {
   if human_review_bucketize "$findings" \
     | jq -r --arg run_id "$run_id" --arg ph "—" --argjson has_duplicate_report "$has_duplicate_report" '
         def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
+       # Keep path separators; URI-encode filename bytes and escape link labels.
+       def pathlink:
+         tostring as $p
+         | "[" + ($p | split("\\") | join("\\\\") | split("[") | join("\\[") | split("]") | join("\\]"))
+           + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
 
         # One finding -> a bullet-list block. Severity drives the heading; the
         # Where line carries domain/lens + primary_location; Details links to the
@@ -294,8 +299,7 @@ render_human_review_digest() {
           + "- **Where:** " + disp(f.domain) + "/" + disp(f.lens)
             + " — `" + disp(f.primary_location) + "`\n"
           + (if (f.markdown_path == null or f.markdown_path == "") then ""
-             else "- **Details:** [" + (f.markdown_path | tostring)
-                    + "](" + (f.markdown_path | tostring) + ")\n"
+             else "- **Details:** " + (f.markdown_path | pathlink) + "\n"
              end);
 
         # A capped bucket -> a "## <title>" section. The visible slice is
