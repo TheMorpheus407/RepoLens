@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Keep local duplicate links relative and preserve actionable status and contributor provenance when library callers supply trailing slashes or a symlinked output root (repolens-r7-p2-3).
+
 - Keep certified meta restoration streaming while checking complete producer reads, avoiding response-sized shell buffers and repeated resume allocation failures; stage derived files until reads and parsing succeed.
 
 - Preserve accepted meta dispatch, hypotheses and saturation across parse-time output read failures; parse a verified private snapshot with checked complete reads, reject late content changes and keep failed restores pending without extra model calls or rounds. Reject failed hypothesis writes before publishing partial results (repolens-r7-p3-2).
