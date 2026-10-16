@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Report failure and clean staged Markdown when a triage report output path is a directory or a symlink to one, preserving existing directory contents (repolens-r6-p2-5).
+
 - Restore ordinary success receipts when quarantine is cancelled, reserve historical attempts before quarantine so failed restoration cannot repeat a POST, release read-only governors after failed quarantine moves, and stop saved-response reconciliation before admitting a new remote read after cancellation (repolens-r6-p3-1, repolens-r6-p3-2).
 
 - Stop cancelled meta calls before dispatch even when rendering fails, retain accepted handoffs on output/certificate read errors while regenerating missing output, and preserve quoted dispatch attributes (including rationale separators and embedded attribute text) and distinct pipe-valued tuples (repolens-r6-p1-1, repolens-r6-p2-2, repolens-r6-p2-3, repolens-r6-p2-4).

@@ -114,7 +114,8 @@ generate_todo_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    if mv -f -- "$tmp" "$out_file"; then
+    # mv treats a directory destination as a container, not a replacement.
+    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
       return 0
     fi
   fi
@@ -224,7 +225,8 @@ generate_summary_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    if mv -f -- "$tmp" "$out_file"; then
+    # mv treats a directory destination as a container, not a replacement.
+    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
       return 0
     fi
   fi
@@ -354,7 +356,8 @@ generate_needs_review_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    if mv -f -- "$tmp" "$out_file"; then
+    # mv treats a directory destination as a container, not a replacement.
+    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
       return 0
     fi
   fi
@@ -483,7 +486,8 @@ generate_duplicates_md() {
             else ($entries | join("\n"))
             end)
      ' "$findings_jsonl" >"$tmp" 2>/dev/null; then
-    if mv -f -- "$tmp" "$out_file"; then
+    # mv treats a directory destination as a container, not a replacement.
+    if [[ ! -d "$out_file" ]] && mv -f -- "$tmp" "$out_file"; then
       return 0
     fi
   fi

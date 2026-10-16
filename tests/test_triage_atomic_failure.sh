@@ -55,6 +55,28 @@ for generator in generate_todo_md generate_summary_md generate_needs_review_md g
     check test -s "$out"
     check test "$(find "$FIXTURE/$generator" -type f -name '.*' | wc -l)" -eq 0
   done
+  # repolens-r6-p2-5: mv must replace a report, never place scratch files
+  # inside an existing directory (including a symlink to a directory).
+  for kind in directory symlink; do
+    rm -f "$out"
+    target="$out"
+    if [[ "$kind" == symlink ]]; then target="$FIXTURE/$generator/target"; fi
+    mkdir "$target"
+    printf 'Keep this existing content\n' > "$target/sentinel"
+    if [[ "$kind" == symlink ]]; then ln -s "$target" "$out"; fi
+    for _attempt in 1 2; do
+      rc=0
+      "$generator" "$FIXTURE/findings.jsonl" "$out" || rc=$?
+      check test "$rc" -eq 1
+      check test -d "$out"
+      check test "$(cat "$out/sentinel")" = 'Keep this existing content'
+      check test "$(find "$FIXTURE/$generator" -type f -name '.*' | wc -l)" -eq 0
+    done
+    rm -rf -- "$out"
+    if [[ "$kind" == symlink ]]; then rm -rf -- "$target"; fi
+    check "$generator" "$FIXTURE/findings.jsonl" "$out"
+    check test -s "$out"
+  done
 done
 printf 'Triage atomic failure: %s checks, %s failures.\n' "$checks" "$failed"
 (( failed == 0 ))
