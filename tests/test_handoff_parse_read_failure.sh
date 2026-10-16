@@ -116,5 +116,76 @@ must run_rounds 2 LENSES
 check test "$META_ORCH_SATURATED" -eq 1
 check test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1
 check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 1
+# An open file can still fail on read. Linux proc memory at offset zero gives
+# a real EIO without permissions tricks, including when the suite runs as root.
+if [[ -f /proc/self/mem ]]; then
+  for reader in scan dispatch hypotheses; do
+    must printf 'accepted dispatch\n' > "$FIXTURE/reader-dispatch"
+    must printf 'accepted hypotheses\n' > "$FIXTURE/reader-hypotheses"
+    rc=0
+    case "$reader" in
+      scan) ( _rounds_meta_no_fresh_angles /proc/self/mem ) 2>/dev/null || rc=$? ;;
+      dispatch) ( _rounds_meta_parse_output /proc/self/mem "$FIXTURE/reader-dispatch" "$FIXTURE/reader-hypotheses" ) 2>/dev/null || rc=$? ;;
+      hypotheses) ( _rounds_meta_extract_hypotheses /proc/self/mem "$FIXTURE/reader-hypotheses" ) 2>/dev/null || rc=$? ;;
+    esac
+    if [[ "$reader" == scan ]]; then check test "$rc" -eq 2;
+    else check test "$rc" -eq 1; fi
+    check test "$(command cat "$FIXTURE/reader-dispatch")" = 'accepted dispatch'
+    check test "$(command cat "$FIXTURE/reader-hypotheses")" = 'accepted hypotheses'
+  done
+fi
+
+# Fail each parsing read after emitting a valid-looking prefix. No prefix may
+# replace an accepted handoff or allow resume to schedule another round/call.
+LOG_BASE="$FIXTURE/partial-reads" SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+unset RESUME_RUN_ID
+run_agent() { printf 'called\n' >> "$LOG_BASE/model-calls"; printf 'LENS: injection role=accepted\nHYPOTHESES_TO_VERIFY:\naccepted hypothesis\n'; }
+must run_rounds 2 LENSES
+saved="$LOG_BASE/rounds/round-1"
+proof_before="$(command cat "$saved/meta-orchestrator-success.json")" || exit 1
+dispatch_before="$(command cat "$saved/dispatch.md")" || exit 1
+hypotheses_before="$(command cat "$saved/hypotheses.md")" || exit 1
+RESUME_RUN_ID=probe
+for fail_read in 1 2 3; do
+  must printf '0\n' > "$saved/read-count"
+  cat() {
+    local arg count
+    for arg in "$@"; do
+      if [[ "$arg" == "$saved"/.handoff.*/meta-orchestrator-output.txt ]]; then
+        count="$(command cat "$saved/read-count")" || return 1
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$saved/read-count" || return 1
+        if (( count == fail_read )); then
+          printf 'LENS: injection role=partial\nHYPOTHESES_TO_VERIFY:\npartial hypothesis\n'
+          return 1
+        fi
+      fi
+    done
+    command cat "$@"
+  }
+  rc=0
+  run_rounds 2 LENSES || rc=$?
+  unset -f cat
+  check test "$rc" -ne 0
+  check test "$(command cat "$saved/meta-orchestrator-success.json")" = "$proof_before"
+  check test "$(command cat "$saved/dispatch.md")" = "$dispatch_before"
+  check test "$(command cat "$saved/hypotheses.md")" = "$hypotheses_before"
+  check test "$(find "$saved" -maxdepth 1 -name '.handoff.*' | wc -l)" -eq 0
+  check test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1
+  check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 2
+  must run_rounds 2 LENSES
+done
+# Checked buffering must preserve ordinary EOF and trailing hypothesis lines.
+for ending in none one two; do
+  must printf 'HYPOTHESES_TO_VERIFY:\nEnds in a period.' > "$FIXTURE/eof-input"
+  must printf 'Ends in a period.\n' > "$FIXTURE/eof-expected"
+  if [[ "$ending" != none ]]; then must printf '\n' >> "$FIXTURE/eof-input"; fi
+  if [[ "$ending" == two ]]; then
+    must printf '\n' >> "$FIXTURE/eof-input"
+    must printf '\n' >> "$FIXTURE/eof-expected"
+  fi
+  must _rounds_meta_parse_output "$FIXTURE/eof-input" "$FIXTURE/eof-dispatch" "$FIXTURE/eof-hypotheses"
+  check cmp -s "$FIXTURE/eof-expected" "$FIXTURE/eof-hypotheses"
+done
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))

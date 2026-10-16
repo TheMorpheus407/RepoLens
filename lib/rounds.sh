@@ -1375,24 +1375,31 @@ _rounds_meta_dispatch_has_entries() {
 }
 
 _rounds_meta_no_fresh_angles() {
-  local output_file="$1" line trimmed
+  local output_file="$1" line trimmed output
 
   [[ -f "$output_file" ]] || return 1
+  # Check the complete read before parsing: a while loop hides read(2) errors.
+  # A sentinel retains trailing newlines through command substitution; removing
+  # at most one newline below lets the here-string restore the original lines.
+  output="$(cat -- "$output_file" && printf '.')" || return 2
+  output="${output%.}"
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     trimmed="$(_rounds_meta_trim "$line")"
     if [[ "$trimmed" == "NO_FRESH_ANGLES" ]]; then
       return 0
     fi
-  done < "$output_file" || return 2
+  done <<< "${output%$'\n'}"
 
   return 1
 }
 
 _rounds_meta_extract_hypotheses() {
   local output_file="$1" hypotheses_file="$2"
-  local line trimmed rest in_block=0 tmp_file
+  local line trimmed rest in_block=0 tmp_file output
 
+  output="$(cat -- "$output_file" && printf '.')" || return 1
+  output="${output%.}"
   tmp_file="${hypotheses_file}.tmp.$$"
   : > "$tmp_file" || return 1
 
@@ -1414,7 +1421,7 @@ _rounds_meta_extract_hypotheses() {
     fi
 
     printf '%s\n' "$line" >> "$tmp_file"
-  done < "$output_file" || { rm -f "$tmp_file"; return 1; }
+  done <<< "${output%$'\n'}"
 
   mv "$tmp_file" "$hypotheses_file"
 }
@@ -1424,10 +1431,12 @@ _rounds_meta_parse_output() {
   local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_identity
   local lens_attrs lens_dispatch_line generic_attrs generic_dispatch_line stripped attr_body
   local role focus anchor exclude missed_angle dedup_key
-  local in_custom=0 in_fence=0
+  local in_custom=0 in_fence=0 output
   local -a lens_dispatch_lines=() custom_payloads=() generic_dispatch_lines=()
   local -A seen_lens_keys=() seen_custom=() seen_generic_keys=()
 
+  output="$(cat -- "$output_file" && printf '.')" || return 1
+  output="${output%.}"
   [[ -n "$lenses_dir" ]] || lenses_dir="$(_rounds_meta_lenses_dir)"
   dispatch_dir="${dispatch_file%/*}"
   hypotheses_dir="${hypotheses_file%/*}"
@@ -1524,7 +1533,7 @@ _rounds_meta_parse_output() {
       in_custom=1
       in_fence=0
     fi
-  done < "$output_file" || return 1
+  done <<< "${output%$'\n'}"
 
   if (( in_custom )); then
     if (( in_fence )); then
