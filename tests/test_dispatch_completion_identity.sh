@@ -222,24 +222,31 @@ mkdir -p "$LOG_BASE"
 : > "$completed_lenses_file"
 init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" audit codex '' '' local "$OUTPUT_DIR"
 resolve_lens_heartbeat_interval() { printf 0; }
-run_agent() { printf 'called\n' >> "$LOG_BASE/receipt-failure-agent-calls"; printf 'DONE\n'; }
-# Keep lookup readable so this fixture reaches the append failure.
+run_agent() {
+  printf 'called\n' >> "$LOG_BASE/receipt-failure-agent-calls"
+  # Lookup has succeeded. Make the production writer's open fail, even as root.
+  rm -f -- "$completed_lenses_file" || return 1
+  mkdir "$completed_lenses_file" || return 1
+  printf 'DONE\n'
+}
+# Count attempts while retaining the production writer and its real I/O fault.
 eval "$(declare -f mark_lens_completed | sed '1s/mark_lens_completed/real_mark_lens_completed/')"
 mark_lens_completed() {
   if [[ "$completed_lenses_file" == "$LOG_BASE/blocked-receipts" ]]; then
     printf 'attempted\n' >> "$LOG_BASE/receipt-write-attempts"
-    return 1
   fi
   real_mark_lens_completed "$@"
 }
 run_lens security/injection
 check test "$?" -ne 0
+rmdir "$completed_lenses_file"
+: > "$completed_lenses_file"
 LENSES=(security/injection)
 run_rounds 1 LENSES
 check test "$?" -ne 0
 check test ! -f "$LOG_BASE/rounds/round-1/.completed"
 check test "$(jq -r .stopped_reason "$SUMMARY_FILE")" = lens-execution-failed
-check test ! -s "$completed_lenses_file"
+check test -d "$completed_lenses_file"
 check test "$(wc -l < "$LOG_BASE/receipt-write-attempts")" -eq 2
 check test "$(wc -l < "$LOG_BASE/receipt-failure-agent-calls")" -eq 2
 unset ROUNDS_FAILURE_REASON
