@@ -26,6 +26,10 @@ source "$REPO/lib/template.sh"
 source "$REPO/lib/rounds.sh"
 # shellcheck source=/dev/null
 source "$REPO/lib/summary.sh"
+# shellcheck source=lib/verify.sh
+source "$REPO/lib/verify.sh"
+# shellcheck source=lib/synthesize.sh
+source "$REPO/lib/synthesize.sh"
 for function_name in run_lens is_lens_completed mark_lens_completed template_var_escape; do
   eval "$(sed -n "/^${function_name}() {/,/^}/p" "$REPO/repolens.sh")"
 done
@@ -79,6 +83,41 @@ run_agent() {
   fi
   printf 'DONE\n'
 }
+# Follow the verifier's rendered discovery and hash contract without a model.
+# The identity probe supplies recursive discovery independently, so a flat-glob
+# omission cannot mask a duplicate-ID failure in the manifest validator.
+verify_generic_findings() {
+  python3 - "$LOG_BASE" "$2" "$verifier_probe" <<'PYVERIFY'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+base, prompt, probe = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+entries = []
+for root in sorted((base / 'rounds').glob('round-*/lens-outputs')):
+    recursive = probe == 'identity' or 'Also traverse recursively' in prompt
+    for path in sorted(root.rglob('*.md') if recursive else root.glob('*.md')):
+        text = path.read_text()
+        field = lambda name: re.search(rf'^{name}: (.+)$', text, re.M)[1]
+        citations = re.search(r'^suspect_files:\n((?:  - .+\n)+)', text, re.M)[1]
+        suspects = sorted(line[4:] for line in citations.splitlines())
+        parts = [field('lens_id'), field('domain'), field('round'), '\n'.join(suspects)]
+        relative = path.relative_to(root).as_posix()
+        if '/' in relative and 'source_relative_path' in prompt:
+            parts.append(relative)
+        finding_id = hashlib.sha1('\0'.join(parts).encode()).hexdigest()[:16]
+        # Deliberately different verdicts for identical citations: filtering
+        # must keep each verdict associated with its own dispatch source.
+        status = 'WRONG' if not entries else 'VERIFIED'
+        entries.append(dict(finding_id=finding_id, status=status, notes='Fixture vote',
+                            lens_id=field('lens_id'), domain=field('domain'),
+                            round=int(field('round')), source_finding_path=str(path)))
+print(json.dumps(entries))
+PYVERIFY
+}
+_VERIFIER_AGENT_CALLBACK=verify_generic_findings
 getconf() {
   # Model separate log/output mounts without requiring privileged mounts.
   if [[ "$1" == NAME_MAX ]]; then
@@ -272,12 +311,68 @@ for collision in anchor exclude normalized long; do
       "$(jq -cn --arg f "${other_focus:0:32}" --arg a "$other_anchor" --arg e "$other_exclude" '[$f,$a,$e]')"; do
     grep -Fq "Dispatch evidence: $evidence" "$digest"
   done
+  # Give both findings identical citation sets to exercise stable sorting too.
+  while IFS= read -r finding_path; do
+    sed -i '/^  - probe.sh:1$/a\  - probe.sh:2' "$finding_path"
+  done < "$LOG_BASE/finding-paths"
+  # Verify the real findings from both dispatches, not synthetic unique IDs.
+  verifier_failures=0
+  for verifier_probe in identity discovery; do
+    verifier_rc=0
+    run_verifier "$RUN_ID" || verifier_rc=$?
+    verification="$LOG_BASE/final/verification.json"
+    verified_count=0
+    if [[ -f "$verification" ]]; then verified_count="$(jq length "$verification")"; fi
+    printf 'verifier-%s/%s: rc=%s entries=%s (expected rc=0 entries=2)\n' \
+      "$collision" "$verifier_probe" "$verifier_rc" "$verified_count"
+    if (( verifier_rc != 0 || verified_count != 2 )); then
+      verifier_failures=$((verifier_failures + 1))
+    fi
+  done
+  test "$verifier_failures" -eq 0
+  test "$(jq '[.[].finding_id] | unique | length' "$verification")" -eq 2
+  verification_before="$(jq -c 'sort_by(.source_finding_path)' "$verification")"
+  for vote in WRONG VERIFIED; do
+    source_path="$(jq -r --arg vote "$vote" '.[] | select(.status == $vote) | .source_finding_path' "$verification")"
+    test -f "$source_path"
+    source_relative_path="${source_path#"$LOG_BASE/rounds/round-1/lens-outputs/"}"
+    source_lens_id="${source_path##*/}"
+    expected_id="$(printf '%s\0%s\0%s\0%s\0%s' "${source_lens_id%.md}" generic 1 $'probe.sh:1\nprobe.sh:2' "$source_relative_path" | sha1sum | cut -c1-16)"
+    test "$(jq -r --arg vote "$vote" '.[] | select(.status == $vote) | .finding_id' "$verification")" = "$expected_id"
+    jq -n --arg path "$source_path" '[{cluster_id:"fixture",source_finding_paths:[$path]}]' > "$LOG_BASE/cluster.json"
+    gate_rc=0
+    validate_manifest_against_verification "$LOG_BASE/cluster.json" "$verification" || gate_rc=$?
+    if [[ "$vote" == WRONG ]]; then test "$gate_rc" -ne 0; else test "$gate_rc" -eq 0; fi
+  done
   receipts_before="$(sha256_text "$(cat "$completed_lenses_file")")"
   paths_before="$(cat "$LOG_BASE/finding-paths")"
   run_rounds 1 ENTRIES
   test "$(wc -l < "$LOG_BASE/agent-calls")" -eq 2
   test "$(sha256_text "$(cat "$completed_lenses_file")")" = "$receipts_before"
   test "$(cat "$LOG_BASE/finding-paths")" = "$paths_before"
+  # Citation order must not change IDs when revisiting the same sources.
+  while IFS= read -r finding_path; do
+    python3 - "$finding_path" <<'PYREORDER'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+p.write_text(p.read_text().replace('  - probe.sh:1\n  - probe.sh:2', '  - probe.sh:2\n  - probe.sh:1'))
+PYREORDER
+  done < "$LOG_BASE/finding-paths"
+  run_verifier "$RUN_ID"
+  test "$(jq -c 'sort_by(.source_finding_path)' "$verification")" = "$verification_before"
+  if [[ "$collision" == anchor ]]; then
+    original_log_base="$LOG_BASE"
+    ids_before="$(jq -c '[.[].finding_id] | sort' "$verification")"
+    mv -- "$LOG_BASE" "$LOG_BASE-relocated"
+    LOG_BASE="$LOG_BASE-relocated"
+    run_verifier "$RUN_ID"
+    test "$(jq -c '[.[].finding_id] | sort' "$LOG_BASE/final/verification.json")" = "$ids_before"
+    while IFS= read -r source_path; do test -f "$source_path"; done < <(jq -r '.[].source_finding_path' "$LOG_BASE/final/verification.json")
+    mv -- "$LOG_BASE" "$original_log_base"
+    LOG_BASE="$original_log_base"
+  fi
+  printf 'collision-%s: distinct verifier IDs stable on resume; WRONG source rejected independently\n' "$collision"
   printf 'collision-%s: two findings retained in files and digest; resume adds no calls\n' "$collision"
 done
 # Plain calls keep the historical location, and completed legacy tuples skip
@@ -293,6 +388,10 @@ run_lens generic/plain-probe || exit 1
 test "$(cat "$LOG_BASE/finding-paths")" = "$LOG_BASE/rounds/round-1/lens-outputs/plain-probe.md"
 run_lens generic/plain-probe || exit 1
 test "$(wc -l < "$LOG_BASE/agent-calls")" -eq 1
+run_verifier "$RUN_ID"
+# Historical flat-output IDs keep the original four-field recipe.
+expected_id="$(printf 'plain-probe\0generic\0001\0probe.sh:1' | sha1sum | cut -c1-16)"
+test "$(jq -r '.[0].finding_id' "$LOG_BASE/final/verification.json")" = "$expected_id"
 
 LOG_BASE="$FIXTURE/legacy" OUTPUT_DIR="$LOG_BASE/output"
 completed_lenses_file="$LOG_BASE/.completed"
