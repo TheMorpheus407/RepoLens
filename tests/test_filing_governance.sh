@@ -317,7 +317,10 @@ for unsupported_body in "$unsupported_home_ref" 'src/$route/a.sh:1' 'src/!a.sh:1
     $'```sh\nsrc/$route/a.sh:1\n```\n~/src/missing.sh:1' \
     'https://example.org/status, ~/src/missing.sh:1' \
     'https://example.org/status; ~/src/missing.sh:1' \
-    'See `src/missing.sh:1`'; do
+    'See `src/missing.sh:1`' \
+    'See ``src/missing.sh:1``' \
+    'See ``src/a.sh:2``' \
+    '`src/a.sh:1` and ``src/missing.sh:1``'; do
   fresh
   CROSS_LINK_MODE=comment
   jq --arg body "$unsupported_body" \
