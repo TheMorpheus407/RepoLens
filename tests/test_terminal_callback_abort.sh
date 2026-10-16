@@ -69,11 +69,11 @@ check() {
 for failure in no-progress rate-limited; do
   classification=unknown
   marker_name=.agent-no-progress-abort
-  expected_status=agent-no-progress
+  expected_status="agent-no-progress"
   if [[ "$failure" == rate-limited ]]; then
     classification=rate-limited
     marker_name=.rate-limit-abort
-    expected_status=rate-limited
+    expected_status="rate-limited"
   fi
   for marker in writable blocked; do
     LOG_BASE="$case_root/$failure-$marker"
