@@ -19,8 +19,8 @@
 # --human-review digest renders. This file ONLY classifies + selects the
 # ranking key; it renders no Markdown, groups no themes, and does no held-back
 # accounting (those are separate issues). Sourced, never executed directly.
-# Pure: function-only, no top-level side effects, no global mutation, safe under
-# `set -uo pipefail`.
+# The only source-time state is the private module root, captured before callers
+# can change directories. Helpers do not mutate globals; safe under `set -uo pipefail`.
 #
 # Self-contained: the bucket predicates and risk ordering are done inside a
 # single `jq -s` (slurp) pass so this file can be sourced alone, mirroring
@@ -38,6 +38,9 @@
 # registry yields all-empty buckets, never an error.
 set -uo pipefail
 
+# Resolve relative BASH_SOURCE while it still refers to the source-time cwd.
+_HUMAN_REVIEW_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # _human_review_security_domains
 #   Prints a JSON array of the security-ish domain ids (lowercased): every domain
 #   in config/domains.json whose id matches /security/i. Data-driven so the
@@ -46,11 +49,10 @@ set -uo pipefail
 #   documented static set {security, llm-security} when the config is missing,
 #   unreadable, or unparseable. Pure; prints one line; never errors.
 _human_review_security_domains() {
-  local config_file lib_dir out
-  lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || lib_dir=""
-  config_file="$lib_dir/../config/domains.json"
+  local config_file out
+  config_file="$_HUMAN_REVIEW_REPO_ROOT/config/domains.json"
 
-  if [[ -n "$lib_dir" && -f "$config_file" && -r "$config_file" ]]; then
+  if [[ -f "$config_file" && -r "$config_file" ]]; then
     out="$(jq -c '
         [ .domains[]? | .id | select(type == "string") | ascii_downcase
           | select(test("security")) ] | unique
@@ -202,12 +204,10 @@ human_review_bucketize() {
 }
 
 # _human_review_repo_root
-#   Prints the repo root (the parent of lib/). Mirrors the sibling finalize
-#   helpers (_synthesize_repo_root / _verify_repo_root). Pure; prints one path.
+#   Prints the source-time repo root (the parent of lib/), independent of later
+#   directory changes. Pure; prints one path.
 _human_review_repo_root() {
-  local source_dir
-  source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || source_dir="."
-  (cd -- "$source_dir/.." 2>/dev/null && pwd) || printf '%s' "$source_dir/.."
+  printf '%s\n' "$_HUMAN_REVIEW_REPO_ROOT"
 }
 
 # _human_review_log_base <run_id>
@@ -245,8 +245,8 @@ _human_review_log_base() {
 #   tests set it to a temp dir), else <repo_root>/logs/<run_id>. So the test drives
 #   the function by just setting LOG_BASE and dropping a fixture findings.jsonl.
 #
-#   ATOMIC WRITE: builds the document into <out>.tmp.$$ and `mv -f`s it into place
-#   on success (the promote pattern from lib/synthesize.sh / lib/triage.sh). On a
+#   ATOMIC WRITE: builds the document into <out>.tmp.$$ and replaces the exact
+#   output path via lib/artifacts.sh (directory targets are rejected). On a
 #   render/IO failure the tmp file is removed and the function returns 1, leaving
 #   NO partial HUMAN_REVIEW.md behind.
 #
@@ -372,11 +372,19 @@ render_human_review_digest() {
           + section(.not_actionable_without_scanner; "Not Actionable Without a Scanner") + "\n"
           + remainder_section(.remainder)
       ' >"$tmp" 2>/dev/null; then
-    if mv -f -- "$tmp" "$out" 2>/dev/null; then
+    # Load the shared exact-path promoter in a subshell: this module remains
+    # sourceable alone without changing the caller's functions or shell state.
+    if (
+      # shellcheck source=lib/artifacts.sh
+      source "$(_human_review_repo_root)/lib/artifacts.sh" || exit 1
+      _artifacts_replace_report "$tmp" "$out"
+    ) 2>/dev/null; then
       return 0
     fi
   fi
 
+  # Imported artifact functions have their own local tmp; this path is unchanged.
+  # shellcheck disable=SC2031
   rm -f -- "$tmp"
   return 1
 }

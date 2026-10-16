@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject directory and directory-symlink destinations for HUMAN_REVIEW.md, preserving the target and reporting write failure instead of placing reports inside it. Standalone rendering also works after sourcing the library by a relative path and changing directories, retaining the source repository's security-domain configuration (repolens-r9-p2-2).
+
 - Include actually dispatched generated Custom investigators in round digests while retaining exact domain/lens trust checks (repolens-r9-p2-1).
 
 - Keep opaque URL tokens out of citation-list validation for uppercase and custom URI schemes, allowing independently grounded findings and cross-link comments to publish (repolens-r9-p1-1).
