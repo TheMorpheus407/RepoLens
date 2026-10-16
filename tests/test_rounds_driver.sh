@@ -780,7 +780,7 @@ echo ""
 echo "Test 15: Generic hashing failures reject the entire dispatch and remain resumable"
 saved_sha256_text="$(declare -f sha256_text)"
 long_seed="$(printf '%0300d' 0 | tr 0 a)"
-for dispatch_shape in only-long short-then-long query-error query-invalid; do
+for dispatch_shape in only-long short-then-long query-error query-invalid query-unsupported; do
   reset_case "generic-hash-$dispatch_shape"
   MODE=bugreport STRATEGY=waves
   mkdir -p "$LOG_BASE/triage"
@@ -792,6 +792,7 @@ for dispatch_shape in only-long short-then-long query-error query-invalid; do
   case "$dispatch_shape" in
     query-error) getconf() { return 1; } ;;
     query-invalid) getconf() { printf 'undefined\n'; } ;;
+    query-unsupported) getconf() { printf '127\n'; } ;;
     *) sha256_text() { return 1; } ;;
   esac
   for attempt in first retry; do

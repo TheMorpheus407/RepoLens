@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject Generic runtime destinations with filename limits below 128 bytes before investigator invocation, preserving pending work for resume. Bound Generic heartbeat keys on supported smaller filesystems and enforce simulated limits across runtime artifact tests.
+
 - Verify nested Generic findings recursively and distinguish their verifier IDs by relative source path, preserving separate verdicts for dispatches that cite the same code.
 
 - Preserve separate Generic findings for distinct dispatch tuples that share a canonical slug, including different anchors, exclusions and normalized focus text.
@@ -16,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Give Generic investigators their generated ID and exact findings path, and include their dispatched findings in round digests while continuing to reject undispatched generated IDs.
 
-- Keep shortened Generic IDs valid at the minimum accepted filename limit so round digests retain their findings.
+- Keep shortened Generic IDs valid so round digests retain their findings.
 
 - Keep every explicitly requested specification required during prompt composition, so a disappearing file stops the next lens and remains resumable in audit and spec-change as well as greenfield (repolens-r8-p1-3).
 

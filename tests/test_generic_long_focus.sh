@@ -30,7 +30,9 @@ source "$REPO/lib/summary.sh"
 source "$REPO/lib/verify.sh"
 # shellcheck source=lib/synthesize.sh
 source "$REPO/lib/synthesize.sh"
-for function_name in run_lens is_lens_completed mark_lens_completed template_var_escape; do
+for function_name in run_lens is_lens_completed mark_lens_completed template_var_escape \
+    sanitize_heartbeat_component lens_heartbeat_key lens_heartbeat_path lens_heartbeat_iteration_path \
+    write_lens_heartbeat write_lens_heartbeat_iteration; do
   eval "$(sed -n "/^${function_name}() {/,/^}/p" "$REPO/repolens.sh")"
 done
 
@@ -63,6 +65,18 @@ log_warn() { printf '%s\n' "$*" >&2; }
 log_error() { printf '%s\n' "$*" >&2; }
 # shellcheck disable=SC2154 # Read the extracted callback's dynamically scoped locals.
 run_agent() {
+  if declare -F check_component_limits >/dev/null; then
+    # Exercise real capture/envelope and heartbeat paths, including atomic
+    # write suffixes, under the same limits as the execution directories.
+    local beat iteration_path
+    beat="$(lens_heartbeat_path "$domain" "$heartbeat_lens_id")" || return 1
+    iteration_path="$(lens_heartbeat_iteration_path "$domain" "$heartbeat_lens_id")" || return 1
+    check_component_limits "$output_file" "$6" "$output_envelope_file" \
+      "$beat.tmp.$BASHPID" "$iteration_path.tmp.$BASHPID" || return 1
+    write_lens_heartbeat_iteration "$iteration_path" 1 || return 1
+    write_lens_heartbeat "$beat" "$RUN_ID" "$domain" "$lens_id" "$BASHPID" 1 fixture || return 1
+    printf '{"status":"completed"}\n' > "$6" || return 1
+  fi
   printf 'called\n' >> "$LOG_BASE/agent-calls"
   if [[ "${domain:-}" == generic ]]; then
     # Follow investigator.md's actual <lens_id>.md output contract.
@@ -123,6 +137,7 @@ getconf() {
   if [[ "$1" == NAME_MAX ]]; then
     case "$2" in
       "$FIXTURE/external-output"*) printf '%s\n' "$output_name_max" ;;
+      "$FIXTURE/heartbeat-mount"*) printf '%s\n' "$heartbeat_name_max" ;;
       "$LOG_BASE"*) printf '%s\n' "$log_name_max" ;;
       *) command getconf "$@" ;;
     esac
@@ -130,21 +145,62 @@ getconf() {
     command getconf "$@"
   fi
 }
-for scenario in minimum-limit minimum-prefix-limit output-limit log-limit short boundary over253 over254 over255 long; do
+# Enforce the simulated mount's component limit before creating directories.
+# A getconf stub alone leaves the host's 255-byte limit in effect and can hide
+# oversized runtime artifacts even when the generated findings basename fits.
+check_component_limits() {
+  local path relative component limit
+  local LC_ALL=C
+  for path in "$@"; do
+    case "$path" in
+      "$FIXTURE/external-output/"*) relative="${path#"$FIXTURE/external-output/"}"; limit="$output_name_max" ;;
+      "$FIXTURE/heartbeat-mount/"*) relative="${path#"$FIXTURE/heartbeat-mount/"}"; limit="$heartbeat_name_max" ;;
+      "$LOG_BASE/"*) relative="${path#"$LOG_BASE/"}"; limit="$log_name_max" ;;
+      *) continue ;;
+    esac
+    while [[ -n "$relative" ]]; do
+      component="${relative%%/*}"
+      if (( ${#component} > limit )); then
+        printf 'Simulated NAME_MAX=%s rejects %s-byte component: %s\n' "$limit" "${#component}" "$component" >&2
+        return 1
+      fi
+      if [[ "$relative" != */* ]]; then break; fi
+      relative="${relative#*/}"
+    done
+  done
+}
+mkdir() {
+  local path
+  for path in "$@"; do
+    [[ "$path" == -* ]] && continue
+    check_component_limits "$path" || return 1
+  done
+  command mkdir "$@"
+}
+mv() { check_component_limits "$@" && command mv "$@"; }
+cp() { check_component_limits "$@" && command cp "$@"; }
+mktemp() { check_component_limits "$@" && command mktemp "$@"; }
+for scenario in supported-minimum plain-limit heartbeat-limit output-limit log-limit short boundary over253 over254 over255 long; do
   LOG_BASE="$FIXTURE/$scenario" OUTPUT_DIR="$FIXTURE/$scenario/output" PROJECT_PATH="$FIXTURE/project"
   OUTPUT_DIR_SET=false
-  output_name_max=255 log_name_max=255
-  if [[ "$scenario" == minimum-limit ]]; then
-    log_name_max=36
-  elif [[ "$scenario" == minimum-prefix-limit ]]; then
-    log_name_max=37
+  output_name_max=255 log_name_max=255 heartbeat_name_max=255
+  if [[ "$scenario" == supported-minimum || "$scenario" == plain-limit ]]; then
+    output_name_max=128 log_name_max=128
   elif [[ "$scenario" == output-limit ]]; then
     OUTPUT_DIR="$FIXTURE/external-output" OUTPUT_DIR_SET=true output_name_max=128
   elif [[ "$scenario" == log-limit ]]; then
     OUTPUT_DIR="$FIXTURE/external-output" OUTPUT_DIR_SET=true log_name_max=128
   fi
   SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
-  mkdir -p "$LOG_BASE" "$PROJECT_PATH" "$OUTPUT_DIR"
+  HEARTBEAT_DIR="$LOG_BASE/.heartbeats"
+  if [[ "$scenario" == heartbeat-limit ]]; then
+    HEARTBEAT_DIR="$FIXTURE/heartbeat-mount" heartbeat_name_max=128
+  elif [[ "$scenario" == supported-minimum || "$scenario" == plain-limit ]]; then
+    heartbeat_name_max=128
+  elif [[ "$scenario" == log-limit ]]; then
+    heartbeat_name_max=128
+  fi
+  mkdir -p "$LOG_BASE" "$PROJECT_PATH" "$OUTPUT_DIR" "$HEARTBEAT_DIR"
   : > "$completed_lenses_file"
   : > "$LOG_BASE/agent-calls"
   focus='Check query construction'
@@ -153,7 +209,7 @@ for scenario in minimum-limit minimum-prefix-limit output-limit log-limit short 
   elif [[ "$scenario" == over* ]]; then
     printf -v focus '%*s' "$((${scenario#over} - 7))" ''
     focus="${focus// /a}"
-  elif [[ "$scenario" == long || "$scenario" == *-limit ]]; then
+  elif [[ "$scenario" == long || "$scenario" == *-limit || "$scenario" == supported-minimum ]]; then
     focus='Trace the complete request lifecycle from the public HTTP route through authentication and authorization middleware into the database transaction and asynchronous worker callback, checking error propagation, cancellation, retry behavior, resource cleanup, and concurrent updates to the same account.'
   fi
   printf 'GENERIC: role=deeper focus="%s"\n' "$focus" > "$LOG_BASE/dispatch.md"
@@ -161,8 +217,10 @@ for scenario in minimum-limit minimum-prefix-limit output-limit log-limit short 
   mapfile -t ENTRIES <<< "$parsed"
   test "${#ENTRIES[@]}" -eq 1
   canonical="${ENTRIES[0]%%|*}"
+  if [[ "$scenario" == plain-limit ]]; then ENTRIES=("$canonical"); fi
   name_max="$log_name_max"
   if (( output_name_max < name_max )); then name_max="$output_name_max"; fi
+  if (( heartbeat_name_max < name_max )); then name_max="$heartbeat_name_max"; fi
   test "$((${#canonical} - 8 + 3))" -le "$name_max"
   if [[ "$scenario" == boundary ]]; then test "$canonical" = "generic/deeper-$focus"; fi
   init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
@@ -179,19 +237,68 @@ for scenario in minimum-limit minimum-prefix-limit output-limit log-limit short 
     test -e "$LOG_BASE/rounds/round-1/.completed"
     test -f "$(cat "$LOG_BASE/finding-paths")"
     grep -Fq 'Mock finding.' "$LOG_BASE/rounds/round-1/digest.md"
-  done
-  if [[ "$scenario" == minimum-* ]]; then
-    # With no room for a readable prefix, the hash must still be a valid
-    # dispatched ID so the digest retains the investigator's finding.
-    expected_digest="$(sha256_text "$(_rounds_meta_slug "deeper-$focus")")"
-    if [[ "$scenario" == minimum-limit ]]; then
-      test "$canonical" = "generic/${expected_digest:0:32}"
+    # Inspect every created directory and file too, including redirected writes.
+    mapfile -t runtime_paths < <(find "$LOG_BASE" "$OUTPUT_DIR" "$HEARTBEAT_DIR" -mindepth 1 -print)
+    check_component_limits "${runtime_paths[@]}"
+    test "$(find "$HEARTBEAT_DIR" -name '*.json' | wc -l)" -eq 1
+    test "$(find "$LOG_BASE/output" -name '*.envelope.json' | wc -l)" -eq 1
+    dispatch_hash="$(sha256_text "${ENTRIES[0]}")"
+    if (( heartbeat_name_max == 128 )); then
+      test -f "$HEARTBEAT_DIR/generic__$dispatch_hash.json"
     else
-      test "$canonical" = "generic/d-${expected_digest:0:32}"
+      test -f "$HEARTBEAT_DIR/$(lens_heartbeat_key generic "dispatch-$dispatch_hash").json"
     fi
-  fi
+  done
 done
-unset -f getconf
+# Unsupported mounts must fail before invocation, including saved tuples that
+# bypass parsing. Completed receipts still skip without altering old artifacts.
+last_supported_base="$LOG_BASE"
+last_supported_entries=("${ENTRIES[@]}")
+for unsupported_limit in 36 37 127; do
+  for destination in log output heartbeat; do
+    LOG_BASE="$FIXTURE/reject-$unsupported_limit-$destination" OUTPUT_DIR="$FIXTURE/external-output"
+    output_name_max=255 log_name_max=255 heartbeat_name_max=255
+    if [[ "$destination" == log ]]; then log_name_max="$unsupported_limit";
+    elif [[ "$destination" == output ]]; then output_name_max="$unsupported_limit";
+    else heartbeat_name_max="$unsupported_limit"; fi
+    SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+    HEARTBEAT_DIR="$LOG_BASE/.heartbeats"
+    if [[ "$destination" == heartbeat ]]; then HEARTBEAT_DIR="$FIXTURE/heartbeat-mount"; fi
+    mkdir -p "$LOG_BASE" "$OUTPUT_DIR"
+    : > "$completed_lenses_file"
+    : > "$LOG_BASE/agent-calls"
+    printf 'GENERIC: role=deeper focus="query"\n' > "$LOG_BASE/dispatch.md"
+    rc=0
+    _rounds_meta_dispatch_generic_entries "$LOG_BASE/dispatch.md" > "$LOG_BASE/parsed" 2> "$LOG_BASE/error" || rc=$?
+    printf 'unsupported-%s/%s: parser_rc=%s (expected nonzero)\n' "$unsupported_limit" "$destination" "$rc"
+    test "$rc" -ne 0
+    grep -Fq "$unsupported_limit" "$LOG_BASE/error"
+    grep -Fq '128' "$LOG_BASE/error"
+    if [[ "$destination" == log ]]; then grep -Fq "$LOG_BASE" "$LOG_BASE/error";
+    elif [[ "$destination" == output ]]; then grep -Fq "$OUTPUT_DIR" "$LOG_BASE/error";
+    else grep -Fq "$HEARTBEAT_DIR" "$LOG_BASE/error"; fi
+    init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
+    for entry in generic/saved 'generic/saved|deeper|query||'; do
+      ENTRIES=("$entry")
+      rc=0
+      run_rounds 1 ENTRIES || rc=$?
+      test "$rc" -ne 0
+      test ! -s "$LOG_BASE/agent-calls"
+      test ! -s "$completed_lenses_file"
+      test ! -e "$LOG_BASE/rounds/round-1/.completed"
+    done
+    printf '%s\n' "$entry" > "$completed_lenses_file"
+    receipt_before="$(cat "$completed_lenses_file")"
+    run_lens "$entry"
+    test "$(cat "$completed_lenses_file")" = "$receipt_before"
+    test ! -s "$LOG_BASE/agent-calls"
+  done
+done
+unset -f getconf mkdir mv cp mktemp check_component_limits
+LOG_BASE="$last_supported_base" OUTPUT_DIR="$last_supported_base/output"
+SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+HEARTBEAT_DIR="$LOG_BASE/.heartbeats"
+ENTRIES=("${last_supported_entries[@]}")
 
 # A Generic result is trusted only when its identity was dispatched for this
 # round. A matching slug in a different domain must not inherit that trust.
@@ -442,4 +549,4 @@ for failure in hash directory; do
   test -s "$completed_lenses_file"
   printf 'failure-%s: no agent call or receipt before recovery; retry succeeds\n' "$failure"
 done
-printf 'Results: 11 filename/resume scenarios, 4 collisions, plain paths and failure recovery passed, 0 failed\n'
+printf 'Results: 12 filename/resume scenarios, 9 unsupported destinations, 4 collisions, plain paths and failure recovery passed, 0 failed\n'

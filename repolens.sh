@@ -4614,6 +4614,28 @@ run_lens() {
     heartbeat_lens_id="dispatch-$dispatch_key"
   fi
 
+  if [[ "$domain" == generic ]]; then
+    # Saved/plain tuples can bypass the parser. Validate their destinations
+    # too, after completed work has been skipped and before creating artifacts.
+    local generic_slug_limit generic_heartbeat_key generic_heartbeat_limit
+    generic_slug_limit="$(_rounds_meta_generic_slug_limit "$LOG_BASE")" || return 1
+    if (( ${#lens_id} > generic_slug_limit )); then
+      log_error "[$domain/$lens_id] Saved Generic ID exceeds destination filename limit; leaving investigation pending."
+      return 1
+    fi
+    # Match lens_heartbeat_key's 55-byte reserve for extensions/atomic writes
+    # on smaller supported mounts. Keep historical keys whenever they fit.
+    generic_heartbeat_limit="$(_rounds_meta_generic_name_max "${HEARTBEAT_DIR:-$LOG_BASE/.heartbeats}")" || return 1
+    generic_heartbeat_key="$(lens_heartbeat_key "$domain" "$heartbeat_lens_id")" || return 1
+    if (( ${#generic_heartbeat_key} > generic_heartbeat_limit - 55 )); then
+      if [[ -n "${dispatch_key:-}" ]]; then
+        heartbeat_lens_id="$dispatch_key"
+      else
+        heartbeat_lens_id="$(sha256_text "$lens_tuple")" || return 1
+      fi
+    fi
+  fi
+
   # Issue #380: resolve the effective agent for this lens (domain/lens > domain >
   # global --agent) and its per-agent timeout. Different agents can carry
   # different REPOLENS_AGENT_TIMEOUT_* budgets, so resolve the timeout for the
@@ -4681,7 +4703,7 @@ run_lens() {
     if [[ -n "$dispatch_path" ]]; then
       # Canonical slugs can coincide for distinct anchors, exclusions, or
       # normalized focus text. Reuse the full tuple's execution identity;
-      # 32 hex characters also fit the minimum accepted NAME_MAX of 36.
+      # 32 hex characters fit every supported artifact destination.
       generic_findings_dir+="/${dispatch_key:0:32}"
     fi
     if ! mkdir -p -- "$generic_findings_dir"; then

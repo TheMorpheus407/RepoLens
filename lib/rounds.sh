@@ -1062,20 +1062,33 @@ _rounds_meta_dispatch_lens_entries() {
 # Reserve the finding's .md suffix as well as the artifact directory name.
 # A destination may not exist yet; its nearest existing directory determines
 # the filesystem limit without creating artifacts during dispatch parsing.
+_rounds_meta_generic_name_max() {
+  local destination="$1" limit
+  while [[ ! -d "$destination" ]]; do
+    destination="$(dirname -- "$destination")" || return 1
+  done
+  limit="$(getconf NAME_MAX "$destination")" || return 1
+  [[ "$limit" =~ ^[0-9]+$ ]] || return 1
+  # Runtime artifacts include dispatch directories, captures and envelopes,
+  # not just the generated slug. Preserve their layouts on supported mounts.
+  if (( limit < 128 )); then
+    _rounds_meta_warn "Unsupported Generic artifact destination $destination: NAME_MAX=$limit; requires at least 128 bytes"
+    return 1
+  fi
+  printf '%s\n' "$limit"
+}
+
 _rounds_meta_generic_slug_limit() {
   local dispatch_dir="$1" findings_dir="${2:-}" destination limit name_max=""
   local base="${LOG_BASE:-$dispatch_dir}"
   local -a destinations=("$base/generic")
   destinations+=("${findings_dir:-$base/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs}")
+  destinations+=("${HEARTBEAT_DIR:-$base/.heartbeats}")
   if ${LOCAL_MODE:-false} && [[ -n "${OUTPUT_DIR:-}" ]]; then
     destinations+=("$OUTPUT_DIR/generic")
   fi
   for destination in "${destinations[@]}"; do
-    while [[ ! -d "$destination" ]]; do
-      destination="$(dirname -- "$destination")" || return 1
-    done
-    limit="$(getconf NAME_MAX "$destination")" || return 1
-    [[ "$limit" =~ ^[0-9]+$ ]] && (( limit >= 36 )) || return 1
+    limit="$(_rounds_meta_generic_name_max "$destination")" || return 1
     if [[ -z "$name_max" ]] || (( limit < name_max )); then name_max="$limit"; fi
   done
   printf '%s\n' "$((name_max - 3))"
