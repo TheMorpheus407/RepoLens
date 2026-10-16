@@ -2288,7 +2288,7 @@ build_round_digest() {
   local -A _round_digest_touched_domains=()
   local -A _round_digest_audit_domain_set=()
   local -A _round_digest_registered_lens_set=()
-  local -A _round_digest_dispatched_generic_set=()
+  local -A _round_digest_dispatched_generated_set=()
   local -A _round_digest_suspect_file_counts=()
   local -A _round_digest_omitted_lens_counts=()
 
@@ -2316,11 +2316,11 @@ build_round_digest() {
     _round_digest_registered_lens_set["$registered_lens"]=1
   done < <(_round_digest_registered_lenses "$domains_file" || true)
   # Generated investigators are absent from the static registry. Trust only
-  # Generic IDs supplied by this round's driver, never IDs claimed by a file.
+  # Generic/Custom IDs supplied by this round's driver, never IDs claimed by a file.
   for dispatched_entry in "${@:2}"; do
     dispatched_entry="${dispatched_entry%%|*}"
-    if [[ "$dispatched_entry" =~ ^generic/[a-z0-9][a-z0-9-]*$ ]]; then
-      _round_digest_dispatched_generic_set["$dispatched_entry"]=1
+    if [[ "$dispatched_entry" =~ ^(generic|custom)/[a-z0-9][a-z0-9-]*$ ]]; then
+      _round_digest_dispatched_generated_set["$dispatched_entry"]=1
     fi
   done
   audit_total="${#_round_digest_audit_domain_set[@]}"
@@ -2381,7 +2381,7 @@ build_round_digest() {
         continue
       fi
       if [[ -z "${_round_digest_registered_lens_set[$lens]:-}" \
-          && -z "${_round_digest_dispatched_generic_set[$domain/$lens]:-}" ]]; then
+          && -z "${_round_digest_dispatched_generated_set[$domain/$lens]:-}" ]]; then
         _round_digest_warn "Skipping untrusted lens output $(basename "$file"): lens id is not registered"
         continue
       fi
