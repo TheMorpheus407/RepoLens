@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Run startup receipt reconciliation in the signal-receiving parent, preserving saved success receipts and summary counts and stopping further reads on cancellation (repolens-r8-p2-4).
+
 - Reject Generic runtime destinations with filename limits below 128 bytes before investigator invocation, preserving pending work for resume. Bound Generic heartbeat keys on supported smaller filesystems and enforce simulated limits across runtime artifact tests.
 
 - Verify nested Generic findings recursively and distinguish their verifier IDs by relative source path, preserving separate verdicts for dispatches that cite the same code.

@@ -4533,14 +4533,40 @@ if [[ ! -f "$SUMMARY_FILE" ]] || [[ -z "$RESUME_RUN_ID" ]]; then
 fi
 
 # --- Global issue counter ---
+_reconcile_initial_filing_counts() {
+  local run_id="$1" count_file verified count_rc=0
+  # The CLI handlers return while receipt reconciliation owns this scope.
+  # Keep traversal in this parent so it sees those handlers' cancellation.
+  local _REPOLENS_FILING_RECONCILING=1
+  count_file="$(mktemp "$LOG_BASE/.initial-filing-count.XXXXXX")" || return 1
+  filing_verified_issue_count "$run_id" > "$count_file" || count_rc=$?
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    rm -f -- "$count_file"
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
+  if ! verified="$(cat -- "$count_file")"; then
+    rm -f -- "$count_file"
+    return 1
+  fi
+  rm -f -- "$count_file" || return 1
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+    || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  reconcile_summary_filing "$SUMMARY_FILE" "$verified" "$MAX_ISSUES" || return 1
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
+    || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  return "$count_rc"
+}
+
 GLOBAL_ISSUES_CREATED=0
 
 if [[ "$MODE" == branch-review ]] && ! $LOCAL_MODE; then
-  _filing_count_rc=0
-  _verified_issues="$(filing_verified_issue_count "$RUN_ID")" || _filing_count_rc=$?
-  reconcile_summary_filing "$SUMMARY_FILE" "$_verified_issues" "$MAX_ISSUES" \
-    && (( _filing_count_rc == 0 )) || die "Unable to reconcile governed issue counts."
-  unset _verified_issues _filing_count_rc
+  if ! _reconcile_initial_filing_counts "$RUN_ID"; then
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      print_resume_hint
+      exit "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+    die "Unable to reconcile governed issue counts."
+  fi
 fi
 
 
