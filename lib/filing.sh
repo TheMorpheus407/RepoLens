@@ -476,6 +476,9 @@ _filing_readback_matches() {
   ' <<< "$4" >/dev/null
 }
 
+# Quarantine an invalid ordinary receipt and record its failure. Cancellation
+# restores saved success; a permanent attempt guard protects failed rollback.
+# Release read-only governors on storage failure so retained receipts can resume.
 _filing_fail() {
   local filed_dir="$1" cluster_id="$2" reason="$3" move_rc=0
   # Interrupted preflight helpers cannot invalidate a saved success receipt.
@@ -485,6 +488,16 @@ _filing_fail() {
     return 1
   fi
   if [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
+    # Historical successes may predate attempt markers. Reserve the completed
+    # POST before quarantine so a failed rollback can never admit another one.
+    if ! : > "$filed_dir/$cluster_id.attempted"; then
+      rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+      return 1
+    fi
+    if _filing_cancelled; then
+      rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+      return 1
+    fi
     mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url" || move_rc=$?
     # The returning parent handler may accept cancellation while mv waits.
     # Restore a completed rename before leaving this receipt for resume.
@@ -496,8 +509,12 @@ _filing_fail() {
       rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
       return 1
     fi
-    (( move_rc == 0 )) || return 1
-    : > "$filed_dir/$cluster_id.attempted" || return 1
+    if (( move_rc != 0 )); then
+      # No POST runs during saved-receipt verification. Let resume reattest a
+      # receipt whose rename failed instead of stranding its read-only governor.
+      rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+      return 1
+    fi
   fi
   printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$filed_dir/$cluster_id.failed"
   rm -f "$filed_dir/$cluster_id.lock" "$filed_dir/$cluster_id.governor/body.md"
