@@ -4677,8 +4677,19 @@ run_lens() {
   vars+="|FORGE_ISSUE_LIST_OPEN=$(forge_prompt_issue_list "open" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   vars+="|FORGE_ISSUE_LIST_CLOSED=$(forge_prompt_issue_list "closed" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   if [[ "$domain" == generic ]]; then
+    local generic_findings_dir="$LOG_BASE/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs"
+    if [[ -n "$dispatch_path" ]]; then
+      # Canonical slugs can coincide for distinct anchors, exclusions, or
+      # normalized focus text. Reuse the full tuple's execution identity;
+      # 32 hex characters also fit the minimum accepted NAME_MAX of 36.
+      generic_findings_dir+="/${dispatch_key:0:32}"
+    fi
+    if ! mkdir -p -- "$generic_findings_dir"; then
+      log_error "[$domain/$lens_id] Unable to create Generic findings directory; leaving investigation pending."
+      return 1
+    fi
     vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX:-1}|ROUND_TOTAL=${CURRENT_ROUND_TOTAL:-1}"
-    vars+="|GENERIC_FINDINGS_FILE=$(template_var_escape "$LOG_BASE/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs/$lens_id.md")"
+    vars+="|GENERIC_FINDINGS_FILE=$(template_var_escape "$generic_findings_dir/$lens_id.md")"
   else
     [[ -n "${CURRENT_ROUND_INDEX:-}" ]] && vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX}"
     [[ -n "${CURRENT_ROUND_TOTAL:-}" ]] && vars+="|ROUND_TOTAL=${CURRENT_ROUND_TOTAL}"

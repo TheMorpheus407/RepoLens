@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve separate Generic findings for distinct dispatch tuples that share a canonical slug, including different anchors, exclusions and normalized focus text.
+
 - Bound generated Generic artifact names by the destination filesystem limits, reserving the findings file extension and using a stable hash of the complete slug. Preserve full investigation attributes and resume identity; keep rounds pending when identity generation fails (repolens-r8-p2-3).
 
 - Give Generic investigators their generated ID and exact findings path, and include their dispatched findings in round digests while continuing to reject undispatched generated IDs.

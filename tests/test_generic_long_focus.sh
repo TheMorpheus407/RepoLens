@@ -62,16 +62,20 @@ run_agent() {
   printf 'called\n' >> "$LOG_BASE/agent-calls"
   if [[ "${domain:-}" == generic ]]; then
     # Follow investigator.md's actual <lens_id>.md output contract.
-    local findings_dir
+    local findings_dir findings_file
     findings_dir="$(round_lens_outputs_dir "$RUN_ID" "${CURRENT_ROUND_INDEX:-1}")"
+    findings_file="$(printf '%s\n' "$2" | awk '/^Write your findings to a single Markdown file at:$/ { output=1; next } output && /^```$/ { getline; print; exit }')"
     # The agent must receive the generated identity and exact destination;
     # it cannot infer a hash from the investigation's full focus text.
-    [[ "$2" == *$'\n'"$findings_dir/$lens_id.md"$'\n'* ]] || return 1
+    [[ "$findings_file" == "$findings_dir/"* && "${findings_file##*/}" == "$lens_id.md" ]] || return 1
     [[ "$2" == *$'\n'"lens_id: $lens_id"$'\n'* ]] || return 1
-    mkdir -p "$findings_dir" || return 1
-    printf -- '---\nlens_id: %s\ndomain: generic\nround: %s\nseverity: low\ntype: test-gap\nconfidence: high\nrole: %s\nfocus: %s\nroot_cause_category: test-gap\nsuspect_files:\n  - probe.sh:1\n---\n## suspect_files\n- probe.sh:1\n## hypothesis\nMock finding.\n## evidence\nMock evidence.\n## next_steps_for_synthesizer\nVerify fixture.\n' \
+    [[ "$2" == *"$lens_focus"* && "$2" == *"$prior_finding_anchor"* && "$2" == *"$exclusion_hints"* ]] || return 1
+    mkdir -p "$(dirname -- "$findings_file")" || return 1
+    printf '%s\n' "$findings_file" >> "$LOG_BASE/finding-paths"
+    printf -- '---\nlens_id: %s\ndomain: generic\nround: %s\nseverity: low\ntype: test-gap\nconfidence: high\nrole: %s\nfocus: %s\nroot_cause_category: test-gap\nsuspect_files:\n  - probe.sh:1\n---\n## suspect_files\n- probe.sh:1\n## hypothesis\nMock finding. %s\n## evidence\nMock evidence.\n## next_steps_for_synthesizer\nVerify fixture.\n' \
       "$lens_id" "${CURRENT_ROUND_INDEX:-1}" "$lens_role" "$(jq -Rn --arg text "$lens_focus" '$text')" \
-      > "$findings_dir/$lens_id.md" || return 1
+      "Dispatch evidence: $(jq -cn --arg focus "${lens_focus:0:32}" --arg anchor "$prior_finding_anchor" --arg exclude "$exclusion_hints" '[$focus,$anchor,$exclude]')" \
+      > "$findings_file" || return 1
   fi
   printf 'DONE\n'
 }
@@ -134,7 +138,7 @@ for scenario in minimum-limit minimum-prefix-limit output-limit log-limit short 
     test "$(wc -l < "$LOG_BASE/agent-calls")" -eq 1
     test "$(wc -l < "$completed_lenses_file")" -eq 1
     test -e "$LOG_BASE/rounds/round-1/.completed"
-    test -f "$LOG_BASE/rounds/round-1/lens-outputs/${canonical#*/}.md"
+    test -f "$(cat "$LOG_BASE/finding-paths")"
     grep -Fq 'Mock finding.' "$LOG_BASE/rounds/round-1/digest.md"
   done
   if [[ "$scenario" == minimum-* ]]; then
@@ -153,7 +157,7 @@ unset -f getconf
 # A Generic result is trusted only when its identity was dispatched for this
 # round. A matching slug in a different domain must not inherit that trust.
 findings_dir="$LOG_BASE/rounds/round-1/lens-outputs"
-valid_finding="$findings_dir/${canonical#*/}.md"
+valid_finding="$(cat "$LOG_BASE/finding-paths")"
 sed -e 's/^lens_id:.*/lens_id: never-dispatched/' -e 's/Mock finding\./Untrusted finding./' \
   "$valid_finding" > "$findings_dir/untrusted.md"
 sed -e 's/^domain: generic/domain: security/' -e 's/Mock finding\./Spoofed finding./' \
@@ -212,4 +216,131 @@ test "${ids[0]}" != "${ids[1]}"
 rc=0
 ( sha256_text() { return 1; }; _rounds_meta_dispatch_generic_entries "$LOG_BASE/dispatch.md" ) || rc=$?
 test "$rc" -ne 0
-printf 'Results: 11 integration scenarios and stable distinct bounded identities passed, 0 failed\n'
+# Distinct tuples can have the same canonical slug: varying anchors or
+# exclusions, and punctuation normalized out of focus, must preserve both
+# findings. Consume the rendered output path exactly as an agent would.
+for collision in anchor exclude normalized long; do
+  LOG_BASE="$FIXTURE/collision-$collision" OUTPUT_DIR="$LOG_BASE/output"
+  SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+  CURRENT_ROUND_OUTPUT_DIR='' STRATEGY=fanout
+  CURRENT_ROUND_INDEX=1 CURRENT_ROUND_TOTAL=1
+  mkdir -p "$LOG_BASE"
+  : > "$completed_lenses_file"
+  : > "$LOG_BASE/agent-calls"
+  focus='src/query.go:10' other_focus="$focus"
+  anchor='prior-a' other_anchor="$anchor" exclude='checked-b' other_exclude="$exclude"
+  case "$collision" in
+    anchor) other_anchor='prior-c' ;;
+    exclude) other_exclude='checked-d' ;;
+    normalized) other_focus='src-query-go-10' ;;
+    long) focus="$prefix" other_focus="$prefix" other_anchor='prior-c' ;;
+  esac
+  printf 'GENERIC: role=deeper focus="%s" anchor="%s" exclude="%s"\n' \
+    "$focus" "$anchor" "$exclude" "$other_focus" "$other_anchor" "$other_exclude" \
+    "$focus" "$anchor" "$exclude" > "$LOG_BASE/dispatch.md"
+  parsed="$(_rounds_meta_dispatch_generic_entries "$LOG_BASE/dispatch.md")"
+  mapfile -t ENTRIES <<< "$parsed"
+  test "${#ENTRIES[@]}" -eq 2
+  test "${ENTRIES[0]%%|*}" = "${ENTRIES[1]%%|*}"
+  init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
+  if [[ "$collision" == exclude ]]; then
+    # Actual concurrent callbacks exercise the same destinations as parallel
+    # dispatch; the round driver then consumes their saved receipts.
+    (trap - EXIT; run_lens "${ENTRIES[0]}" || exit 1) &
+    first_pid=$!
+    (trap - EXIT; run_lens "${ENTRIES[1]}" || exit 1) &
+    second_pid=$!
+    wait "$first_pid"
+    wait "$second_pid"
+  else
+    # Resume after the first investigation completed, with the remaining
+    # tuple first. Reordering must preserve output paths and exact receipts.
+    run_lens "${ENTRIES[0]}" || exit 1
+  fi
+  ENTRIES=("${ENTRIES[1]}" "${ENTRIES[0]}")
+  run_rounds 1 ENTRIES
+  test "$(wc -l < "$LOG_BASE/agent-calls")" -eq 2
+  test "$(wc -l < "$completed_lenses_file")" -eq 2
+  printf 'collision-%s: calls=%s receipts=%s distinct_paths=%s finding_files=%s\n' "$collision" \
+    "$(wc -l < "$LOG_BASE/agent-calls")" "$(wc -l < "$completed_lenses_file")" \
+    "$(sort -u "$LOG_BASE/finding-paths" | wc -l)" \
+    "$(find "$LOG_BASE/rounds/round-1/lens-outputs" -name '*.md' | wc -l)"
+  test "$(sort -u "$LOG_BASE/finding-paths" | wc -l)" -eq 2
+  test "$(find "$LOG_BASE/rounds/round-1/lens-outputs" -name '*.md' | wc -l)" -eq 2
+  digest="$LOG_BASE/rounds/round-1/digest.md"
+  for evidence in "$(jq -cn --arg f "${focus:0:32}" --arg a "$anchor" --arg e "$exclude" '[$f,$a,$e]')" \
+      "$(jq -cn --arg f "${other_focus:0:32}" --arg a "$other_anchor" --arg e "$other_exclude" '[$f,$a,$e]')"; do
+    grep -Fq "Dispatch evidence: $evidence" "$digest"
+  done
+  receipts_before="$(sha256_text "$(cat "$completed_lenses_file")")"
+  paths_before="$(cat "$LOG_BASE/finding-paths")"
+  run_rounds 1 ENTRIES
+  test "$(wc -l < "$LOG_BASE/agent-calls")" -eq 2
+  test "$(sha256_text "$(cat "$completed_lenses_file")")" = "$receipts_before"
+  test "$(cat "$LOG_BASE/finding-paths")" = "$paths_before"
+  printf 'collision-%s: two findings retained in files and digest; resume adds no calls\n' "$collision"
+done
+# Plain calls keep the historical location, and completed legacy tuples skip
+# before touching the new directory. Failures must not certify lost work.
+LOG_BASE="$FIXTURE/plain" OUTPUT_DIR="$LOG_BASE/output"
+SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+CURRENT_ROUND_INDEX=1 CURRENT_ROUND_TOTAL=1 CURRENT_ROUND_OUTPUT_DIR=''
+mkdir -p "$LOG_BASE"
+: > "$completed_lenses_file"
+: > "$LOG_BASE/agent-calls"
+init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
+run_lens generic/plain-probe || exit 1
+test "$(cat "$LOG_BASE/finding-paths")" = "$LOG_BASE/rounds/round-1/lens-outputs/plain-probe.md"
+run_lens generic/plain-probe || exit 1
+test "$(wc -l < "$LOG_BASE/agent-calls")" -eq 1
+
+LOG_BASE="$FIXTURE/legacy" OUTPUT_DIR="$LOG_BASE/output"
+completed_lenses_file="$LOG_BASE/.completed"
+legacy_dir="$LOG_BASE/rounds/round-1/lens-outputs"
+mkdir -p "$legacy_dir"
+legacy_entry="${parsed%%|*}"
+legacy_file="$legacy_dir/${legacy_entry#*/}.md"
+printf 'legacy finding\n' > "$legacy_file"
+printf '%s\n' "$parsed" > "$completed_lenses_file"
+: > "$LOG_BASE/agent-calls"
+run_lens "$parsed" || exit 1
+test ! -s "$LOG_BASE/agent-calls"
+test "$(cat "$legacy_file")" = 'legacy finding'
+test "$(find "$legacy_dir" -mindepth 1 -type d | wc -l)" -eq 0
+
+for failure in hash directory; do
+  LOG_BASE="$FIXTURE/failure-$failure" OUTPUT_DIR="$LOG_BASE/output"
+  SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
+  mkdir -p "$LOG_BASE/rounds/round-1/lens-outputs"
+  : > "$completed_lenses_file"
+  : > "$LOG_BASE/agent-calls"
+  printf 'GENERIC: role=deeper focus="probe.sh:1"\n' > "$LOG_BASE/dispatch.md"
+  parsed="$(_rounds_meta_dispatch_generic_entries "$LOG_BASE/dispatch.md")"
+  ENTRIES=("$parsed")
+  dispatch_digest="$(sha256_text "$parsed")"
+  blocked="$LOG_BASE/rounds/round-1/lens-outputs/${dispatch_digest:0:32}"
+  if [[ "$failure" == directory ]]; then
+    printf 'preserve me\n' > "$blocked"
+  else
+    saved_hash="$(declare -f sha256_text)"
+    sha256_text() { return 1; }
+  fi
+  init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
+  rc=0
+  run_rounds 1 ENTRIES || rc=$?
+  test "$rc" -ne 0
+  test ! -s "$LOG_BASE/agent-calls"
+  test ! -s "$completed_lenses_file"
+  test ! -e "$LOG_BASE/rounds/round-1/.completed"
+  if [[ "$failure" == directory ]]; then
+    test "$(cat "$blocked")" = 'preserve me'
+    rm -- "$blocked"
+  else
+    eval "$saved_hash"
+  fi
+  run_rounds 1 ENTRIES || exit 1
+  test "$(wc -l < "$LOG_BASE/agent-calls")" -eq 1
+  test -s "$completed_lenses_file"
+  printf 'failure-%s: no agent call or receipt before recovery; retry succeeds\n' "$failure"
+done
+printf 'Results: 11 filename/resume scenarios, 4 collisions, plain paths and failure recovery passed, 0 failed\n'
