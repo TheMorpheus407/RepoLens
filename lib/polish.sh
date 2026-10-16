@@ -499,6 +499,16 @@ run_polish_issue_emission() {
   if (( saved_issues > current_issues )); then
     GLOBAL_ISSUES_CREATED="$saved_issues"
   fi
+  # A signal may terminate the summary writer after the receipt was saved.
+  # Repair that window even when the cap is exhausted or no groups remain.
+  if (( saved_issues > 0 )) && [[ -n "${SUMMARY_FILE:-}" && -f "$SUMMARY_FILE" ]] \
+      && declare -F ensure_summary_issues_created >/dev/null 2>&1; then
+    if ! ensure_summary_issues_created "$SUMMARY_FILE" "$saved_issues"; then
+      _polish_log_warn "Polish issue emission: failed to recover summary issue count"
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 1
+    fi
+  fi
 
   if ! _polish_build_issue_groups "$ranked_file" "$top_n" > "$groups_file"; then
     rm -f "$groups_file"

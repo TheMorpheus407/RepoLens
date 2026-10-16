@@ -120,6 +120,27 @@ _increment_summary_issues_created_locked() {
   return "$rc"
 }
 
+# ensure_summary_issues_created <summary_file> <minimum>
+#   Recover a missed issue-count write from durable Polish receipts. Taking a
+#   lower bound makes repeated resumes safe and preserves any higher count.
+ensure_summary_issues_created() {
+  local file="$1" minimum="$2"
+  [[ "$minimum" =~ ^[0-9]+$ ]] || return 1
+  with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
+    _ensure_summary_issues_created_locked "$file" "$minimum"
+}
+
+_ensure_summary_issues_created_locked() {
+  local file="$1" minimum="$2" tmp rc
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+  jq --argjson minimum "$minimum" \
+    '.totals.issues_created = ([.totals.issues_created // 0, $minimum] | max)' \
+    "$file" > "$tmp" && mv "$tmp" "$file"
+  rc=$?
+  rm -f "$tmp" 2>/dev/null || true
+  return "$rc"
+}
+
 # Replace the governed publication snapshot, rather than adding it again on
 # resume. Remote branch lens files are drafts, including legacy saved counts.
 reconcile_summary_filing() {
