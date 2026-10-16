@@ -543,7 +543,7 @@ run_polish_issue_emission() {
       break
     fi
 
-    local domain lens_id safe_name body_file tmp_body title sentinel issue_url label attempted
+    local domain lens_id safe_name body_file tmp_body title sentinel issue_url label attempted tmp_receipt saved_url
     domain="$(jq -r '.domain // empty' <<< "$group_json")"
     lens_id="$(jq -r '.lens_id // empty' <<< "$group_json")"
     safe_name="$(_polish_slugify "$domain--$lens_id")"
@@ -622,10 +622,19 @@ run_polish_issue_emission() {
       fi
     fi
 
-    printf '%s\n' "$issue_url" > "$sentinel" || {
+    # A short write must never expose a nonempty success marker to resume.
+    # Check the complete saved URL before atomically publishing the receipt.
+    tmp_receipt="$sentinel.tmp.$$"
+    if ! { [[ -n "$issue_url" ]] \
+        && printf '%s\n' "$issue_url" > "$tmp_receipt" \
+        && saved_url="$(cat "$tmp_receipt")" \
+        && [[ "$saved_url" == "$issue_url" ]] \
+        && mv "$tmp_receipt" "$sentinel"; }; then
+      rm -f -- "$tmp_receipt"
+      _polish_log_warn "Polish issue emission: failed to save complete URL receipt for $domain/$lens_id"
       emission_rc=1
       break
-    }
+    fi
     if ! _polish_increment_issue_counts; then
       _polish_log_warn "Polish issue emission: failed to update summary issue count"
       emission_rc=1

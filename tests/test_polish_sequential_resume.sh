@@ -209,5 +209,84 @@ check test "$(cat "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted"
 unset -f _polish_render_issue_body
 eval "$(declare -f original_polish_render_issue_body | sed '1s/original_polish_render_issue_body/_polish_render_issue_body/')"
 unset -f original_polish_render_issue_body
+# A failed write may leave nonempty bytes; a failed rename must not publish
+# a receipt either. Both outcomes stay reserved until independent reconciliation.
+for receipt_failure in partial-write short-write promote; do
+  LOG_BASE="$FIXTURE/$receipt_failure" SUMMARY_FILE="$FIXTURE/$receipt_failure/summary.json"
+  MAX_ISSUES='' GLOBAL_ISSUES_CREATED=0 REPOLENS_FINAL_STATE=finished
+  mkdir -p "$LOG_BASE/polish"
+  : > "$LOG_BASE/posts"
+  init_summary "$SUMMARY_FILE" probe "$FIXTURE" polish mock '' '' github ''
+  printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+  printf() {
+    if [[ "$receipt_failure" == *-write && "${FUNCNAME[1]:-}" == run_polish_issue_emission && "${2:-}" == https://github.com/fixture/repo/issues/* ]]; then
+      builtin printf 'https://github.com/fixture/repo/issues/'
+      [[ "$receipt_failure" == short-write ]]
+      return $?
+    fi
+    # shellcheck disable=SC2059 # Transparent wrapper forwards caller format and arguments.
+    builtin printf "$@"
+  }
+  mv() {
+    if [[ "$receipt_failure" == promote && "${*: -1}" == *.url ]]; then return 1; fi
+    command mv "$@"
+  }
+  rc=0
+  run_polish_issue_emission probe 3 || rc=$?
+  unset -f printf mv
+  check test "$rc" -ne 0
+  check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+  check test ! -s "$LOG_BASE/polish/filed/fluency-spacing-consistency.url"
+  check test -e "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted"
+  check test "$(find "$LOG_BASE/polish/filed" -name '*.tmp.*' | wc -l)" -eq 0
+  for retry_case in same changed empty; do
+    case "$retry_case" in
+      changed) printf '[{"domain":"fluency","lens_id":"new-lens","title":"Other","body":"Suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json" ;;
+      empty) printf '[]\n' > "$LOG_BASE/polish/ranked-suggestions.json" ;;
+    esac
+    GLOBAL_ISSUES_CREATED=0
+    rc=0
+    run_polish_issue_emission probe 3 || rc=$?
+    check test "$rc" -ne 0
+    check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+    check test "$GLOBAL_ISSUES_CREATED" -eq 0
+    check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 0
+  done
+  printf 'receipt failure %s: probes complete\n' "$receipt_failure"
+done
+# Deliver real signals to the sequential CLI handler after reservation and
+# before POST. DEBUG observes the file in the parent without a production hook.
+for signal in HUP INT TERM; do
+  LOG_BASE="$FIXTURE/reserved-$signal" SUMMARY_FILE="$FIXTURE/reserved-$signal/summary.json"
+  MAX_ISSUES=1 GLOBAL_ISSUES_CREATED=0 REPOLENS_FINAL_STATE=finished
+  mkdir -p "$LOG_BASE/polish"
+  : > "$LOG_BASE/posts"
+  init_summary "$SUMMARY_FILE" probe "$FIXTURE" polish mock '' 1 github ''
+  printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+  rc=0
+  (
+    parent_pid=$BASHPID
+    trap '_handle_hangup' HUP
+    trap '_handle_interrupt' INT
+    trap '_handle_termination' TERM
+    set -T
+    trap 'if [[ "$BASHPID" == "$parent_pid" && -n "${attempted:-}" && -e "$attempted" && "${REPOLENS_FINAL_STATE:-}" != interrupted ]]; then kill -s "$signal" "$parent_pid"; fi' DEBUG
+    run_polish_issue_emission probe 3
+  ) || rc=$?
+  expected=143
+  case "$signal" in HUP) expected=129 ;; INT) expected=130 ;; esac
+  check test "$rc" -eq "$expected"
+  check test "$(wc -l < "$LOG_BASE/posts")" -eq 0
+  check test ! -e "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted"
+  check test ! -e "$LOG_BASE/polish/filed/fluency-spacing-consistency.url"
+  check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 0
+  GLOBAL_ISSUES_CREATED=0 REPOLENS_FINAL_STATE=finished
+  rc=0
+  run_polish_issue_emission probe 3 || rc=$?
+  check test "$rc" -eq 0
+  check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+  check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 1
+  printf 'cancelled fresh reservation %s: released and resumed\n' "$signal"
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))
