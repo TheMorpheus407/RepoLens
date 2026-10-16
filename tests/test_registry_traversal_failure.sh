@@ -171,4 +171,99 @@ for mode in audit branch-review; do
   printf 'PASS: finalization preserves published artifacts and retry refreshes them\n'
 ) || exit 1
 done
+# repolens-r8-p3-1: fail only the scope traversal. Later registry traversal
+# succeeds, so ignoring the first failure would publish an out-of-scope source.
+# Also exercise opening/reading the completed list and both quarantine writes.
+for fault in empty partial reason reopen move read-empty read-partial; do
+(
+  LOG_BASE="$TMP/scope-$fault-run" OUTPUT_DIR="$TMP/scope-$fault-output"
+  check cp -R "$TMP/output" "$OUTPUT_DIR"
+  BRANCH_SCOPE_FILE="$TMP/scope-$fault.json"
+  check printf '["src/changed.sh"]\n' > "$BRANCH_SCOPE_FILE"
+  RUN_ID=probe MODE=branch-review LOCAL_MODE=true OUTPUT_DIR_SET=true
+  HUMAN_REVIEW=true REPOLENS_FINAL_STATE=finished
+  check finalize_local
+  artifacts=(findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md HUMAN_REVIEW.md)
+  check mkdir "$TMP/scope-$fault-published"
+  for artifact in "${artifacts[@]}"; do
+    check cp "$LOG_BASE/final/$artifact" "$TMP/scope-$fault-published/$artifact"
+  done
+  rejected="$OUTPUT_DIR/security/injection/003.md"
+  check printf -- '---\ntitle: Unchanged source\nseverity: high\n---\nsrc/unchanged.sh:1 Evidence\n' > "$rejected"
+  if [[ "$fault" == reason ]]; then
+    # A directory makes the diagnostic redirection fail even as root.
+    check mkdir "$rejected.out-of-scope.reason"
+  fi
+  mv() {
+    if [[ "$fault" == move && "${2:-}" == "$rejected" ]]; then return 1; fi
+    command mv "$@"
+  }
+  scope_reads=0
+  read() {
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_directory ]]; then
+      case "$fault" in
+        read-empty) return 1 ;;
+        read-partial)
+          # The first filename is rejected. Fail on the next read, before
+          # the remaining filenames or a completion marker can be consumed.
+          if (( scope_reads > 0 )); then return 1; fi
+          scope_reads=$((scope_reads + 1))
+          ;;
+      esac
+    fi
+    # shellcheck disable=SC2162 # Delegate the caller's flags, including -r.
+    builtin read "$@"
+  }
+  # Every consumer except the scope filter sees a successful complete find.
+  find() {
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_directory ]]; then
+      case "$fault" in
+        empty|partial)
+          if [[ "$fault" == partial ]]; then printf '%s\0' "$rejected"; fi
+          printf 'find: injected scope traversal failure\n' >&2
+          return 1
+          ;;
+        reopen)
+          command find "$@" || return 1
+          # Enumeration succeeds, but the staged list disappears before open.
+          command rm -f -- "$OUTPUT_DIR"/.branch-scope-files.*
+          return "$?"
+          ;;
+        read-partial)
+          printf '%s\0' "$rejected" "$OUTPUT_DIR/security/injection/001.md" "$OUTPUT_DIR/security/injection/002.md"
+          return 0
+          ;;
+      esac
+    fi
+    command find "$@"
+  }
+  check finalize_local
+  printf 'scope fault=%s registry_records=%s\n' "$fault" "$(jq -s length "$LOG_BASE/final/findings.jsonl")"
+  # A failed list read must precede every quarantine and preserve publication.
+  check test -f "$rejected"
+  check test ! -e "$rejected.out-of-scope"
+  scope_reads=0
+  rc=0
+  branch_scope_filter_directory "$OUTPUT_DIR" || rc=$?
+  check test "$rc" -ne 0
+  unset -f find mv read
+  check test -f "$rejected"
+  check test ! -e "$rejected.out-of-scope"
+  if [[ "$fault" == reason ]]; then
+    check rmdir "$rejected.out-of-scope.reason"
+  else
+    check test ! -e "$rejected.out-of-scope.reason"
+  fi
+  for artifact in "${artifacts[@]}"; do
+    check cmp "$TMP/scope-$fault-published/$artifact" "$LOG_BASE/final/$artifact"
+  done
+  check test "$(command find "$OUTPUT_DIR" -name '.branch-scope-files.*' | wc -l)" -eq 0
+  check finalize_local
+  check test ! -e "$rejected"
+  check test -f "$rejected.out-of-scope"
+  check grep -q 'out-of-scope citation: src/unchanged.sh' "$rejected.out-of-scope.reason"
+  check jq -se 'length == 2 and all(.[]; .title != "Unchanged source")' "$LOG_BASE/final/findings.jsonl"
+  printf 'PASS: %s scope failure preserves all published artifacts; retry filters before publishing\n' "$fault"
+) || exit 1
+done
 printf 'Results: registry traversal failure checks passed\n'
