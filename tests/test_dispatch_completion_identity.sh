@@ -98,6 +98,29 @@ for legacy in no yes; do
   check is_lens_completed security/injection
 done
 
+# The direct CLI callback must stop on a complete or partial receipt read
+# failure, before creating evidence or invoking the model. A repaired retry
+# still skips the completed dispatch.
+calls_before="$(wc -l < "$LOG_BASE/agent-calls")"
+receipt_before="$(cat "$completed_lenses_file")"
+for read_mode in empty partial; do
+  cat() {
+    if [[ "$*" == "$completed_lenses_file" ]]; then
+      if [[ "$read_mode" == partial ]]; then command cat "$@"; fi
+      return 1
+    fi
+    command cat "$@"
+  }
+  run_lens "${ENTRIES[0]}"
+  check test "$?" -ne 0
+  unset -f cat
+  check test "$(wc -l < "$LOG_BASE/agent-calls")" -eq "$calls_before"
+  check test "$(cat "$completed_lenses_file")" = "$receipt_before"
+done
+run_lens "${ENTRIES[0]}"
+check test "$?" -eq 0
+check test "$(wc -l < "$LOG_BASE/agent-calls")" -eq "$calls_before"
+
 # Same-second callbacks must retain their own captures, local findings and live
 # heartbeat, even when another investigation of the lens fails authentication.
 # shellcheck source=/dev/null
@@ -195,17 +218,37 @@ PY
 # cannot certify work whose completion was never persisted.
 LOG_BASE="$FIXTURE/receipt-failure" OUTPUT_DIR="$FIXTURE/receipt-failure/output"
 SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/blocked-receipts"
-mkdir -p "$completed_lenses_file"
+mkdir -p "$LOG_BASE"
+: > "$completed_lenses_file"
 init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" audit codex '' '' local "$OUTPUT_DIR"
 resolve_lens_heartbeat_interval() { printf 0; }
-run_agent() { printf 'DONE\n'; }
+run_agent() {
+  printf 'called\n' >> "$LOG_BASE/receipt-failure-agent-calls"
+  # Lookup has succeeded. Make the production writer's open fail, even as root.
+  rm -f -- "$completed_lenses_file" || return 1
+  mkdir "$completed_lenses_file" || return 1
+  printf 'DONE\n'
+}
+# Count attempts while retaining the production writer and its real I/O fault.
+eval "$(declare -f mark_lens_completed | sed '1s/mark_lens_completed/real_mark_lens_completed/')"
+mark_lens_completed() {
+  if [[ "$completed_lenses_file" == "$LOG_BASE/blocked-receipts" ]]; then
+    printf 'attempted\n' >> "$LOG_BASE/receipt-write-attempts"
+  fi
+  real_mark_lens_completed "$@"
+}
 run_lens security/injection
 check test "$?" -ne 0
+rmdir "$completed_lenses_file"
+: > "$completed_lenses_file"
 LENSES=(security/injection)
 run_rounds 1 LENSES
 check test "$?" -ne 0
 check test ! -f "$LOG_BASE/rounds/round-1/.completed"
 check test "$(jq -r .stopped_reason "$SUMMARY_FILE")" = lens-execution-failed
+check test -d "$completed_lenses_file"
+check test "$(wc -l < "$LOG_BASE/receipt-write-attempts")" -eq 2
+check test "$(wc -l < "$LOG_BASE/receipt-failure-agent-calls")" -eq 2
 unset ROUNDS_FAILURE_REASON
 
 # Hash/capture allocation failures stop before model execution and still clean
