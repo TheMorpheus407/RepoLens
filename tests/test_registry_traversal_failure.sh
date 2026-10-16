@@ -281,6 +281,7 @@ for list_fault in missing read-empty read-partial truncated; do
     check cp "$LOG_BASE/final/$artifact" "$TMP/list-$list_fault-published/$artifact"
   done
   list_reads=0
+  # Allocate normally, then inject list loss/truncation before ingestion opens it.
   mktemp() {
     local created
     created="$(command mktemp "$@")" || return 1
@@ -293,6 +294,7 @@ for list_fault in missing read-empty read-partial truncated; do
     fi
     printf '%s\n' "$created"
   }
+  # Fail only the registry's list reads, leaving other callers' reads intact.
   read() {
     if [[ "${FUNCNAME[1]:-}" == build_findings_jsonl_from_local ]]; then
       case "$list_fault" in

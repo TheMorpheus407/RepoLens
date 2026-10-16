@@ -465,8 +465,9 @@ _ledger_frontmatter_scalar() {
 #   missing args or a missing <output_dir>, and on a missing out-path parent dir
 #   (the atomic write fails). Failed enumeration (find or sort) returns non-zero,
 #   cleans staging files and preserves any previously published output. A failed
-#   source-file read has the same failure semantics; malformed readable files
-#   continue to be skipped.
+#   staged-list open/read or source-file read has the same failure semantics.
+#   The list's completion sentinel must be consumed even for an empty tree;
+#   malformed readable source files continue to be skipped.
 build_findings_jsonl_from_local() {
   local dir="${1:-}" out="${2:-}"
   [[ -n "$dir" ]] || { echo "build_findings_jsonl_from_local: missing output_dir" >&2; return 2; }

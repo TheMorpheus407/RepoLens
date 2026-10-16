@@ -66,7 +66,10 @@ is an **empty `findings.jsonl`** (zero lines) plus a **header-only `findings.csv
 After a successful empty local rebuild, finalization removes stale `TODO.md`,
 `SUMMARY.md`, `NEEDS_REVIEW.md` and `DUPLICATES.md`. Failed or interrupted rebuilds
 retain existing reports. Failed traversal or an unreadable local finding also
-preserves the prior registry, CSV and reports. Branch-review scope filtering
+preserves the prior registry, CSV and reports. This also applies when enumeration
+succeeds but the staged file list disappears, becomes unreadable or is truncated
+before ingestion finishes. A repaired retry rebuilds the artifacts from the current
+findings. Branch-review scope filtering
 aborts on a failed read without quarantining that source. Readable malformed
 frontmatter still produces a warning and is skipped. Each local finding is
 parsed from one complete temporary snapshot created with owner-only permissions;
