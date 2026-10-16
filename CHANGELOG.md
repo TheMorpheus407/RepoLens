@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Keep the default-rounds baseline test portable to BSD date by using its native parsing options when GNU date parsing is unavailable (repolens-r6-p3-3).
+- Keep the default-rounds baseline test portable to BSD date by using its native parsing options when GNU date parsing is unavailable, and preserve numeric result summaries for test runners (repolens-r6-p3-3).
 
 - Report failure and clean staged Markdown when a triage report output path is a directory or a symlink to one, preserving existing directory contents even if a directory appears during promotion; check the Python report prerequisite before starting sequential audits (repolens-r6-p2-5).
 

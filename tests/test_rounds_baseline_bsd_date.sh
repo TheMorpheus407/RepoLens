@@ -50,4 +50,4 @@ fi
 grep -qx 'BSD parsing used' "$BASELINE_TEST_DATE_LOG" || { echo 'FAIL: BSD parsing was not exercised'; exit 1; }
 grep -q 'Results:.*0 failed' "$FIXTURE/output" || { cat "$FIXTURE/output"; exit 1; }
 cat "$FIXTURE/output"
-echo 'Results: actual baseline suite passes with BSD date options'
+echo 'PASS: actual baseline suite passes with BSD date options'
