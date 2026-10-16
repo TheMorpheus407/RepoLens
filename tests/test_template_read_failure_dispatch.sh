@@ -135,23 +135,28 @@ done
 rendered="$(compose_prompt "$SCRIPT_DIR/prompts/_base/greenfield.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" '' "$TEST_DIR/missing-spec.md" greenfield)"
 check test "$?" -ne 0
 check test -z "$rendered"
-# Remove the required spec after the first existence check, immediately before
-# the read gate. DEBUG tracing makes the race deterministic without sleeps.
-# DEBUG callback: delete only the test spec when composition reaches its gate.
-vanish_spec_at_gate() {
-  if [[ "$1" == "[[ -n \"\$spec_file\" && "* ]]; then
+# Delete only the fixture at the read call, after the existence guard passed.
+# DEBUG tracing makes the check-to-read race deterministic without sleeps.
+vanish_spec_at_read() {
+  if [[ "$1" == 'read_spec_file "$spec_file"' && "${spec_file:-}" == "$TEST_DIR/vanishing-spec.md" ]]; then
+    printf 'read reached\n' > "$TEST_DIR/spec-read-reached"
     rm -f "$TEST_DIR/vanishing-spec.md"
   fi
 }
-printf 'Required product intent.\n' > "$TEST_DIR/vanishing-spec.md"
-rendered="$(
-  set -T
-  trap 'vanish_spec_at_gate "$BASH_COMMAND"' DEBUG
-  compose_prompt "$SCRIPT_DIR/prompts/_base/greenfield.md" "$SCRIPT_DIR/prompts/lenses/greenfield/backlog-planning.md" '' "$TEST_DIR/vanishing-spec.md" greenfield
-)"
-check test "$?" -ne 0
-check test -z "$rendered"
-check test ! -e "$TEST_DIR/vanishing-spec.md"
+for mode in audit greenfield spec-change; do
+  printf 'Required product intent.\n' > "$TEST_DIR/vanishing-spec.md"
+  rm -f "$TEST_DIR/spec-read-reached"
+  rendered="$(
+    set -T
+    trap 'vanish_spec_at_read "$BASH_COMMAND"' DEBUG
+    compose_prompt "$SCRIPT_DIR/prompts/_base/$mode.md" "$SCRIPT_DIR/prompts/lenses/security/injection.md" '' "$TEST_DIR/vanishing-spec.md" "$mode"
+  )"
+  check test "$?" -ne 0
+  check test -z "$rendered"
+  check test ! -e "$TEST_DIR/vanishing-spec.md"
+  # Prove the test reached the read instead of failing at the existence guard.
+  check test -s "$TEST_DIR/spec-read-reached"
+done
 # Remote execution partials remain optional when absent. A failed read of an
 # existing partial must stop composition before dispatch.
 export FAIL_TEMPLATE="$SCRIPT_DIR/prompts/_base/_remote_execution.md"
