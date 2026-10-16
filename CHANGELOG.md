@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve accepted meta dispatch, hypotheses and saturation across parse-time output read failures; parse a verified private snapshot with checked complete reads, reject late content changes and keep failed restores pending without extra model calls or rounds; reject failed hypothesis writes before publishing partial results (repolens-r7-p3-2).
+- Preserve accepted meta dispatch, hypotheses and saturation across parse-time output read failures; parse a verified private snapshot with checked complete reads, reject late content changes and keep failed restores pending without extra model calls or rounds. Reject failed hypothesis writes before publishing partial results (repolens-r7-p3-2).
 
 - Preserve the complete local finding registry, CSV and reports when an individual Markdown finding cannot be read, including during branch-review scope filtering. Parse each successfully read file from an owner-only temporary snapshot (repolens-r7-p2-2, repolens-r7-p3-1).
 
