@@ -61,7 +61,8 @@ test "$(cat "$saved/meta-orchestrator-success.json")" = "$proof_before" || exit 
 test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
 printf 'Results: unreadable handoff preserves proof and resumes without a model call\n'
 
-# Missing/non-file output is invalid evidence and permits one replacement call.
+# Missing/non-file output is invalid evidence. A directory at the output path
+# blocks dispatch until repaired; the subsequent resume makes one replacement call.
 for output_kind in missing directory; do
   LOG_BASE="$FIXTURE/$output_kind-output"
   completed_lenses_file="$LOG_BASE/.completed"
@@ -76,6 +77,13 @@ for output_kind in missing directory; do
   printf '%s saved output: restore_rc=%s (expected 1)\n' "$output_kind" "$restore_rc"
   test "$restore_rc" -eq 1 || exit 1
   if [[ "$output_kind" == directory ]]; then
+    resume_rc=0
+    run_rounds 2 LENSES || resume_rc=$?
+    printf 'directory still obstructs output: resume_rc=%s calls=%s\n' \
+      "$resume_rc" "$(wc -l < "$LOG_BASE/model-calls")"
+    test "$resume_rc" -ne 0 || exit 1
+    test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
+    test -d "$saved/meta-orchestrator-output.txt" || exit 1
     rmdir "$saved/meta-orchestrator-output.txt" || exit 1
   fi
   run_rounds 2 LENSES || exit 1
