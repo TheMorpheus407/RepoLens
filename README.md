@@ -437,6 +437,8 @@ Use `--max-issues` for controlled planning batches. `--max-issues 1` is useful f
 
 Before every planning iteration, RepoLens refreshes the current backlog snapshot: forge runs read all currently open issues, and `--local` runs read the existing draft markdown files under the greenfield output directory. The planner uses that snapshot to skip spec slices that are already covered and emits `DONE` when there is no non-duplicate implementation issue left to file. With `--local`, seed `<output-dir>/greenfield/backlog-planning/*.md` before a run if you want drafts created elsewhere to count as existing backlog. In forge mode, if RepoLens cannot load the current open issue backlog, it tells the planner not to create a new issue while duplicate checks are unavailable.
 
+A requested `--spec` file must remain present and readable whenever RepoLens composes a prompt. If it disappears or a read fails, RepoLens stops before dispatching that prompt and leaves the unfinished lens resumable. Restore the file and repeat the run with `--resume <run-id>`.
+
 ### Multi-file specifications
 
 Use `--spec-dir` when the product specification is split across several documents:

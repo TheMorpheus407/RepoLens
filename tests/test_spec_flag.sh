@@ -327,10 +327,10 @@ fi
 
 # --- Test 18: Nonexistent spec file in compose_prompt ---
 echo ""
-echo "Test 18: Nonexistent spec file — graceful handling"
+echo "Test 18: Nonexistent requested spec fails without a partial prompt"
 result="$(compose_prompt "$TMPDIR/base.md" "$TMPDIR/lens.md" "LENS_NAME=GhostBot" "/nonexistent/spec.md" "audit")"
-assert_not_contains "no spec section for nonexistent" "## Specification Reference" "$result"
-assert_not_contains "no artifact" '{{SPEC_SECTION}}' "$result"
+assert_exit_code "missing requested spec fails" 1 "$?"
+assert_eq "missing requested spec emits no prompt" "" "$result"
 
 # --- Summary ---
 echo ""

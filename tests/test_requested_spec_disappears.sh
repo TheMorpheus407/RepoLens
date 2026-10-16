@@ -25,6 +25,7 @@ trap 'rm -rf -- "$FIXTURE" "$RUN_DIR"' EXIT
 # shellcheck source=lib/template.sh
 source "$REPO/lib/template.sh"
 PASS=0 FAIL=0
+# Run an assertion and accumulate failures so the full scenario is checked.
 check() {
   if "$@"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); printf 'FAIL: %s\n' "$*"; fi
 }
@@ -53,6 +54,7 @@ set -euo pipefail
 printf '[]\n'
 FORGE
 chmod +x "$FIXTURE/bin/codex" "$FIXTURE/bin/gh"
+# Run or resume the two-lens audit with fixture-only model and forge stubs.
 run_cli() {
   env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
     PATH="$FIXTURE/bin:$PATH" REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \
