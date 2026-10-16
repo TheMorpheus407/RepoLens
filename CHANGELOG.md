@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Stop resume on unreadable lens completion receipts, preserving accepted meta handoffs and preventing repeated agent work (repolens-r9-p1-2).
+
 - Propagate every meta-dispatch write failure before promoting a restored handoff, preserving the accepted dispatch, hypotheses and success certificate for retry after ENOSPC (repolens-r8-p3-2). Saturated handoffs also reject a failed header write.
 
 - Reject incomplete Branch-Scope file enumeration before filtering or rebuilding local reports, preserving the previous registry and reports until a successful retry (repolens-r8-p3-1).

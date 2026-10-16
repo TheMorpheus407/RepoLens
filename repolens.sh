@@ -3483,7 +3483,7 @@ completed_lenses_file="$LOG_BASE/.completed"
 touch "$completed_lenses_file"
 
 is_lens_completed() {
-  grep -qxF "$1" "$completed_lenses_file" 2>/dev/null
+  _rounds_all_lenses_completed "$completed_lenses_file" "$1"
 }
 
 mark_lens_completed() {
@@ -4631,6 +4631,9 @@ run_lens() {
   if is_lens_completed "$lens_tuple"; then
     log_info "[$domain/$lens_id] Skipping (already completed in previous run)"
     return 0
+  elif (( $? == 2 )); then
+    log_error "[$domain/$lens_id] Unable to read completion receipts; leaving investigation pending."
+    return 1
   fi
 
   # Attributed investigations share a canonical lens but own their execution

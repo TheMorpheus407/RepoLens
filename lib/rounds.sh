@@ -140,13 +140,17 @@ _rounds_restore_completed_lenses_file() {
 _rounds_all_lenses_completed() {
   local completion_file="$1"
   shift
-  local lens_entry
+  local lens_entry receipts
 
-  [[ -n "$completion_file" && -f "$completion_file" ]] || return 1
+  [[ -n "$completion_file" ]] || return 1
+  [[ -e "$completion_file" || -L "$completion_file" ]] || return 1
+  [[ -f "$completion_file" ]] || return 2
+  # Snapshot all bytes before checking membership; grep -q may hide read errors.
+  receipts="$(cat "$completion_file")" || return 2
 
   for lens_entry in "$@"; do
     # Receipts bind the full dispatch, including its role/focus/anchor/exclusions.
-    grep -qxF "$lens_entry" "$completion_file" 2>/dev/null || return 1
+    grep -qxF -- "$lens_entry" <<< "$receipts" || return 1
   done
 
   return 0
@@ -2892,6 +2896,9 @@ run_rounds() {
         log_info "[round $round/$rounds_total] Skipping completed round"
         continue
       fi
+    elif (( $? == 2 )); then
+      log_warn "[round $round] Unable to read lens completion receipts; preserving accepted handoff"
+      return 1
     elif (( round < rounds_total )); then
       # Pending lens work changes the handoff's inputs. Retire old acceptance
       # before a callback can finish and be interrupted ahead of fresh meta work.
