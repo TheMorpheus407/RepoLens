@@ -59,6 +59,11 @@ sample remains publishable, while a fenced `src/missing.sh:1` fails if that file
 does not exist.
 Commas and semicolons within URL tokens remain URL bytes. A following bare
 source reference requires whitespace and is checked independently.
+URL masking accepts schemes beginning with a letter, followed by letters,
+digits, `+`, `.` or `-`, and then `://`, including uppercase and custom schemes.
+URL bytes cannot supply source evidence or a snippet boundary. The dedicated
+`tests/test_opaque_url_citations.sh` suite checks extraction, live verification,
+mocked cross-link publication, and snippet binding before and after URL tokens.
 
 Inline citation spans use complete matching backtick runs on the same line,
 including double or longer delimiters. Shorter runs inside a span are literal
