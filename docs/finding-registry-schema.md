@@ -67,6 +67,13 @@ After a successful empty local rebuild, finalization removes stale `TODO.md`,
 `SUMMARY.md`, `NEEDS_REVIEW.md` and `DUPLICATES.md`. Failed or interrupted rebuilds
 retain existing reports. Raw Markdown evidence is retained in every case.
 
+Triage reports replace their requested file paths atomically. A directory or
+symlink to a directory at a report path causes generation to fail, preserving
+the directory contents and cleaning staged Markdown. Promotion never puts a
+staged report inside a directory, even if another writer creates that directory
+during generation. Finalization warns and continues when a report cannot be
+written; the duplicate report is linked only after successful generation.
+
 ## Record schema
 
 One JSON object per line in `findings.jsonl`, with these 13 fields:

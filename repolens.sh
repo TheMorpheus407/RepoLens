@@ -2581,6 +2581,7 @@ export FORGE_REPO
 validate_agent "$AGENT"
 require_cmd git
 require_cmd jq
+require_cmd python3
 require_cmd timeout
 
 require_agent_cmd "$AGENT"
