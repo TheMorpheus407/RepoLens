@@ -15,26 +15,26 @@
 
 # Regression: repolens-r6-p2-4. Field separators cannot collide with literal pipes.
 # shellcheck disable=SC2329
-set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$REPO/lib/rounds.sh"
-FIXTURE="$(mktemp -d)"
+set -uo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+source "$REPO/lib/rounds.sh" || exit 1
+FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf "$FIXTURE"' EXIT
 LENSES_DIR="$REPO/prompts/lenses" MODE=bugreport REPOLENS_META_ORCH_DISPATCH_CAP=8
-cat > "$FIXTURE/input" <<'DATA'
+cat > "$FIXTURE/input" <<'DATA' || exit 1
 LENS: injection role=deeper focus="src/a|src/b" anchor="prior7" exclude="checks"
 LENS: injection role=deeper focus="src/a" anchor="src/b|prior7" exclude="checks"
 GENERIC: role=broader focus="a|b" anchor="c" exclude="d"
 GENERIC: role=broader focus="a" anchor="b|c" exclude="d"
 DATA
 # Readers must preserve distinct tuples even without the parser staging step.
-[[ "$(_rounds_meta_dispatch_lens_entries "$FIXTURE/input" | wc -l)" -eq 2 ]]
-[[ "$(_rounds_meta_dispatch_generic_entries "$FIXTURE/input" | wc -l)" -eq 2 ]]
+[[ "$(_rounds_meta_dispatch_lens_entries "$FIXTURE/input" | wc -l)" -eq 2 ]] || exit 1
+[[ "$(_rounds_meta_dispatch_generic_entries "$FIXTURE/input" | wc -l)" -eq 2 ]] || exit 1
 # Duplicate exact tuples remain deduplicated; four distinct requests survive.
-cat "$FIXTURE/input" "$FIXTURE/input" > "$FIXTURE/repeated"
-_rounds_meta_parse_output "$FIXTURE/repeated" "$FIXTURE/dispatch" "$FIXTURE/hypotheses"
-[[ "$(grep -c '^LENS:' "$FIXTURE/dispatch")" -eq 2 ]]
-[[ "$(grep -c '^GENERIC:' "$FIXTURE/dispatch")" -eq 2 ]]
-[[ "$(_rounds_meta_dispatch_lens_entries "$FIXTURE/dispatch" | wc -l)" -eq 2 ]]
-[[ "$(_rounds_meta_dispatch_generic_entries "$FIXTURE/dispatch" | wc -l)" -eq 2 ]]
+cat "$FIXTURE/input" "$FIXTURE/input" > "$FIXTURE/repeated" || exit 1
+_rounds_meta_parse_output "$FIXTURE/repeated" "$FIXTURE/dispatch" "$FIXTURE/hypotheses" || exit 1
+[[ "$(grep -c '^LENS:' "$FIXTURE/dispatch")" -eq 2 ]] || exit 1
+[[ "$(grep -c '^GENERIC:' "$FIXTURE/dispatch")" -eq 2 ]] || exit 1
+[[ "$(_rounds_meta_dispatch_lens_entries "$FIXTURE/dispatch" | wc -l)" -eq 2 ]] || exit 1
+[[ "$(_rounds_meta_dispatch_generic_entries "$FIXTURE/dispatch" | wc -l)" -eq 2 ]] || exit 1
 echo 'Results: distinct pipe-valued requests survive parser and readers'

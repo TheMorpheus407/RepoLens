@@ -422,6 +422,9 @@ run_meta_orchestrator() {
 
   vars="$(_rounds_meta_prompt_vars "$round" "$next_round" "$digest_path" "$project_path")"
   if ! prompt="$(compose_prompt "$template_file" "$template_file" "$vars" "" "${MODE:-audit}")"; then
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
     _rounds_meta_warn "Unable to compose meta-orchestrator prompt from $template_file"
     printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
     ROUNDS_FAILURE_REASON="prompt-render-failed"
@@ -507,21 +510,28 @@ _rounds_meta_certify_success() {
 # Return 1 for absent/invalid proof; 2 when verification or installation cannot
 # finish. Matching artifacts retain their bytes and modification times.
 _rounds_meta_restore_success() {
-  local dir="$1" fingerprint staging="" rc=0 name legacy_format
+  local dir="$1" fingerprint saved_proof staging="" rc=0 name legacy_format
   META_ORCH_SATURATED=0
   [[ -f "$dir/meta-orchestrator-success.json" ]] || return 1
+  # Reject missing/non-file output only in a searchable directory. A
+  # certificate alone cannot recover it; a replacement invocation is required.
+  if [[ ! -f "$dir/meta-orchestrator-output.txt" && -r "$dir" && -x "$dir" ]]; then
+    return 1
+  fi
   # A failed read/hash cannot disprove an accepted handoff. Keep it pending
   # so resume preserves the proof instead of admitting a fresh model call.
   fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 2
+  # Read once, distinguishing IO failure from a readable invalid certificate.
+  saved_proof="$(cat "$dir/meta-orchestrator-success.json")" || return 2
   if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
-      "$dir/meta-orchestrator-success.json" >/dev/null 2>&1; then
+      <<< "$saved_proof" >/dev/null 2>&1; then
     # Older v1 proofs used the invocation repository's object format. Verify
     # their exact bytes in that format without rewriting accepted certificates.
     legacy_format="$(jq -er --argjson expected "$fingerprint" '
       select((.output | length) != ($expected.output | length)) | .output | strings |
       if test("^[0-9a-f]{40}$") then "sha1"
       elif test("^[0-9a-f]{64}$") then "sha256" else empty end' \
-      "$dir/meta-orchestrator-success.json" 2>/dev/null)" || return 1
+      <<< "$saved_proof" 2>/dev/null)" || return 1
     staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
     if ! _rounds_meta_git init -q --bare --template= --object-format="$legacy_format" "$staging/hash-context" \
         || ! fingerprint="$(_rounds_meta_result_fingerprint "$dir" "$staging/hash-context")"; then
@@ -529,7 +539,7 @@ _rounds_meta_restore_success() {
       return 2
     fi
     if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
-        "$dir/meta-orchestrator-success.json" >/dev/null 2>&1; then
+        <<< "$saved_proof" >/dev/null 2>&1; then
       rm -rf "$staging"
       return 1
     fi
@@ -727,31 +737,30 @@ _rounds_meta_tuple_parse() {
 # and key=`path/to/file:line` style tokens that contain backticks.
 # Writes the extracted value to stdout. Returns 0 if the key was found.
 _rounds_meta_extract_kv() {
-  local key="$1" haystack="$2"
-  local pattern_dq pattern_sq pattern_bt pattern_token
-
-  pattern_dq="(^|[[:space:]])${key}=\"([^\"]*)\""
-  pattern_sq="(^|[[:space:]])${key}='([^']*)'"
-  pattern_bt="(^|[[:space:]])${key}=\`([^\`]*)\`"
-  pattern_token="(^|[[:space:]])${key}=([^[:space:]\"\`']+)"
-
-  if [[ "$haystack" =~ $pattern_dq ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
-    return 0
-  fi
-  if [[ "$haystack" =~ $pattern_sq ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
-    return 0
-  fi
-  if [[ "$haystack" =~ $pattern_bt ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
-    return 0
-  fi
-  if [[ "$haystack" =~ $pattern_token ]]; then
-    printf '%s' "${BASH_REMATCH[2]}"
-    return 0
-  fi
-
+  local key="$1" haystack="$2" pattern matched_key matched_value consumed
+  # Consume whole attributes from left to right, so quoted contents cannot
+  # masquerade as sibling attributes (for example focus='see anchor="decoy"').
+  pattern="^[[:space:]]*([[:alnum:]_]+)=(\"[^\"]*\"|'[^']*'|\`[^\`]*\`|[^[:space:]\"\`']+)"
+  while [[ -n "$haystack" ]]; do
+    if [[ "$haystack" =~ $pattern ]]; then
+      consumed="${BASH_REMATCH[0]}"
+      matched_key="${BASH_REMATCH[1]}"
+      matched_value="${BASH_REMATCH[2]}"
+      if [[ "$matched_key" == "$key" ]]; then
+        case "${matched_value:0:1}" in
+          '"'|"'"|'`') matched_value="${matched_value:1:${#matched_value}-2}" ;;
+        esac
+        printf '%s' "$matched_value"
+        return 0
+      fi
+      haystack="${haystack:${#consumed}}"
+    else
+      # Retain compatibility with non-attribute tokens surrounding attributes.
+      haystack="$(_rounds_meta_trim "$haystack")"
+      if [[ "$haystack" != *[[:space:]]* ]]; then break; fi
+      haystack="${haystack#*[[:space:]]}"
+    fi
+  done
   return 1
 }
 
@@ -776,13 +785,20 @@ _rounds_meta_format_kv() {
 # remaining text is purely the attribute key=value section. The trailing
 # " - " separator is the canonical rationale boundary used in the schema.
 _rounds_meta_strip_rationale() {
-  local value="$1"
+  local value="$1" quote="" char previous="" i
 
-  if [[ "$value" =~ ^(.+)[[:space:]]-[[:space:]] ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-    return 0
-  fi
-
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    if [[ -n "$quote" ]]; then
+      if [[ "$char" == "$quote" ]]; then quote=""; fi
+    elif [[ "$previous" == '=' && ( "$char" == '"' || "$char" == "'" || "$char" == '`' ) ]]; then
+      quote="$char"
+    elif [[ "$char" == '-' && "$previous" == [[:space:]] && "${value:i+1:1}" == [[:space:]] ]]; then
+      printf '%s' "${value:0:i-1}"
+      return 0
+    fi
+    previous="$char"
+  done
   printf '%s' "$value"
 }
 

@@ -15,11 +15,11 @@
 
 # Regression: repolens-r6-p2-2. No real model calls.
 # shellcheck disable=SC1091,SC2034,SC2329 # sourced APIs use named arrays and globals
-set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE="$(mktemp -d)"
+set -uo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+FIXTURE="$(mktemp -d)" || exit 1
 trap 'chmod -R u+rwx "$FIXTURE"; rm -rf -- "$FIXTURE"' EXIT
-source "$REPO/lib/rounds.sh"
+source "$REPO/lib/rounds.sh" || exit 1
 log_info() { :; }
 log_warn() { printf '%s\n' "$*" >&2; }
 set_stop_reason() { :; }
@@ -27,18 +27,18 @@ record_lens() { :; }
 compose_prompt() { printf 'meta prompt'; }
 run_agent() { printf 'called\n' >> "$LOG_BASE/model-calls"; printf 'NO_FRESH_ANGLES\n'; }
 run_lens() { printf '%s\n' "$1" >> "$completed_lenses_file"; }
-build_round_digest() { mkdir -p "$1"; printf 'digest\n' > "$1/digest.md"; }
+build_round_digest() { mkdir -p "$1" || return 1; printf 'digest\n' > "$1/digest.md"; }
 LOCAL_MODE=false PARALLEL=false RUN_ID=probe MODE=bugreport AGENT=mock
 LOG_BASE="$FIXTURE/run" SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
 LENSES=(security/injection)
 rc=0
 run_rounds 2 LENSES || rc=$?
-test "$rc" -eq 0
+test "$rc" -eq 0 || exit 1
 saved="$LOG_BASE/rounds/round-1"
-test -s "$saved/meta-orchestrator-success.json"
-proof_before=$(cat "$saved/meta-orchestrator-success.json")
+test -s "$saved/meta-orchestrator-success.json" || exit 1
+proof_before=$(cat "$saved/meta-orchestrator-success.json") || exit 1
 RESUME_RUN_ID=probe
-chmod 000 "$saved/meta-orchestrator-output.txt"
+chmod 000 "$saved/meta-orchestrator-output.txt" || exit 1
 if [[ -r "$saved/meta-orchestrator-output.txt" ]]; then
   _rounds_meta_git() { return 1; }
 fi
@@ -48,15 +48,70 @@ printf 'unreadable saved output: restore_rc=%s (2 is pending/verification-unavai
 resume_rc=0
 run_rounds 2 LENSES || resume_rc=$?
 printf 'resume_rc=%s proof=%s calls=%s\n' "$resume_rc" "$(test -s "$saved/meta-orchestrator-success.json" && echo present || echo DELETED)" "$(wc -l < "$LOG_BASE/model-calls")"
-chmod 600 "$saved/meta-orchestrator-output.txt"
+chmod 600 "$saved/meta-orchestrator-output.txt" || exit 1
 # Reload the real hash helper after the root-only failure injection.
-source "$REPO/lib/rounds.sh"
+source "$REPO/lib/rounds.sh" || exit 1
 repair_rc=0
 run_rounds 2 LENSES || repair_rc=$?
-test "$repair_rc" -eq 0
+test "$repair_rc" -eq 0 || exit 1
 printf 'after permission repair: model calls=%s (expected 1)\n' "$(wc -l < "$LOG_BASE/model-calls")"
-test "$restore_rc" -eq 2
-test "$resume_rc" -ne 0
-test "$(cat "$saved/meta-orchestrator-success.json")" = "$proof_before"
-test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1
-printf 'Results: unreadable handoff preserves proof and resumes without a model call\n' 
+test "$restore_rc" -eq 2 || exit 1
+test "$resume_rc" -ne 0 || exit 1
+test "$(cat "$saved/meta-orchestrator-success.json")" = "$proof_before" || exit 1
+test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
+printf 'Results: unreadable handoff preserves proof and resumes without a model call\n'
+
+# Missing/non-file output is invalid evidence and permits one replacement call.
+for output_kind in missing directory; do
+  LOG_BASE="$FIXTURE/$output_kind-output"
+  completed_lenses_file="$LOG_BASE/.completed"
+  run_rounds 2 LENSES || exit 1
+  saved="$LOG_BASE/rounds/round-1"
+  rm "$saved/meta-orchestrator-output.txt" || exit 1
+  if [[ "$output_kind" == directory ]]; then
+    mkdir "$saved/meta-orchestrator-output.txt" || exit 1
+  fi
+  restore_rc=0
+  _rounds_meta_restore_success "$saved" || restore_rc=$?
+  printf '%s saved output: restore_rc=%s (expected 1)\n' "$output_kind" "$restore_rc"
+  test "$restore_rc" -eq 1 || exit 1
+  if [[ "$output_kind" == directory ]]; then
+    rmdir "$saved/meta-orchestrator-output.txt" || exit 1
+  fi
+  run_rounds 2 LENSES || exit 1
+  test "$(wc -l < "$LOG_BASE/model-calls")" -eq 2 || exit 1
+done
+
+# Inject a certificate read error even when running as root. Both historical
+# jq file reads and the certificate snapshot read must see the same IO failure.
+LOG_BASE="$FIXTURE/unreadable-certificate"
+completed_lenses_file="$LOG_BASE/.completed"
+run_rounds 2 LENSES || exit 1
+saved="$LOG_BASE/rounds/round-1"
+proof_before=$(cat "$saved/meta-orchestrator-success.json") || exit 1
+UNREADABLE_CERT="$saved/meta-orchestrator-success.json"
+cat() {
+  if [[ "$*" == "$UNREADABLE_CERT" ]]; then return 1; fi
+  command cat "$@"
+}
+jq() {
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "$UNREADABLE_CERT" ]]; then return 2; fi
+  done
+  command jq "$@"
+}
+restore_rc=0
+_rounds_meta_restore_success "$saved" || restore_rc=$?
+resume_rc=0
+run_rounds 2 LENSES || resume_rc=$?
+printf 'unreadable certificate: restore_rc=%s resume_rc=%s calls=%s\n' \
+  "$restore_rc" "$resume_rc" "$(wc -l < "$LOG_BASE/model-calls")"
+unset -f cat jq || exit 1
+test "$restore_rc" -eq 2 || exit 1
+test "$resume_rc" -ne 0 || exit 1
+test "$(cat "$saved/meta-orchestrator-success.json")" = "$proof_before" || exit 1
+test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
+run_rounds 2 LENSES || exit 1
+test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
+printf 'Results: missing output regenerates; certificate read errors preserve acceptance\n'
