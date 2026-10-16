@@ -91,5 +91,39 @@ for outcome in success failure; do
     check test "${_REPOLENS_FILING_RECONCILING:-0}" -eq 0
   done
 done
+# A signal after the last state check must still stop startup. DEBUG runs
+# immediately before the real helper's final return, making the race repeatable.
+for signal in HUP INT TERM; do
+  LOG_BASE="$FIXTURE/late-$signal" SUMMARY_FILE="$FIXTURE/late-$signal/summary.json"
+  RUN_ID=probe MODE=branch-review LOCAL_MODE=false FORGE_REPO=acme/probe MAX_ISSUES=10
+  REPOLENS_FINAL_STATE=finished cancel_read=false
+  mkdir -p "$LOG_BASE/final/filed"
+  init_summary "$SUMMARY_FILE" probe "$FIXTURE" branch-review mock '' 10 github ''
+  rc=0
+  (
+    parent_pid=$BASHPID
+    trap '_handle_hangup' HUP
+    trap '_handle_interrupt' INT
+    trap '_handle_termination' TERM
+    print_resume_hint() { : > "$LOG_BASE/resume-hint"; }
+    set -T
+    # shellcheck disable=SC2154 # Match the sourced helper's command literally.
+    trap 'if [[ ${FUNCNAME[0]:-} == _reconcile_initial_filing_counts && $BASH_COMMAND == "return \"\$count_rc\"" ]]; then
+      trap - DEBUG
+      : > "$LOG_BASE/boundary-hit"
+      kill -s "$signal" "$parent_pid"
+    fi' DEBUG
+    startup_count
+    : > "$LOG_BASE/continued"
+  ) || rc=$?
+  expected=143
+  case "$signal" in HUP) expected=129 ;; INT) expected=130 ;; esac
+  check test -f "$LOG_BASE/boundary-hit"
+  check test "$rc" -eq "$expected"
+  check test ! -e "$LOG_BASE/continued"
+  check test -f "$LOG_BASE/resume-hint"
+  check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 0
+  check test "$(find "$LOG_BASE" -name '.initial-filing-count.*' | wc -l)" -eq 0
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

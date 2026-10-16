@@ -4533,6 +4533,8 @@ if [[ ! -f "$SUMMARY_FILE" ]] || [[ -z "$RESUME_RUN_ID" ]]; then
 fi
 
 # --- Global issue counter ---
+# Reattest saved receipts for a run ID and replace the summary filing count.
+# Return the accepted signal code on cancellation, otherwise the count status.
 _reconcile_initial_filing_counts() {
   local run_id="$1" count_file verified count_rc=0
   # The CLI handlers return while receipt reconciliation owns this scope.
@@ -4552,6 +4554,9 @@ _reconcile_initial_filing_counts() {
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   reconcile_summary_filing "$SUMMARY_FILE" "$verified" "$MAX_ISSUES" || return 1
+  # Staging is gone and accounting is complete; restore exiting handlers before
+  # the last guard so a later signal cannot return into successful startup.
+  _REPOLENS_FILING_RECONCILING=0
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   return "$count_rc"
