@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Include actually dispatched generated Custom investigators in round digests while retaining exact domain/lens trust checks (repolens-r9-p2-1).
+
 - Keep opaque URL tokens out of citation-list validation for uppercase and custom URI schemes, allowing independently grounded findings and cross-link comments to publish (repolens-r9-p1-1).
 
 - Deliver each Generic investigator finding into explicit local output, with source/segment provenance, stable identities and retryable publication; respect severity and dispatch eligibility, handle large evidence, roll back cancellation at mutation boundaries, recover process-interrupted publication on resume, and keep overlapping-output resumes idempotent without duplicate private-manifest representations (repolens-r9-p4-2).
