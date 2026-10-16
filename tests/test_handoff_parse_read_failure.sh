@@ -241,5 +241,91 @@ rc=0
   _rounds_meta_no_fresh_angles "$FIXTURE/eof-input"
 ) || rc=$?
 check test "$rc" -eq 2
+# repolens-r8-p3-2: dispatch writes must not be masked by a later successful
+# printf or the false final CUSTOM conditional. Exercise real certified restore.
+for writer_kind in lens generic both custom saturated; do
+  writer_saved="$FIXTURE/dispatch-write-$writer_kind"
+  writer_expected="$FIXTURE/dispatch-write-$writer_kind-expected"
+  must mkdir -p "$writer_saved" "$writer_expected"
+  case "$writer_kind" in
+    lens|both)
+      must printf 'LENS: injection role=deeper focus="query handling"\n' > "$writer_saved/meta-orchestrator-output.txt" ;;
+    *) : > "$writer_saved/meta-orchestrator-output.txt" ;;
+  esac
+  case "$writer_kind" in
+    generic|both)
+      must printf 'GENERIC: role=broader focus="retry behavior"\n' >> "$writer_saved/meta-orchestrator-output.txt" ;;
+    custom)
+      must cat >> "$writer_saved/meta-orchestrator-output.txt" <<'EOF'
+CUSTOM: first-write role=deeper
+  ```prompt
+  Inspect the first write.
+  ```
+CUSTOM: second-write role=broader
+  ```prompt
+  Inspect the second write.
+  ```
+EOF
+      ;;
+    saturated) must printf 'NO_FRESH_ANGLES\n' >> "$writer_saved/meta-orchestrator-output.txt" ;;
+  esac
+  must printf 'HYPOTHESES_TO_VERIFY:\nRetain this accepted hypothesis\n' >> "$writer_saved/meta-orchestrator-output.txt"
+  must _rounds_meta_certify_success "$writer_saved"
+  must _rounds_meta_restore_success "$writer_saved"
+  for writer_name in dispatch.md hypotheses.md meta-orchestrator-success.json; do
+    must cp "$writer_saved/$writer_name" "$writer_expected/$writer_name"
+  done
+  for writer_fault in header lens generic custom_first custom_last saturated_marker; do
+    case "$writer_fault:$writer_kind" in
+      header:*|lens:lens|lens:both|generic:generic|generic:both|custom_first:custom|custom_last:custom|saturated_marker:saturated) ;;
+      *) continue ;;
+    esac
+    writer_fault_hits=0 writer_later_success=0
+    # Fail only the selected dispatch writer. On Linux use the real kernel
+    # ENOSPC result; other systems retain the same deterministic failure.
+    printf() {
+      if [[ "${FUNCNAME[1]:-}" == _rounds_meta_parse_output_stream || "${FUNCNAME[1]:-}" == _rounds_meta_write_no_fresh_dispatch ]] \
+          && { [[ "$writer_fault" == header && "${1:-}" == '# Meta-Orchestrator Dispatch'* ]] \
+            || [[ "$writer_fault" == lens && "${2:-}" == LENS:* ]] \
+            || [[ "$writer_fault" == generic && "${2:-}" == GENERIC:* ]] \
+            || [[ "$writer_fault" == custom_first && "${2:-}" == CUSTOM:\ first-write* ]] \
+            || [[ "$writer_fault" == custom_last && "${2:-}" == CUSTOM:\ second-write* ]] \
+            || [[ "$writer_fault" == saturated_marker && "${1:-}" == 'NO_FRESH_ANGLES'* ]]; }; then
+        writer_fault_hits=$((writer_fault_hits + 1))
+        if [[ -c /dev/full ]]; then
+          # shellcheck disable=SC2059 # Forward the selected writer's format.
+          builtin printf "$@" > /dev/full
+          return $?
+        fi
+        return 1
+      fi
+      # Confirm the masking scenario: the second CUSTOM write really succeeds
+      # after the first fails, rather than silently disappearing from the fixture.
+      if [[ "$writer_fault" == custom_first && "${FUNCNAME[1]:-}" == _rounds_meta_parse_output_stream && "${2:-}" == CUSTOM:\ second-write* ]]; then
+        # shellcheck disable=SC2059 # Forward the later writer's format.
+        builtin printf "$@" || return $?
+        writer_later_success=$((writer_later_success + 1))
+        return 0
+      fi
+      # shellcheck disable=SC2059 # Forward normal printf calls unchanged.
+      builtin printf "$@"
+    }
+    write_restore_rc=0
+    _rounds_meta_restore_success "$writer_saved" || write_restore_rc=$?
+    unset -f printf
+    builtin printf 'dispatch writer=%s fault=%s restore_rc=%s\n' "$writer_kind" "$writer_fault" "$write_restore_rc"
+    check test "$writer_fault_hits" -eq 1
+    if [[ "$writer_fault" == custom_first ]]; then check test "$writer_later_success" -eq 1; fi
+    check test "$write_restore_rc" -eq 2
+    for writer_name in dispatch.md hypotheses.md meta-orchestrator-success.json; do
+      check cmp "$writer_expected/$writer_name" "$writer_saved/$writer_name"
+    done
+    check test "$(find "$writer_saved" -name '.handoff.*' -o -name '.meta-parse.*' -o -name '*.tmp.*' | wc -l)" -eq 0
+    must _rounds_meta_restore_success "$writer_saved"
+    for writer_name in dispatch.md hypotheses.md meta-orchestrator-success.json; do
+      check cmp "$writer_expected/$writer_name" "$writer_saved/$writer_name"
+    done
+  done
+done
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))
