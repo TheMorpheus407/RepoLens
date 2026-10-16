@@ -1706,8 +1706,8 @@ _rounds_meta_write_no_fresh_dispatch() {
 
   tmp_dispatch="${dispatch_file}.tmp.$$"
   {
-    printf '# Meta-Orchestrator Dispatch\n\n'
-    printf 'NO_FRESH_ANGLES\n'
+    printf '# Meta-Orchestrator Dispatch\n\n' &&
+      printf 'NO_FRESH_ANGLES\n'
   } > "$tmp_dispatch" || {
     rm -f "$tmp_dispatch"
     return 1
