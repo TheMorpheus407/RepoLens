@@ -19,8 +19,8 @@
 # --human-review digest renders. This file ONLY classifies + selects the
 # ranking key; it renders no Markdown, groups no themes, and does no held-back
 # accounting (those are separate issues). Sourced, never executed directly.
-# Pure: function-only, no top-level side effects, no global mutation, safe under
-# `set -uo pipefail`.
+# The only source-time state is the private module root, captured before callers
+# can change directories. Helpers do not mutate globals; safe under `set -uo pipefail`.
 #
 # Self-contained: the bucket predicates and risk ordering are done inside a
 # single `jq -s` (slurp) pass so this file can be sourced alone, mirroring
@@ -37,6 +37,9 @@
 # prints a valid JSON object — an empty / missing / unreadable / all-blank
 # registry yields all-empty buckets, never an error.
 set -uo pipefail
+
+# Resolve relative BASH_SOURCE while it still refers to the source-time cwd.
+_HUMAN_REVIEW_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # _human_review_security_domains
 #   Prints a JSON array of the security-ish domain ids (lowercased): every domain
@@ -202,12 +205,10 @@ human_review_bucketize() {
 }
 
 # _human_review_repo_root
-#   Prints the repo root (the parent of lib/). Mirrors the sibling finalize
-#   helpers (_synthesize_repo_root / _verify_repo_root). Pure; prints one path.
+#   Prints the source-time repo root (the parent of lib/), independent of later
+#   directory changes. Pure; prints one path.
 _human_review_repo_root() {
-  local source_dir
-  source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || source_dir="."
-  (cd -- "$source_dir/.." 2>/dev/null && pwd) || printf '%s' "$source_dir/.."
+  printf '%s\n' "$_HUMAN_REVIEW_REPO_ROOT"
 }
 
 # _human_review_log_base <run_id>
