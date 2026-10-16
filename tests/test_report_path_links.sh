@@ -30,7 +30,7 @@ for variant in plain spaces special; do
     special) project="$TMPROOT/project [ä] with \\ spaces #?%" ;;
   esac
   LOG_BASE="$TMPROOT/run-$variant"
-  PROJECT_PATH="$project"
+  export PROJECT_PATH="$project"
   mkdir -p "$LOG_BASE/final" "$project"
   path="$project/finding (a)[b].md"
   [[ "$variant" != plain ]] || path="$project/finding.md"
