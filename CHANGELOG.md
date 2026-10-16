@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve parsed citation and complete code-span boundaries when binding snippets, including emphasized and repeated quoted references, so embedded reference text cannot skip evidence checks.
+
 - Verify each same-line citation against its own attached code snippet, including repeated references, before publishing issues or cross-links (repolens-r8-p1-2).
 
 - Respect complete inline backtick-span boundaries when extracting citations, preventing unrelated path suffixes from passing branch scope while retaining double-backtick and fenced supporting references for validation (repolens-r8-p1-1).

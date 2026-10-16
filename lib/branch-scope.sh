@@ -30,22 +30,70 @@
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
-  local body="$1" quoted_marker='quoted'
+  _repolens_scan_citations "$1" | sort -u
+}
+
+# Emit the first complete noncitation code span attached to each occurrence of
+# the requested citation. Share parsing and positions with extraction so prose,
+# URLs and citation-like text within snippets cannot become source boundaries.
+repolens_citation_snippets() {
+  _repolens_scan_citations "$1" "$2"
+}
+
+# Scan once per request, retaining occurrence and complete code-span positions.
+# With a second argument emit its snippets; otherwise emit all source citations.
+_repolens_scan_citations() {
+  local body="$1" snippet_citation="${2:-}" quoted_marker='quoted'
   # Use a letter sequence absent from the input. Masking excluded spans with
   # '@' cannot fabricate that sequence or impersonate a quoted list member.
   while [[ "$body" == *"$quoted_marker"* ]]; do quoted_marker+='q'; done
   quoted_marker="@$quoted_marker@"
-  awk -v quoted_marker="$quoted_marker" '
+  REPOLENS_SNIPPET_CITATION="$snippet_citation" awk -v quoted_marker="$quoted_marker" '
+        # Map masked characters to their original line positions. Placeholders
+        # may change length; later bare references must keep their real offsets.
+        function append_mask(text, origin, i, base) {
+          base = length(masked)
+          for (i = 1; i <= length(text); i++) original[base + i] = origin + i - 1
+          masked = masked text
+        }
+        function remember_reference(text, start, end) {
+          reference[start] = text
+          reference_end[start] = end
+        }
+        function emit_snippets(line_length, pos, next_pos, first, i, snippet) {
+          first = 1
+          for (pos = 1; pos <= line_length; pos++) {
+            if (!(pos in reference)) continue
+            next_pos = pos + 1
+            while (next_pos <= line_length && !(next_pos in reference)) next_pos++
+            snippet = ""
+            for (i = 1; i <= span_count; i++) {
+              if (span_start[i] > reference_end[pos] && span_end[i] < next_pos) {
+                snippet = span_text[i]
+                break
+              }
+            }
+            # Only the first actual citation may use preceding evidence.
+            if (snippet == "" && first) {
+              for (i = 1; i <= span_count; i++) {
+                if (span_end[i] < pos) { snippet = span_text[i]; break }
+              }
+            }
+            if (reference[pos] == ENVIRON["REPOLENS_SNIPPET_CITATION"] && snippet != "") print snippet
+            first = 0
+          }
+        }
         # Consume complete, equal-length tick runs from left to right. Shorter
         # runs inside a span are literal and cannot manufacture a citation.
         # Scan each line independently so multiline fences leave their source
         # references available to the existing bare/quoted citation grammar.
-        function mask_spans(value, result, start, width, tail, offset, run, content, path) {
-          result = ""
+        function mask_spans(value, start, width, tail, offset, run, content, path, consumed) {
+          masked = ""
+          consumed = 0
           while (match(value, /`+/)) {
             start = RSTART
             width = RLENGTH
-            result = result substr(value, 1, start - 1)
+            append_mask(substr(value, 1, start - 1), consumed + 1)
             tail = substr(value, start + width)
             offset = run = 0
             while (match(tail, /`+/)) {
@@ -57,7 +105,8 @@ repolens_extract_citations() {
             if (run != width) {
               # An unmatched run is literal. Later complete spans can still
               # supply independent evidence, but cannot reuse its ticks.
-              result = result substr(value, start, width)
+              append_mask(substr(value, start, width), consumed + start)
+              consumed += start + width - 1
               value = substr(value, start + width)
               continue
             }
@@ -66,12 +115,25 @@ repolens_extract_citations() {
             sub(/:[0-9]+(-[0-9]+)?$/, "", path)
             if (content ~ /^[^`]+:[0-9]+(-[0-9]+)?$/ &&
                 path !~ /:\/\// && path !~ /^[0-9:]+$/) {
-              print content
-              result = result quoted_marker
-            } else result = result "@"
+              if (ENVIRON["REPOLENS_SNIPPET_CITATION"] == "") print content
+              remember_reference(content, consumed + start, consumed + start + width + offset - 1)
+              append_mask(quoted_marker, consumed + start)
+            } else {
+              # Preserve the legacy exclusion of location-shaped spans,
+              # including quoted URL ports and timestamps, from snippets.
+              if (content !~ /^.+:[0-9]+(-[0-9]+)?$/) {
+                span_count++
+                span_start[span_count] = consumed + start
+                span_end[span_count] = consumed + start + width + offset - 1
+                span_text[span_count] = content
+              }
+              append_mask("@", consumed + start)
+            }
+            consumed += start + width + offset - 1
             value = substr(value, start + width + offset)
           }
-          return result value
+          append_mask(value, consumed + 1)
+          return masked
         }
         function unwrap(value, first, last) {
           first = substr(value, 1, 1)
@@ -125,11 +187,25 @@ repolens_extract_citations() {
           return invalid ? "" : result
         }
         {
+          delete reference
+          delete reference_end
+          span_count = 0
           value = mask_spans($0)
-          gsub(/https?:\/\/[^[:space:]<>`]+/, "@", value)
+          # Keep masked offsets stable when hiding URLs as well.
+          while (match(value, /https?:\/\/[^[:space:]<>`]+/)) {
+            replacement = substr(value, RSTART, RLENGTH)
+            gsub(/./, "@", replacement)
+            value = substr(value, 1, RSTART - 1) replacement substr(value, RSTART + RLENGTH)
+          }
           token_count = split(value, tokens, /[[:space:]]+/)
+          token_cursor = 1
           for (token_index = 1; token_index <= token_count; token_index++) {
-            value = tokens[token_index]
+            token_start = token_cursor + index(substr(value, token_cursor), tokens[token_index]) - 1
+            token_cursor = token_start + length(tokens[token_index])
+            token_value = tokens[token_index]
+            # The normalization loop mutates value, so retain the masked line.
+            masked_line = value
+            value = token_value
             token_malformed = 0
             do {
               result = citation_list(value)
@@ -141,11 +217,22 @@ repolens_extract_citations() {
             # A complete interpretation wins; unsuccessful interpretations
             # retain every recognized malformed-list error across layers.
             if (!list_valid && token_malformed) extraction_failed = 1
-            printf "%s", result
+            if (ENVIRON["REPOLENS_SNIPPET_CITATION"] == "") printf "%s", result
+            count = split(result, found, /\n/)
+            member_cursor = 1
+            for (i = 1; i <= count; i++) {
+              if (found[i] == "") continue
+              member_start = member_cursor + index(substr(token_value, member_cursor), found[i]) - 1
+              member_cursor = member_start + length(found[i])
+              start = original[token_start + member_start - 1]
+              remember_reference(found[i], start, start + length(found[i]) - 1)
+            }
+            value = masked_line
           }
+          if (ENVIRON["REPOLENS_SNIPPET_CITATION"] != "") emit_snippets(length($0))
         }
         END { exit extraction_failed ? 1 : 0 }
-      ' <<< "$body" | sort -u
+      ' <<< "$body"
 }
 
 branch_scope_verify_body() {

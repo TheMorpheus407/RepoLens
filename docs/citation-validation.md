@@ -75,3 +75,13 @@ decisions require atomic complete lists and body-level malformed-list rejection.
 Nested formatting implements those same rules and adds no new product policy.
 
 Optional inline snippets bind to the preceding citation on the same logical line, before the next source reference. Repeated references each retain their own snippet check. The first citation also retains the snippet-before-location form when it has no following snippet. These checks apply to issue and cross-link bodies alike (filing governance same-line snippet cases).
+
+Snippet boundaries come from the same parsed citation occurrences used for
+scope and live-source checks, including emphasis and mixed bare/quoted lists.
+Citation-like text within a snippet or URL never supplies a boundary. Complete
+matching backtick runs delimit snippets too, retaining shorter literal ticks as
+part of the evidence. Repeated quoted references without snippets do not turn
+intervening prose into evidence. Location-shaped URL/timestamp spans retain
+their existing exclusion from optional snippet checks. The filing governance
+parsed-snippet cases exercise issue and cross-link publication with mocked
+forge readback, including rejection before any POST.
