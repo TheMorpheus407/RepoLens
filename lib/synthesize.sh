@@ -1113,7 +1113,7 @@ run_synthesizer() {
 
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
-    total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*' -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+    total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*' -type f -name '*.md' 2>/dev/null | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}')
   fi
 
   # Zero findings require no model work. Write the canonical empty manifest so

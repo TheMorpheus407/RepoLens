@@ -114,6 +114,8 @@ for root in sorted((base / 'rounds').glob('round-*/lens-outputs')):
     recursive = probe == 'identity' or 'Also traverse recursively' in prompt
     for path in sorted(root.rglob('*.md') if recursive else root.glob('*.md')):
         text = path.read_text()
+        if 'Exclude generated local delivery projections' in prompt and re.search(r'^generic_source_id:', text, re.M):
+            continue
         field = lambda name: re.search(rf'^{name}: (.+)$', text, re.M)[1]
         citations = re.search(r'^suspect_files:\n((?:  - .+\n)+)', text, re.M)[1]
         suspects = sorted(line[4:] for line in citations.splitlines())

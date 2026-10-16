@@ -1997,6 +1997,90 @@ _round_digest_finding_segments() {
   ' "$file"
 }
 
+# Deliver Generic raw segments as ordinary local findings. The private source
+# remains canonical for digest/verification; publication can be retried even
+# after all lens/round completion receipts have been written.
+export_generic_local_findings() (
+  local output_dir="$1" stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
+  local rounds_dir="${LOG_BASE:-}/rounds"
+  [[ -d "$rounds_dir" ]] || return 0
+  mkdir -p "$LOG_BASE/final" || return 1
+  stage="$(mktemp -d "$LOG_BASE/final/.generic-plan.XXXXXX")" || return 1
+  trap 'rm -rf -- "$stage"' EXIT
+  if ! { (set -o pipefail; find -H "$rounds_dir" -type f -path '*/lens-outputs/*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$stage/files"; then
+    return 1
+  fi
+  : > "$stage/plan.jsonl" || return 1
+  while IFS= read -r -d '' source; do
+    if [[ -z "$source" ]]; then list_complete=1; break; fi
+    cat -- "$source" > "$stage/source" || return 1
+    # Other lenses retain their own local-output contract; malformed ordinary
+    # drafts must not prevent delivery of independent Generic evidence.
+    frontmatter="$(_round_digest_frontmatter_block "$stage/source")" || continue
+    domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)"
+    [[ "$domain" == generic ]] || continue
+    # An overlapping destination may live in the private inventory. Projections
+    # are derived outputs, never new investigator sources.
+    [[ -z "$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar generic_source_id)" ]] || continue
+    segments="$(_round_digest_finding_segments "$stage/source")" || return 1
+    relative="${source#"$rounds_dir/"}" index=0
+    round_root="$rounds_dir/${relative%%/*}"
+    round_number="${round_root##*/round-}"
+    [[ "$round_number" =~ ^[1-9][0-9]*$ ]] || continue
+    : > "$stage/trusted" || return 1
+    # Initial layout metadata predates wave selection. Saved dispatch and
+    # completion receipts provide the actual generated investigators on resume.
+    if [[ -f "$round_root/metadata.json" ]]; then
+      jq -r '.lens_ids[] | split("|")[0]' "$round_root/metadata.json" >> "$stage/trusted" || return 1
+    fi
+    completion_path="$LOG_BASE/.rounds/round-$round_number.lenses.completed"
+    if [[ "${ROUNDS:-1}" == 1 && "$round_number" == 1 ]]; then completion_path="$LOG_BASE/.completed"; fi
+    if [[ -f "$completion_path" ]]; then
+      cut -d '|' -f1 "$completion_path" >> "$stage/trusted" || return 1
+    fi
+    dispatch_path="$rounds_dir/round-$((round_number - 1))/dispatch.md"
+    if [[ -f "$dispatch_path" ]]; then
+      _rounds_meta_dispatch_generic_entries "$dispatch_path" "$round_root/lens-outputs" \
+        | cut -d '|' -f1 >> "$stage/trusted" || return 1
+    fi
+    while [[ "$segments" == *$'\036'* ]]; do
+      segment="${segments%%$'\036'*}"; segments="${segments#*$'\036'}"
+      frontmatter="${segment%%$'\037'*}" body="${segment#*$'\037'}"
+      index=$((index + 1))
+      domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)"
+      [[ "$domain" == generic ]] || continue
+      lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens_id)"
+      [[ -n "$lens" ]] || lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens)"
+      [[ -n "$lens" ]] || continue
+      grep -Fxq -- "generic/$lens" "$stage/trusted" || continue
+      severity="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar severity)"
+      severity="$(severity_normalize "$severity")"
+      [[ -n "$severity" ]] || continue
+      if [[ -n "${REPOLENS_MIN_SEVERITY:-}" ]] && ! severity_meets_min "$severity" "$REPOLENS_MIN_SEVERITY"; then
+        continue
+      fi
+      title="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar title)"
+      if [[ -z "$title" ]]; then
+        title="$(printf '%s' "$body" | _round_digest_section_text_from_stream hypothesis | _round_digest_inline_text 200)"
+      fi
+      [[ -n "$title" ]] || { echo "Generic delivery: missing title/hypothesis in $source" >&2; return 1; }
+      # Evidence and metadata are unbounded; pass them via files rather than
+      # exec arguments (Linux also limits each individual argument to ~128 KiB).
+      printf '%s' "$frontmatter" > "$stage/frontmatter" || return 1
+      printf '%s' "$body" > "$stage/body" || return 1
+      printf '%s' "$title" > "$stage/title" || return 1
+      printf '%s' "$lens" > "$stage/lens" || return 1
+      jq -cn --arg source "$source" --arg relative "$relative" --argjson segment "$index" \
+        --rawfile frontmatter "$stage/frontmatter" --rawfile body "$stage/body" \
+        --rawfile title "$stage/title" --rawfile lens "$stage/lens" \
+        '{source:$source,relative:$relative,segment:$segment,frontmatter:$frontmatter,body:$body,title:$title,lens:$lens}' \
+        >> "$stage/plan.jsonl" || return 1
+    done
+  done < "$stage/files" || return 1
+  (( list_complete )) || return 1
+  python3 "$(_round_digest_repo_root)/lib/generic_output.py" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}"
+)
+
 _round_digest_trim_yaml_value() {
   local value="$*"
 
@@ -2275,6 +2359,8 @@ build_round_digest() {
       frontmatter="${segment%%"$field_sep"*}"
       body="${segment#*"$field_sep"}"
 
+      # Generated delivery can overlap this inventory after a completed resume.
+      [[ -z "$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar generic_source_id)" ]] || continue
       title_text="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "title" | _round_digest_inline_text 160)"
       raw_severity="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "severity")"
       severity="$(severity_normalize "$raw_severity")"

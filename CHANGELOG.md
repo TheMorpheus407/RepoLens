@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Deliver each Generic investigator finding into explicit local output, with source/segment provenance, stable identities and retryable publication; respect severity and dispatch eligibility, handle large evidence, roll back cancellation at mutation boundaries, recover process-interrupted publication on resume, and keep overlapping-output resumes idempotent without duplicate private-manifest representations (repolens-r9-p4-2).
+
 - Reserve Polish remote attempts before POST, atomically save complete URL receipts, and stop retries without a saved URL receipt, preventing duplicate shortlist creation and run-wide cap overruns after receipt-write failure (repolens-r9-p4-1).
 
 - Preserve valid Markdown findings, synthesized manifest proposals, saved filing receipts and existing reports when branch scope is missing, invalid or unreadable. Verify the complete finding directory before quarantining rejections; retain pending synthesis evidence and retry from current drafts after scope repair without permanent filing failures (repolens-r9-p4-3).
