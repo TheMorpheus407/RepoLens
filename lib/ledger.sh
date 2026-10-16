@@ -465,8 +465,9 @@ _ledger_frontmatter_scalar() {
 #   missing args or a missing <output_dir>, and on a missing out-path parent dir
 #   (the atomic write fails). Failed enumeration (find or sort) returns non-zero,
 #   cleans staging files and preserves any previously published output. A failed
-#   source-file read has the same failure semantics; malformed readable files
-#   continue to be skipped.
+#   staged-list open/read or source-file read has the same failure semantics.
+#   The list's completion sentinel must be consumed even for an empty tree;
+#   malformed readable source files continue to be skipped.
 build_findings_jsonl_from_local() {
   local dir="${1:-}" out="${2:-}"
   [[ -n "$dir" ]] || { echo "build_findings_jsonl_from_local: missing output_dir" >&2; return 2; }
@@ -483,18 +484,24 @@ build_findings_jsonl_from_local() {
   # Finish enumeration before ingestion: process substitution hides find's
   # failure and could otherwise promote an empty or partial registry.
   # Follow only an explicitly supplied symlink root.
-  if ! (set -o pipefail; find -H "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z) > "$tmp.files"; then
+  # An empty filename is impossible: consume this completion sentinel before
+  # publishing, so list-open/read failures cannot look like an empty tree.
+  if ! { (set -o pipefail; find -H "$dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$tmp.files"; then
     rm -f "$tmp" "$tmp.files"
     return 1
   fi
   # Unlike the projected metadata, this file holds the complete private body.
   # mktemp creates it exclusively with owner-only permissions, regardless of umask.
-  local ingest_failed=0 snapshot
+  local ingest_failed=0 list_complete=0 snapshot
   if ! snapshot="$(mktemp "$tmp.source.XXXXXX")"; then
     rm -f "$tmp" "$tmp.files"
     return 1
   fi
   while IFS= read -r -d '' file; do
+    if [[ -z "$file" ]]; then
+      list_complete=1
+      break
+    fi
     # Parse one fully read snapshot. IO failure is not malformed frontmatter:
     # never publish a partial tree or mix scalar reads from different versions.
     if ! cat -- "$file" > "$snapshot"; then
@@ -561,9 +568,12 @@ build_findings_jsonl_from_local() {
         validation: {},
         complexity: (if $complexity == "" then null else ($complexity | tonumber) end)
       }' >> "$tmp" || { ingest_failed=1; break; }
-  done < "$tmp.files"
+  done < "$tmp.files" || ingest_failed=1
   rm -f "$tmp.files" "$snapshot"
-  if (( ingest_failed )); then
+  if (( ingest_failed || ! list_complete )); then
+    if (( ! ingest_failed )); then
+      echo "build_findings_jsonl_from_local: cannot read complete findings list" >&2
+    fi
     rm -f "$tmp"
     return 1
   fi

@@ -266,4 +266,66 @@ for fault in empty partial reason reopen move read-empty read-partial; do
   printf 'PASS: %s scope failure preserves all published artifacts; retry filters before publishing\n' "$fault"
 ) || exit 1
 done
+# repolens-r9-p3-1: a successfully produced list can still disappear or
+# fail during consumption. Preserve the index, CSV and all published reports.
+for list_fault in missing read-empty read-partial truncated; do
+(
+  LOG_BASE="$TMP/list-$list_fault-run" OUTPUT_DIR="$TMP/list-$list_fault-output"
+  check cp -R "$TMP/output" "$OUTPUT_DIR"
+  RUN_ID=probe MODE=audit LOCAL_MODE=true OUTPUT_DIR_SET=true
+  HUMAN_REVIEW=true REPOLENS_FINAL_STATE=finished
+  check finalize_local
+  artifacts=(findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md HUMAN_REVIEW.md)
+  check mkdir "$TMP/list-$list_fault-published"
+  for artifact in "${artifacts[@]}"; do
+    check cp "$LOG_BASE/final/$artifact" "$TMP/list-$list_fault-published/$artifact"
+  done
+  list_reads=0
+  # Allocate normally, then inject list loss/truncation before ingestion opens it.
+  mktemp() {
+    local created
+    created="$(command mktemp "$@")" || return 1
+    # Snapshot allocation follows enumeration and precedes the list open.
+    if [[ "${1:-}" == *.source.XXXXXX ]]; then
+      case "$list_fault" in
+        missing) command rm -- "${1%.source.XXXXXX}.files" || return 1 ;;
+        truncated) command truncate -s -1 -- "${1%.source.XXXXXX}.files" || return 1 ;;
+      esac
+    fi
+    printf '%s\n' "$created"
+  }
+  # Fail only the registry's list reads, leaving other callers' reads intact.
+  read() {
+    if [[ "${FUNCNAME[1]:-}" == build_findings_jsonl_from_local ]]; then
+      case "$list_fault" in
+        read-empty) return 1 ;;
+        read-partial)
+          if (( list_reads > 0 )); then return 1; fi
+          list_reads=$((list_reads + 1))
+          ;;
+      esac
+    fi
+    # shellcheck disable=SC2162 # Preserve the delegated caller's -r/-d flags.
+    builtin read "$@"
+  }
+  rc=0
+  build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/final/findings.jsonl" || rc=$?
+  check test "$rc" -ne 0
+  check cmp "$TMP/list-$list_fault-published/findings.jsonl" "$LOG_BASE/final/findings.jsonl"
+  list_reads=0
+  check finalize_local
+  unset -f mktemp read
+  for artifact in "${artifacts[@]}"; do
+    check cmp "$TMP/list-$list_fault-published/$artifact" "$LOG_BASE/final/$artifact"
+  done
+  check test "$(command find "$LOG_BASE/final" -name '*.tmp.*' | wc -l)" -eq 0
+  check test "$(command find "$OUTPUT_DIR" -name '*.md' | wc -l)" -eq 2
+  # Access repair must allow a real refresh rather than pinning old artifacts.
+  check rm "$OUTPUT_DIR/security/injection/002.md"
+  check finalize_local
+  check jq -se 'length == 1 and .[0].title == "Unsafe query"' "$LOG_BASE/final/findings.jsonl"
+  check test "$(wc -l < "$LOG_BASE/final/findings.csv")" -eq 2
+  printf 'PASS: %s staged-list failure preserves registry, CSV and reports; retry refreshes\n' "$list_fault"
+) || exit 1
+done
 printf 'Results: registry traversal failure checks passed\n'
