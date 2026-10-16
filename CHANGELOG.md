@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reserve Polish remote attempts before POST, atomically save complete URL receipts, and stop retries without a saved URL receipt, preventing duplicate shortlist creation and run-wide cap overruns after receipt-write failure (repolens-r9-p4-1).
+
 - Preserve valid Markdown findings, synthesized manifest proposals, saved filing receipts and existing reports when branch scope is missing, invalid or unreadable. Verify the complete finding directory before quarantining rejections; retain pending synthesis evidence and retry from current drafts after scope repair without permanent filing failures (repolens-r9-p4-3).
 
 - Preserve the local finding registry, CSV and reports when a staged file list disappears or cannot be fully read, and allow a repaired resume to refresh them (repolens-r9-p3-1).

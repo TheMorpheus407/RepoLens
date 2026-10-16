@@ -449,6 +449,8 @@ _polish_issue_budget_available() {
 #   polish issue per lens, containing that lens's ranked top-N suggestions.
 #   Stops on parent interruption with its signal exit code. A successful
 #   in-flight create still records its receipt/count before stopping the batch.
+#   Remote attempts are reserved before POST. An attempt without a nonempty URL
+#   stops emission until reconciled, including after a receipt-write failure.
 run_polish_issue_emission() {
   local run_id="${1:-${RUN_ID:-}}" top_n="${2:-${REPOLENS_POLISH_TOP_N:-3}}"
   local base_dir polish_dir ranked_file groups_file filed_dir group_json
@@ -510,6 +512,18 @@ run_polish_issue_emission() {
     fi
   fi
 
+  # A successful POST can outlive a failed URL write or process interruption.
+  # Keep every uncertain attempt pending, even if ranking changed or is empty.
+  local saved_attempt
+  for saved_attempt in "$filed_dir"/*.attempted; do
+    [[ -e "$saved_attempt" || -L "$saved_attempt" ]] || continue
+    if [[ ! -s "${saved_attempt%.attempted}.url" ]]; then
+      _polish_log_warn "Polish issue emission: unresolved remote attempt $saved_attempt; reconcile with the forge before retrying"
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 1
+    fi
+  done
+
   if ! _polish_build_issue_groups "$ranked_file" "$top_n" > "$groups_file"; then
     rm -f "$groups_file"
     _polish_log_warn "Polish issue emission: failed to group ranked suggestions"
@@ -529,7 +543,7 @@ run_polish_issue_emission() {
       break
     fi
 
-    local domain lens_id safe_name body_file tmp_body title sentinel issue_url label
+    local domain lens_id safe_name body_file tmp_body title sentinel issue_url label attempted tmp_receipt saved_url
     domain="$(jq -r '.domain // empty' <<< "$group_json")"
     lens_id="$(jq -r '.lens_id // empty' <<< "$group_json")"
     safe_name="$(_polish_slugify "$domain--$lens_id")"
@@ -583,8 +597,18 @@ run_polish_issue_emission() {
         break
       fi
 
-      # Recheck at the external mutation boundary after all preparation.
+      # Atomically reserve this attempt before the irreversible POST. Never
+      # overwrite a previous reservation, including one from another caller.
+      attempted="$filed_dir/$safe_name.attempted"
+      if ! (set -o noclobber; : > "$attempted"); then
+        _polish_log_warn "Polish issue emission: cannot reserve remote attempt for $domain/$lens_id"
+        emission_rc=1
+        break
+      fi
+      # Recheck after reservation as well: a returning parent trap may have
+      # cancelled this still-unsent attempt. Release only our fresh reservation.
       if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+        rm -f -- "$attempted"
         emission_rc="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
         break
       fi
@@ -598,10 +622,19 @@ run_polish_issue_emission() {
       fi
     fi
 
-    printf '%s\n' "$issue_url" > "$sentinel" || {
+    # A short write must never expose a nonempty success marker to resume.
+    # Check the complete saved URL before atomically publishing the receipt.
+    tmp_receipt="$sentinel.tmp.$$"
+    if ! { [[ -n "$issue_url" ]] \
+        && printf '%s\n' "$issue_url" > "$tmp_receipt" \
+        && saved_url="$(cat "$tmp_receipt")" \
+        && [[ "$saved_url" == "$issue_url" ]] \
+        && mv "$tmp_receipt" "$sentinel"; }; then
+      rm -f -- "$tmp_receipt"
+      _polish_log_warn "Polish issue emission: failed to save complete URL receipt for $domain/$lens_id"
       emission_rc=1
       break
-    }
+    fi
     if ! _polish_increment_issue_counts; then
       _polish_log_warn "Polish issue emission: failed to update summary issue count"
       emission_rc=1

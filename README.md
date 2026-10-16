@@ -492,7 +492,7 @@ In forge mode, polishing shortlists are created as remote issues with `polish:<d
 logs/<run-id>/polish/filed/
 ```
 
-Successful shortlists leave receipts in this directory. On resume, saved receipts consume the same run-wide `--max-issues` budget and repair summary counts if a previous summary write was interrupted, even if ranking has changed or now produces an empty shortlist.
+Successful shortlists leave receipts in this directory. On resume, saved receipts consume the same run-wide `--max-issues` budget and repair summary counts if a previous summary write was interrupted, even if ranking has changed or now produces an empty shortlist. Each remote POST first creates an exclusive `<lens>.attempted` reservation. URL receipts are written to a temporary file, checked against the complete returned URL, and atomically promoted; partial writes never become success markers. If its `.url` receipt cannot be saved, or the POST result is uncertain, emission stops and later resumes refuse further POSTs, including after ranking changes or an empty shortlist. Reconcile the saved draft against the target forge: if the issue exists, save its verified URL in the matching `.url` receipt; if no issue was created, remove only that resolved attempt reservation before retrying. Preserve the reservation while the result is uncertain. Local drafts do not create remote attempt reservations.
 
 ## Branch review mode
 
