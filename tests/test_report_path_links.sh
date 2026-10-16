@@ -23,9 +23,14 @@ for lib in ledger artifacts human_review; do
 done
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TMPROOT"' EXIT
-for variant in plain spaces special; do
+for variant in plain spaces special autolink html newlines crlf markup; do
   case "$variant" in
     plain) project="$TMPROOT/project" ;;
+    autolink) project="$TMPROOT/project <a@b.com> <https://example.com>" ;;
+    html) project="$TMPROOT/project <em>evidence</em>" ;;
+    newlines) project="$TMPROOT/"$'project\n\nevidence' ;;
+    crlf) project="$TMPROOT/"$'project\r\n\r\nevidence' ;;
+    markup) project="$TMPROOT/"'project &copy; `code` *emphasis* _under_ !' ;;
     spaces) project="$TMPROOT/project with spaces" ;;
     special) project="$TMPROOT/project [ä] with \\ spaces #?%" ;;
   esac
@@ -52,21 +57,53 @@ for variant in plain spaces special; do
   printf '%s\n' "$contributor" > "$LOG_BASE/expected-contributor.txt"
 done
 python3 - "$TMPROOT" <<'PYTEST'
-import pathlib,re,sys,urllib.parse
+import os,pathlib,re,sys,urllib.parse
+# The normal suite needs only stdlib. The optional replay also checks the full
+# CommonMark token tree (REPOLENS_TEST_COMMONMARK=1 requires markdown-it-py).
+parser = None
+if os.environ.get('REPOLENS_TEST_COMMONMARK') == '1':
+    from markdown_it import MarkdownIt
+    parser = MarkdownIt('commonmark')
 root=pathlib.Path(sys.argv[1]);passed=failed=0
-for variant in ('plain','spaces','special'):
+for variant in ('plain','spaces','special','autolink','html','newlines','crlf','markup'):
     run=root/f'run-{variant}'
-    path=(run/'expected-path.txt').read_text().rstrip('\n')
-    contributor=(run/'expected-contributor.txt').read_text().rstrip('\n')
+    path=(run/'expected-path.txt').read_bytes().decode().removesuffix('\n')
+    contributor=(run/'expected-contributor.txt').read_bytes().decode().removesuffix('\n')
     for name in ('TODO','SUMMARY','NEEDS_REVIEW','DUPLICATES','HUMAN_REVIEW'):
         doc=(run/'final'/f'{name}.md').read_text()
-        # Recognize escaped label characters and a bare CommonMark destination:
-        # whitespace and unescaped closing parentheses cannot occur in a href.
-        links=re.findall(r'\[((?:\\.|[^\]\\])*)\]\(([^)\s]+)\)',doc)
+        # Require a single-line plain-text label: no raw Markdown/HTML syntax
+        # or entities that can change the displayed filename or create links.
+        links=re.findall(r'\[((?:\\[^\r\n]|[^\]\\\r\n])*)\]\(([^)\s]+)\)',doc)
         expected=[path,contributor] if name=='DUPLICATES' else [path]
         hrefs=[href for _,href in links]
         wanted=[urllib.parse.quote(p,safe='/~') for p in expected]
         ok=sorted(hrefs)==sorted(wanted)
+        labels=[]
+        for label,_ in links:
+            ok=ok and not re.search(r'(?<!\\)[<>&`*_!]',label)
+            labels.append(re.sub(r'\\([!-/:-@\[-`{-~])',r'\1',label))
+        normalized=[p.replace('\r',' ').replace('\n',' ') for p in expected]
+        ok=ok and sorted(labels)==sorted(normalized)
+        if parser:
+            rendered=[]
+            for token in parser.parse(doc):
+                if token.type != 'inline':
+                    continue
+                depth=0
+                text=''
+                for child in token.children:
+                    if child.type=='link_open':
+                        ok=ok and depth==0
+                        depth+=1
+                        href=child.attrGet('href')
+                        text=''
+                    elif child.type=='link_close':
+                        depth-=1
+                        rendered.append((href,text))
+                    elif depth:
+                        ok=ok and child.type=='text'
+                        text+=child.content
+            ok=ok and sorted(rendered)==sorted(zip(wanted,normalized))
         ok=ok and all(pathlib.Path(urllib.parse.unquote(href)).is_file() for href in hrefs)
         if variant=='plain':
             ok=ok and f'[{path}]({path})' in doc

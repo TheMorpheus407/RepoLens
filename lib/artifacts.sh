@@ -105,10 +105,11 @@ generate_todo_md() {
        def rank: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
-       # Keep path separators; URI-encode filename bytes and escape link labels.
+       # Keep destinations exact; make labels literal and single-line.
        def pathlink:
          tostring as $p
-         | "[" + ($p | split("\\") | join("\\\\") | split("[") | join("\\[") | split("]") | join("\\]"))
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
            + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
        def kept:
          (.status == "new")
@@ -217,10 +218,11 @@ generate_summary_md() {
        def rankt: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
-       # Keep path separators; URI-encode filename bytes and escape link labels.
+       # Keep destinations exact; make labels literal and single-line.
        def pathlink:
          tostring as $p
-         | "[" + ($p | split("\\") | join("\\\\") | split("[") | join("\\[") | split("]") | join("\\]"))
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
            + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
 
        ( map(select(.status != "duplicate"))
@@ -338,10 +340,11 @@ generate_needs_review_md() {
        def rank: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
-       # Keep path separators; URI-encode filename bytes and escape link labels.
+       # Keep destinations exact; make labels literal and single-line.
        def pathlink:
          tostring as $p
-         | "[" + ($p | split("\\") | join("\\\\") | split("[") | join("\\[") | split("]") | join("\\]"))
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
            + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
        def vobj: (if (.validation | type) == "object" then .validation else {} end);
        # Collect every matched review reason (a finding may match several).
@@ -466,10 +469,11 @@ generate_duplicates_md() {
        def rank: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
-       # Keep path separators; URI-encode filename bytes and escape link labels.
+       # Keep destinations exact; make labels literal and single-line.
        def pathlink:
          tostring as $p
-         | "[" + ($p | split("\\") | join("\\\\") | split("[") | join("\\[") | split("]") | join("\\]"))
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
            + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
        # Reading A: a merged group is a record whose also_reported_by is a NON-EMPTY
        # array. A missing / null / non-array value degrades to [] (a singleton).

@@ -99,6 +99,11 @@ parsed from one complete temporary snapshot created with owner-only permissions;
 normal success and failure paths remove the snapshot. Raw Markdown evidence is
 retained in every case.
 
+Triage and human-review Markdown reports percent-encode finding and contributor
+link destinations while preserving directory separators. Labels escape Markdown
+and HTML syntax and replace carriage returns and newlines with spaces; the
+encoded destination retains the original path bytes.
+
 Triage reports replace their requested file paths atomically. A directory or
 symlink to a directory at a report path causes generation to fail, preserving
 the directory contents and cleaning staged Markdown. Promotion never puts a

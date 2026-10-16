@@ -283,10 +283,11 @@ render_human_review_digest() {
   if human_review_bucketize "$findings" \
     | jq -r --arg run_id "$run_id" --arg ph "—" --argjson has_duplicate_report "$has_duplicate_report" '
         def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
-       # Keep path separators; URI-encode filename bytes and escape link labels.
+       # Keep destinations exact; make labels literal and single-line.
        def pathlink:
          tostring as $p
-         | "[" + ($p | split("\\") | join("\\\\") | split("[") | join("\\[") | split("]") | join("\\]"))
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
            + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
 
         # One finding -> a bullet-list block. Severity drives the heading; the
