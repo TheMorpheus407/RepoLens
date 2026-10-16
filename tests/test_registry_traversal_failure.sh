@@ -173,7 +173,8 @@ for mode in audit branch-review; do
 done
 # repolens-r8-p3-1: fail only the scope traversal. Later registry traversal
 # succeeds, so ignoring the first failure would publish an out-of-scope source.
-for fault in empty partial; do
+# Also exercise opening the completed list and both quarantine writes.
+for fault in empty partial reason reopen move; do
 (
   LOG_BASE="$TMP/scope-$fault-run" OUTPUT_DIR="$TMP/scope-$fault-output"
   check cp -R "$TMP/output" "$OUTPUT_DIR"
@@ -189,14 +190,30 @@ for fault in empty partial; do
   done
   rejected="$OUTPUT_DIR/security/injection/003.md"
   check printf -- '---\ntitle: Unchanged source\nseverity: high\n---\nsrc/unchanged.sh:1 Evidence\n' > "$rejected"
+  if [[ "$fault" == reason ]]; then
+    # A directory makes the diagnostic redirection fail even as root.
+    check mkdir "$rejected.out-of-scope.reason"
+  fi
+  mv() {
+    if [[ "$fault" == move && "${2:-}" == "$rejected" ]]; then return 1; fi
+    command mv "$@"
+  }
   # Every consumer except the scope filter sees a successful complete find.
   find() {
     if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_directory ]]; then
-      if [[ "$fault" == partial ]]; then
-        printf '%s\0' "$OUTPUT_DIR/security/injection/001.md"
-      fi
-      printf 'find: injected scope traversal failure\n' >&2
-      return 1
+      case "$fault" in
+        empty|partial)
+          if [[ "$fault" == partial ]]; then printf '%s\0' "$rejected"; fi
+          printf 'find: injected scope traversal failure\n' >&2
+          return 1
+          ;;
+        reopen)
+          command find "$@" || return 1
+          # Enumeration succeeds, but the staged list disappears before open.
+          command rm -f -- "$OUTPUT_DIR"/.branch-scope-files.*
+          return "$?"
+          ;;
+      esac
     fi
     command find "$@"
   }
@@ -205,9 +222,14 @@ for fault in empty partial; do
   rc=0
   branch_scope_filter_directory "$OUTPUT_DIR" || rc=$?
   check test "$rc" -ne 0
-  unset -f find
+  unset -f find mv
   check test -f "$rejected"
   check test ! -e "$rejected.out-of-scope"
+  if [[ "$fault" == reason ]]; then
+    check rmdir "$rejected.out-of-scope.reason"
+  else
+    check test ! -e "$rejected.out-of-scope.reason"
+  fi
   for artifact in "${artifacts[@]}"; do
     check cmp "$TMP/scope-$fault-published/$artifact" "$LOG_BASE/final/$artifact"
   done
@@ -215,8 +237,9 @@ for fault in empty partial; do
   check finalize_local
   check test ! -e "$rejected"
   check test -f "$rejected.out-of-scope"
+  check grep -q 'out-of-scope citation: src/unchanged.sh' "$rejected.out-of-scope.reason"
   check jq -se 'length == 2 and all(.[]; .title != "Unchanged source")' "$LOG_BASE/final/findings.jsonl"
-  printf 'PASS: %s scope traversal failure preserves all published artifacts; retry filters before publishing\n' "$fault"
+  printf 'PASS: %s scope failure preserves all published artifacts; retry filters before publishing\n' "$fault"
 ) || exit 1
 done
 printf 'Results: registry traversal failure checks passed\n'

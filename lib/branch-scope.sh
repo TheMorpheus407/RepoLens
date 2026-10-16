@@ -264,13 +264,18 @@ branch_scope_verify_body() {
 # abort filtering without quarantining the unreadable source.
 branch_scope_filter_directory() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local dir="$1" file reason body files filter_rc=0
+  local dir="$1" file reason body files files_fd filter_rc=0
   [[ -d "$dir" ]] || return 0
   # Complete enumeration before filtering. A failed producer can emit a valid
   # prefix, but that prefix cannot authorize publication of the whole tree.
   files="$(mktemp "$dir/.branch-scope-files.XXXXXX")" || return 1
   if ! find "$dir" -type f -name '*.md' -print0 > "$files"; then
     printf 'branch_scope_filter_directory: cannot enumerate findings: %s\n' "$dir" >&2
+    rm -f -- "$files"
+    return 1
+  fi
+  if ! exec {files_fd}< "$files"; then
+    printf 'branch_scope_filter_directory: cannot open findings list: %s\n' "$files" >&2
     rm -f -- "$files"
     return 1
   fi
@@ -281,13 +286,19 @@ branch_scope_filter_directory() {
       break
     fi
     if ! reason="$(branch_scope_verify_body "$body")"; then
-      if ! mv -- "$file" "$file.out-of-scope" \
-          || ! printf '%s\n' "$reason" > "$file.out-of-scope.reason"; then
+      # Keep the source eligible for retry until its diagnostic is saved.
+      if ! printf '%s\n' "$reason" > "$file.out-of-scope.reason"; then
+        filter_rc=1
+        break
+      fi
+      if ! mv -- "$file" "$file.out-of-scope"; then
+        rm -f -- "$file.out-of-scope.reason"
         filter_rc=1
         break
       fi
     fi
-  done < "$files"
+  done <&"$files_fd"
+  exec {files_fd}<&- || filter_rc=1
   rm -f -- "$files" || return 1
   return "$filter_rc"
 }

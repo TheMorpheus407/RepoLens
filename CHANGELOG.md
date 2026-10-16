@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - Reject incomplete Branch-Scope file enumeration before filtering or rebuilding local reports, preserving the previous registry and reports until a successful retry (repolens-r8-p3-1).
+  Also reject an unavailable staged list and save quarantine reasons before moving findings, keeping failed writes retryable.
 
 - Run startup receipt reconciliation in the signal-receiving parent, preserving saved success receipts and summary counts and stopping further reads on cancellation, including signals at the final startup handoff (repolens-r8-p2-4).
 
