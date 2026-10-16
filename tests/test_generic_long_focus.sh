@@ -87,11 +87,15 @@ getconf() {
     command getconf "$@"
   fi
 }
-for scenario in output-limit log-limit short boundary over253 over254 over255 long; do
+for scenario in minimum-limit minimum-prefix-limit output-limit log-limit short boundary over253 over254 over255 long; do
   LOG_BASE="$FIXTURE/$scenario" OUTPUT_DIR="$FIXTURE/$scenario/output" PROJECT_PATH="$FIXTURE/project"
   OUTPUT_DIR_SET=false
   output_name_max=255 log_name_max=255
-  if [[ "$scenario" == output-limit ]]; then
+  if [[ "$scenario" == minimum-limit ]]; then
+    log_name_max=36
+  elif [[ "$scenario" == minimum-prefix-limit ]]; then
+    log_name_max=37
+  elif [[ "$scenario" == output-limit ]]; then
     OUTPUT_DIR="$FIXTURE/external-output" OUTPUT_DIR_SET=true output_name_max=128
   elif [[ "$scenario" == log-limit ]]; then
     OUTPUT_DIR="$FIXTURE/external-output" OUTPUT_DIR_SET=true log_name_max=128
@@ -120,6 +124,7 @@ for scenario in output-limit log-limit short boundary over253 over254 over255 lo
   if [[ "$scenario" == boundary ]]; then test "$canonical" = "generic/deeper-$focus"; fi
   init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
   for attempt in first resume; do
+    test "$(_rounds_meta_dispatch_generic_entries "$LOG_BASE/dispatch.md" "$OUTPUT_DIR")" = "$parsed"
     rc=0
     run_rounds 1 ENTRIES || rc=$?
     printf '%s/%s: generated_basename_bytes=%s run_rounds_rc=%s model_calls=%s completion_receipts=%s stopped_reason=%s\n' \
@@ -132,6 +137,16 @@ for scenario in output-limit log-limit short boundary over253 over254 over255 lo
     test -f "$LOG_BASE/rounds/round-1/lens-outputs/${canonical#*/}.md"
     grep -Fq 'Mock finding.' "$LOG_BASE/rounds/round-1/digest.md"
   done
+  if [[ "$scenario" == minimum-* ]]; then
+    # With no room for a readable prefix, the hash must still be a valid
+    # dispatched ID so the digest retains the investigator's finding.
+    expected_digest="$(sha256_text "$(_rounds_meta_slug "deeper-$focus")")"
+    if [[ "$scenario" == minimum-limit ]]; then
+      test "$canonical" = "generic/${expected_digest:0:32}"
+    else
+      test "$canonical" = "generic/d-${expected_digest:0:32}"
+    fi
+  fi
 done
 unset -f getconf
 
@@ -197,4 +212,4 @@ test "${ids[0]}" != "${ids[1]}"
 rc=0
 ( sha256_text() { return 1; }; _rounds_meta_dispatch_generic_entries "$LOG_BASE/dispatch.md" ) || rc=$?
 test "$rc" -ne 0
-printf 'Results: 9 integration scenarios and stable distinct bounded identities passed, 0 failed\n'
+printf 'Results: 11 integration scenarios and stable distinct bounded identities passed, 0 failed\n'

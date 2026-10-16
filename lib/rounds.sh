@@ -1121,7 +1121,12 @@ _rounds_meta_dispatch_generic_entries() {
       # when shortening so equal prefixes retain distinct stable identities.
       if (( ${#slug} > slug_limit )); then
         digest="$(sha256_text "$slug")" || return 1
-        slug="${slug:0:$((slug_limit - 33))}-${digest:0:32}"
+        if (( slug_limit > 33 )); then
+          slug="${slug:0:$((slug_limit - 33))}-${digest:0:32}"
+        else
+          # A separator without a prefix would make the digest reject the ID.
+          slug="${digest:0:32}"
+        fi
       fi
       entry="generic/$slug"
       tuple="$(_rounds_meta_tuple_serialize "$entry" "$role" "$focus" "$anchor" "$exclude")"

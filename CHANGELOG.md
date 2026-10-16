@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Give Generic investigators their generated ID and exact findings path, and include their dispatched findings in round digests while continuing to reject undispatched generated IDs.
 
+- Keep shortened Generic IDs valid at the minimum accepted filename limit so round digests retain their findings.
+
 - Keep every explicitly requested specification required during prompt composition, so a disappearing file stops the next lens and remains resumable in audit and spec-change as well as greenfield (repolens-r8-p1-3).
 
 - Preserve successful Polish issue receipts and counters across sequential HUP/INT/TERM, and restore the run-wide issue budget from saved receipts on resume (repolens-r8-p2-1, repolens-r8-p2-2).
