@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve successful Polish issue receipts and counters across sequential HUP/INT/TERM, and restore the run-wide issue budget from saved receipts on resume (repolens-r8-p2-1, repolens-r8-p2-2).
+- Recover interrupted Polish summary counts from saved receipts on resume, including when the issue cap is exhausted or the shortlist is empty.
+
 - Preserve parsed citation and complete code-span boundaries when binding snippets, including emphasized and repeated quoted references, so embedded reference text cannot skip evidence checks.
 
 - Verify each same-line citation against its own attached code snippet, including repeated references, before publishing issues or cross-links (repolens-r8-p1-2).

@@ -490,6 +490,8 @@ In forge mode, polishing shortlists are created as remote issues with `polish:<d
 logs/<run-id>/polish/filed/
 ```
 
+Successful shortlists leave receipts in this directory. On resume, saved receipts consume the same run-wide `--max-issues` budget and repair summary counts if a previous summary write was interrupted, even if ranking has changed or now produces an empty shortlist.
+
 ## Branch review mode
 
 Use `branch-review` when you want only the damage a branch did, not a verdict on the whole repository. Use `audit` when you want every defect in the codebase regardless of who introduced it.
