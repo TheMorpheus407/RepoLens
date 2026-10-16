@@ -414,6 +414,9 @@ run_meta_orchestrator() {
     return 1
   fi
 
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   # A fresh invocation must never inherit another attempt's accepted result.
   rm -f "$prev_round_dir/meta-orchestrator-success.json" "$output_path.envelope.json" || return 1
 
@@ -429,10 +432,18 @@ run_meta_orchestrator() {
     fi
     return 1
   fi
+  # Prompt rendering runs in a command substitution. Its return can deliver a
+  # pending parent signal whose returning trap has already cancelled the run.
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   printf '%s\n' "$prompt" > "$prompt_path" || return 1
 
   log_info "[round $round] Running meta-orchestrator for round $next_round"
   local envelope_path="$output_path.envelope.json"
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   run_agent "$AGENT" "$prompt" "$project_path" "${AGENT_TIMEOUT_SECS:-}" "${AGENT_KILL_GRACE_SECS:-30}" "$envelope_path" > "$output_path" 2>&1 || agent_rc=$?
   if declare -F handle_agent_failure_in_phase >/dev/null 2>&1; then
     local phase_rc
@@ -499,7 +510,9 @@ _rounds_meta_restore_success() {
   local dir="$1" fingerprint staging="" rc=0 name legacy_format
   META_ORCH_SATURATED=0
   [[ -f "$dir/meta-orchestrator-success.json" ]] || return 1
-  fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 1
+  # A failed read/hash cannot disprove an accepted handoff. Keep it pending
+  # so resume preserves the proof instead of admitting a fresh model call.
+  fingerprint="$(_rounds_meta_result_fingerprint "$dir")" || return 2
   if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
       "$dir/meta-orchestrator-success.json" >/dev/null 2>&1; then
     # Older v1 proofs used the invocation repository's object format. Verify
@@ -739,6 +752,23 @@ _rounds_meta_extract_kv() {
     return 0
   fi
 
+  return 1
+}
+
+# Render one parsed attribute in the syntax understood by extract_kv. A value
+# accepted from quoted input always has at least one available delimiter.
+_rounds_meta_format_kv() {
+  local key="$1" value="$2" quote
+  if [[ "$value" != *[[:space:]]* && "$value" != *'"'* && "$value" != *"'"* && "$value" != *'`'* ]]; then
+    printf '%s=%s' "$key" "$value"
+    return 0
+  fi
+  for quote in '"' "'" '`'; do
+    if [[ "$value" != *"$quote"* ]]; then
+      printf '%s=%s%s%s' "$key" "$quote" "$value" "$quote"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -982,7 +1012,7 @@ _rounds_meta_dispatch_lens_entries() {
 
       if lens_entry="$(_rounds_meta_lens_entry_for_id "$lens_id" "$lenses_dir")"; then
         tuple="$(_rounds_meta_tuple_serialize "$lens_entry" "$role" "$focus" "$anchor" "$exclude")"
-        dedup_key="${lens_entry}|${role}|${focus}|${anchor}|${exclude}"
+        dedup_key="$tuple"
         if [[ -z "${seen_entries[$dedup_key]:-}" ]]; then
           seen_entries["$dedup_key"]=1
           printf '%s\n' "$tuple"
@@ -1017,7 +1047,7 @@ _rounds_meta_dispatch_generic_entries() {
         focus="$missed_angle"
       fi
 
-      dedup_key="${role}|${focus}|${anchor}|${exclude}"
+      dedup_key="$(_rounds_meta_tuple_serialize generic "$role" "$focus" "$anchor" "$exclude")"
       if [[ -n "${seen_entries[$dedup_key]:-}" ]]; then
         continue
       fi
@@ -1411,20 +1441,14 @@ _rounds_meta_parse_output() {
       fi
 
       if _rounds_meta_validate_lens_id "$lens_id" "$lenses_dir"; then
-        dedup_key="${lens_id}|${role}|${focus}|${anchor}|${exclude}"
+        dedup_key="$(_rounds_meta_tuple_serialize "$lens_id" "$role" "$focus" "$anchor" "$exclude")"
         if [[ -z "${seen_lens_keys[$dedup_key]:-}" ]]; then
           seen_lens_keys["$dedup_key"]=1
           lens_dispatch_line="LENS: $lens_id"
-          [[ -n "$role" ]] && lens_dispatch_line+=" role=$role"
-          if [[ -n "$focus" ]]; then
-            if [[ "$focus" == *[[:space:]]* ]]; then
-              lens_dispatch_line+=" focus=\"$focus\""
-            else
-              lens_dispatch_line+=" focus=$focus"
-            fi
-          fi
-          [[ -n "$anchor" ]] && lens_dispatch_line+=" anchor=$anchor"
-          [[ -n "$exclude" ]] && lens_dispatch_line+=" exclude=$exclude"
+          [[ -n "$role" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv role "$role")"
+          [[ -n "$focus" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv focus "$focus")"
+          [[ -n "$anchor" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv anchor "$anchor")"
+          [[ -n "$exclude" ]] && lens_dispatch_line+=" $(_rounds_meta_format_kv exclude "$exclude")"
           lens_dispatch_lines+=("$lens_dispatch_line")
         fi
       else
@@ -1447,20 +1471,14 @@ _rounds_meta_parse_output() {
         focus="$missed_angle"
       fi
 
-      dedup_key="${role}|${focus}|${anchor}|${exclude}"
+      dedup_key="$(_rounds_meta_tuple_serialize generic "$role" "$focus" "$anchor" "$exclude")"
       if [[ -z "${seen_generic_keys[$dedup_key]:-}" ]]; then
         seen_generic_keys["$dedup_key"]=1
         generic_dispatch_line="GENERIC:"
-        [[ -n "$role" ]] && generic_dispatch_line+=" role=$role"
-        if [[ -n "$focus" ]]; then
-          if [[ "$focus" == *[[:space:]]* ]]; then
-            generic_dispatch_line+=" focus=\"$focus\""
-          else
-            generic_dispatch_line+=" focus=$focus"
-          fi
-        fi
-        [[ -n "$anchor" ]] && generic_dispatch_line+=" anchor=$anchor"
-        [[ -n "$exclude" ]] && generic_dispatch_line+=" exclude=$exclude"
+        [[ -n "$role" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv role "$role")"
+        [[ -n "$focus" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv focus "$focus")"
+        [[ -n "$anchor" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv anchor "$anchor")"
+        [[ -n "$exclude" ]] && generic_dispatch_line+=" $(_rounds_meta_format_kv exclude "$exclude")"
         generic_dispatch_lines+=("$generic_dispatch_line")
       fi
       continue
