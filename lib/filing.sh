@@ -477,7 +477,7 @@ _filing_readback_matches() {
 }
 
 _filing_fail() {
-  local filed_dir="$1" cluster_id="$2" reason="$3"
+  local filed_dir="$1" cluster_id="$2" reason="$3" move_rc=0
   # Interrupted preflight helpers cannot invalidate a saved success receipt.
   # This governor belongs to read-only reconciliation, so release it for resume.
   if _filing_cancelled && [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
@@ -485,8 +485,19 @@ _filing_fail() {
     return 1
   fi
   if [[ -e "$filed_dir/$cluster_id.url" || -L "$filed_dir/$cluster_id.url" ]]; then
-    mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url"
-    : > "$filed_dir/$cluster_id.attempted"
+    mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url" || move_rc=$?
+    # The returning parent handler may accept cancellation while mv waits.
+    # Restore a completed rename before leaving this receipt for resume.
+    if _filing_cancelled; then
+      if [[ ! -e "$filed_dir/$cluster_id.url" && ! -L "$filed_dir/$cluster_id.url" ]] \
+          && [[ -e "$filed_dir/$cluster_id.unverified-url" || -L "$filed_dir/$cluster_id.unverified-url" ]]; then
+        mv -f "$filed_dir/$cluster_id.unverified-url" "$filed_dir/$cluster_id.url" || return 1
+      fi
+      rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+      return 1
+    fi
+    (( move_rc == 0 )) || return 1
+    : > "$filed_dir/$cluster_id.attempted" || return 1
   fi
   printf 'VERIFICATION_FAILED: %s\n' "$reason" > "$filed_dir/$cluster_id.failed"
   rm -f "$filed_dir/$cluster_id.lock" "$filed_dir/$cluster_id.governor/body.md"
@@ -938,6 +949,11 @@ _filing_cross_link_enact() {
             printf '%s\n' "$response" > "$cross_dir/$key.created-response"
           fi
           if (( rc == 0 )); then
+            # Reading a saved response can deliver a pending parent signal.
+            if _filing_cancelled; then
+              [[ -z "$reconcile_body_file" ]] || rm -f "$reconcile_body_file"
+              return 1
+            fi
             readback="$(forge_issue_comment_read_json "$forge_repo" "$issue_number" "$response")" || rc=$?
             jq -e --rawfile body "$body_file" --arg url "$response" '.body == $body and .url == $url' <<< "$readback" >/dev/null || rc=1
           fi
@@ -989,10 +1005,21 @@ _filing_cross_link_enact() {
               printf '%s\n' "$response" > "$cross_dir/$key.created-response"
             fi
             if (( rc == 0 )); then
+              if _filing_cancelled; then
+                [[ -z "$reconcile_body_file" ]] || rm -f "$reconcile_body_file" "$reconcile_banner_file"
+                return 1
+              fi
               new_number="$(forge_issue_number_from_url "$forge_repo" "$response")" || rc=$?
-              readback="$(forge_issue_read_json "$forge_repo" "$new_number")" || rc=$?
-              jq -e --arg title "$title" --rawfile body "$banner_file" --arg url "$response" \
-                '.title == $title and .body == $body and .url == $url and .state == "open"' <<< "$readback" >/dev/null || rc=1
+              # URL parsing is another command-substitution signal boundary.
+              if _filing_cancelled; then
+                [[ -z "$reconcile_body_file" ]] || rm -f "$reconcile_body_file" "$reconcile_banner_file"
+                return 1
+              fi
+              if (( rc == 0 )); then
+                readback="$(forge_issue_read_json "$forge_repo" "$new_number")" || rc=$?
+                jq -e --arg title "$title" --rawfile body "$banner_file" --arg url "$response" \
+                  '.title == $title and .body == $body and .url == $url and .state == "open"' <<< "$readback" >/dev/null || rc=1
+              fi
             fi
           fi
         else
