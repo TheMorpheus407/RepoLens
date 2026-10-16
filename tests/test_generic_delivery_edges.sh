@@ -49,7 +49,7 @@ for scenario in ${1:-severity invalid trust overlap large strings private-discov
       optional_local_finalization
       jq -sc '{rows:length,titles:map(.title),severities:map(.severity)}' "$LOG_BASE/final/findings.jsonl"
       jq -se 'length == 1 and .[0].title == "Accepted finding" and .[0].severity == "high"' "$LOG_BASE/final/findings.jsonl" >/dev/null
-      if rg -q 'Rejected finding' "$LOG_BASE/final/TODO.md"; then exit 1; fi
+      if grep -q 'Rejected finding' "$LOG_BASE/final/TODO.md"; then exit 1; fi
       unset REPOLENS_MIN_SEVERITY
       ;;
     overlap)
