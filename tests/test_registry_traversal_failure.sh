@@ -328,4 +328,115 @@ for list_fault in missing read-empty read-partial truncated; do
   printf 'PASS: %s staged-list failure preserves registry, CSV and reports; retry refreshes\n' "$list_fault"
 ) || exit 1
 done
+# repolens-r9-p4-3: unavailable scope evidence is an operational failure,
+# never a reason to quarantine a valid finding or replace current reports.
+for scope_fault in unreadable missing malformed; do
+(
+  LOG_BASE="$TMP/scope-io-$scope_fault-run" OUTPUT_DIR="$TMP/scope-io-$scope_fault-output"
+  check cp -R "$TMP/output" "$OUTPUT_DIR"
+  BRANCH_SCOPE_FILE="$TMP/scope-io-$scope_fault.json"
+  check printf '["src/changed.sh"]\n' > "$BRANCH_SCOPE_FILE"
+  RUN_ID=probe MODE=branch-review LOCAL_MODE=true OUTPUT_DIR_SET=true
+  HUMAN_REVIEW=true REPOLENS_FINAL_STATE=finished
+  check finalize_local
+  artifacts=(findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md HUMAN_REVIEW.md)
+  check mkdir "$TMP/scope-io-$scope_fault-published"
+  for artifact in "${artifacts[@]}"; do
+    check cp "$LOG_BASE/final/$artifact" "$TMP/scope-io-$scope_fault-published/$artifact"
+  done
+  check printf -- '---\ntitle: Newly confirmed valid finding\nseverity: high\n---\nsrc/changed.sh:1 Evidence\n' > "$OUTPUT_DIR/security/injection/003.md"
+  check printf -- '---\ntitle: Genuinely out of scope\nseverity: high\n---\nsrc/unchanged.sh:1 Evidence\n' > "$OUTPUT_DIR/security/injection/004.md"
+  case "$scope_fault" in
+    unreadable)
+      check chmod 000 "$BRANCH_SCOPE_FILE"
+      if [[ -r "$BRANCH_SCOPE_FILE" ]]; then
+        jq() {
+          local arg
+          for arg in "$@"; do [[ "$arg" != "$BRANCH_SCOPE_FILE" ]] || return 2; done
+          command jq "$@"
+        }
+      fi
+      ;;
+    missing) check rm "$BRANCH_SCOPE_FILE" ;;
+    malformed) check printf '{invalid scope\n' > "$BRANCH_SCOPE_FILE" ;;
+  esac
+  rc=0
+  branch_scope_verify_body 'src/changed.sh:1' > "$TMP/scope-reason" || rc=$?
+  check test "$rc" -eq 2
+  rc=0
+  branch_scope_filter_directory "$OUTPUT_DIR" || rc=$?
+  check test "$rc" -ne 0
+  check test "$(command find "$OUTPUT_DIR" -name '*.md' | wc -l)" -eq 4
+  check test "$(command find "$OUTPUT_DIR" -name '*.out-of-scope*' | wc -l)" -eq 0
+  manifest="$LOG_BASE/proposals.json"
+  check printf '[{"title":"Valid proposal","severity":"high","body":"src/changed.sh:1"}]\n' > "$manifest"
+  check printf '[]\n' > "$manifest.out-of-scope.json"
+  manifest_before="$(sha256sum "$manifest" "$manifest.out-of-scope.json")"
+  rc=0
+  branch_scope_filter_manifest "$manifest" || rc=$?
+  check test "$rc" -ne 0
+  check test "$(sha256sum "$manifest" "$manifest.out-of-scope.json")" = "$manifest_before"
+  check finalize_local
+  for artifact in "${artifacts[@]}"; do
+    check cmp "$TMP/scope-io-$scope_fault-published/$artifact" "$LOG_BASE/final/$artifact"
+  done
+  check test -f "$OUTPUT_DIR/security/injection/003.md"
+  check test -f "$OUTPUT_DIR/security/injection/004.md"
+  unset -f jq
+  if [[ -e "$BRANCH_SCOPE_FILE" ]]; then check chmod 600 "$BRANCH_SCOPE_FILE"; fi
+  check printf '["src/changed.sh"]\n' > "$BRANCH_SCOPE_FILE"
+  check finalize_local
+  check test -f "$OUTPUT_DIR/security/injection/003.md"
+  check test -f "$OUTPUT_DIR/security/injection/004.md.out-of-scope"
+  check jq -se 'length == 3 and any(.[]; .title == "Newly confirmed valid finding")' "$LOG_BASE/final/findings.jsonl"
+  check grep -q 'Newly confirmed valid finding' "$LOG_BASE/final/TODO.md"
+  check branch_scope_filter_manifest "$manifest"
+  check jq -e 'length == 1' "$manifest"
+  printf 'PASS: %s scope preserves findings, manifest, registry and reports; repair retries\n' "$scope_fault"
+) || exit 1
+done
+# Scope access can fail after the initial preflight. Both filters must still
+# stop without turning valid evidence into an out-of-scope rejection.
+for scope_consumer in directory manifest; do
+(
+  MODE=branch-review BRANCH_SCOPE_FILE="$TMP/late-scope-$scope_consumer.json"
+  check printf '["src/changed.sh"]\n' > "$BRANCH_SCOPE_FILE"
+  check mkdir "$TMP/late-scope-$scope_consumer"
+  late_dir="$TMP/late-scope-$scope_consumer"
+  check printf 'src/changed.sh:1\n' > "$late_dir/valid.md"
+  late_manifest="$late_dir/proposals.json"
+  check printf '[{"title":"Valid","severity":"high","body":"src/changed.sh:1"}]\n' > "$late_manifest"
+  check printf '[]\n' > "$late_manifest.out-of-scope.json"
+  before="$(sha256sum "$late_dir/valid.md" "$late_manifest" "$late_manifest.out-of-scope.json")"
+  jq() {
+    local arg scope_read=0
+    for arg in "$@"; do [[ "$arg" != "$BRANCH_SCOPE_FILE" ]] || scope_read=1; done
+    if (( scope_read )) && [[ -e "$late_dir/read-once" ]]; then return 2; fi
+    command jq "$@" || return $?
+    if (( scope_read )); then
+      : > "$late_dir/read-once" || return 1
+      chmod 000 "$BRANCH_SCOPE_FILE" || return 1
+    fi
+  }
+  rc=0
+  if [[ "$scope_consumer" == directory ]]; then
+    branch_scope_filter_directory "$late_dir" || rc=$?
+  else
+    branch_scope_filter_manifest "$late_manifest" || rc=$?
+  fi
+  unset -f jq
+  check chmod 600 "$BRANCH_SCOPE_FILE"
+  check test "$rc" -ne 0
+  check test "$(sha256sum "$late_dir/valid.md" "$late_manifest" "$late_manifest.out-of-scope.json")" = "$before"
+  check test ! -e "$late_dir/valid.md.out-of-scope"
+  check test "$(command find "$late_dir" -name '*.scope.*' | wc -l)" -eq 0
+  if [[ "$scope_consumer" == directory ]]; then
+    check branch_scope_filter_directory "$late_dir"
+  else
+    check branch_scope_filter_manifest "$late_manifest"
+    check jq -e 'length == 1' "$late_manifest"
+  fi
+  printf 'PASS: late scope-read failure preserves %s input and retries\n' "$scope_consumer"
+) || exit 1
+done
 printf 'Results: registry traversal failure checks passed\n'

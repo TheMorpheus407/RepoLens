@@ -339,7 +339,7 @@ filing_verify_cluster_citations() {
 # sentinels participate in this credential-bearing phase.
 _filing_real_agent() {
   local run_id="$1" cluster_id="$2" log_base entry reason repo title body_file
-  local open_issues duplicate created_url number readback label reserve_rc
+  local open_issues duplicate created_url number readback label reserve_rc scope_rc
   _filing_cancelled && return 1
   log_base="$(_filing_log_base "$run_id")"
   local filed_dir="$log_base/final/filed"
@@ -371,7 +371,17 @@ _filing_real_agent() {
     _filing_fail "$filed_dir" "$cluster_id" "$reason"
     return 1
   fi
-  if ! reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$entry")")"; then
+  if reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$entry")")"; then
+    :
+  else
+    scope_rc=$?
+    if (( scope_rc != 1 )); then
+      # No POST has been admitted. Keep saved receipts and pending work retryable.
+      rm -f "$filed_dir/$cluster_id.lock"
+      rmdir "$filed_dir/$cluster_id.governor"
+      printf 'filing: %s; retry after scope repair\n' "$reason" >&2
+      return 2
+    fi
     _filing_fail "$filed_dir" "$cluster_id" "$reason"
     return 1
   fi
@@ -759,7 +769,7 @@ _filing_cross_link_enact() {
   # at most once even when multiple clusters flag the same existing issue.
   local -A seen=()
 
-  local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc
+  local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc scope_rc
   local evidence reason target response readback title new_number reconcile_done body_json reserve_rc action_citations
   local open_issues duplicate open_issues_status=unfetched
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
@@ -822,8 +832,14 @@ _filing_cross_link_enact() {
     fi
     [[ -n "$evidence" ]] || evidence="$(jq -cn --arg body "$body" '{body:$body}')"
     reason=""
-    if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$evidence")" \
-        || ! reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$evidence")")"; then
+    if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$evidence")"; then
+      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
+      continue
+    fi
+    scope_rc=0
+    reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$evidence")")" || scope_rc=$?
+    (( scope_rc <= 1 )) || return 2
+    if (( scope_rc == 1 )); then
       _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
       continue
     fi
@@ -863,8 +879,14 @@ _filing_cross_link_enact() {
     done <<< "$action_reference_candidates"
     (( unsupported_reference )) && continue
     if [[ -n "$action_citations" ]]; then
-      if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" \
-          || ! reason="$(branch_scope_verify_body "$body")"; then
+      if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")"; then
+        _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
+        continue
+      fi
+      scope_rc=0
+      reason="$(branch_scope_verify_body "$body")" || scope_rc=$?
+      (( scope_rc <= 1 )) || return 2
+      if (( scope_rc == 1 )); then
         _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
         continue
       fi
@@ -1166,7 +1188,9 @@ dispatch_filing_batch() {
       return 1
     }
     if ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
-      _filing_cross_link_enact "$run_id" || true
+      local cross_link_rc=0
+      _filing_cross_link_enact "$run_id" || cross_link_rc=$?
+      (( cross_link_rc != 2 )) || return 1
     fi
     _filing_cancelled && return 1
     printf 'Filed: 0, Verification-failed: 0, Skipped-existing: 0\n'
@@ -1193,14 +1217,17 @@ dispatch_filing_batch() {
   # The sequential CLI signal handlers return during this read-only phase so
   # cancellation can release the current governor and undispatched locks.
   # Bash dynamic scope restores the flag on every return from this function.
-  local _REPOLENS_FILING_RECONCILING=1
+  local _REPOLENS_FILING_RECONCILING=1 admission_rc=0
   for cid in "${cluster_ids[@]}"; do
     _filing_cancelled && break
     if [[ -e "$filed_dir/$cid.url" && "${_FILING_AGENT_CALLBACK:-_filing_real_agent}" == _filing_real_agent ]]; then
-      _filing_real_agent "$run_id" "$cid" >/dev/null 2>&1 || {
+      local reconcile_rc=0
+      _filing_real_agent "$run_id" "$cid" >/dev/null 2>&1 || reconcile_rc=$?
+      if (( reconcile_rc == 2 )); then admission_rc=1; break; fi
+      if (( reconcile_rc != 0 )); then
         _filing_cancelled && break
         _filing_fail "$filed_dir" "$cid" 'success marker could not be reconciled'
-      }
+      fi
     fi
     _filing_cancelled && break
     if [[ -e "$filed_dir/$cid.url" ]]; then
@@ -1230,7 +1257,7 @@ dispatch_filing_batch() {
 
   local dispatch_rc=0 wait_rc=0 recorded_failure=0 dispatched_count=0 pending
   local callback="${_FILING_AGENT_CALLBACK:-_filing_real_agent}"
-  if _filing_cancelled; then
+  if (( admission_rc != 0 )) || _filing_cancelled; then
     for pending in "${to_dispatch[@]}"; do
       rm -f "$filed_dir/$pending.lock"
     done
@@ -1313,7 +1340,9 @@ dispatch_filing_batch() {
 
   # Cross-links run only after lifecycle infrastructure settled successfully.
   if (( dispatch_rc == 0 )) && ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
-    _filing_cross_link_enact "$run_id" || true
+    local cross_link_rc=0
+    _filing_cross_link_enact "$run_id" || cross_link_rc=$?
+    (( cross_link_rc != 2 )) || dispatch_rc=1
   fi
   _filing_cancelled && dispatch_rc=1
 
