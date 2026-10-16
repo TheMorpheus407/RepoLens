@@ -8,7 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Bound generated Generic artifact directory names with a stable hash of the complete slug, preserving full focus text and resume identity for long investigation seeds (repolens-r8-p2-3).
+- Bound generated Generic artifact names by the destination filesystem limits, reserving the findings file extension and using a stable hash of the complete slug. Preserve full investigation attributes and resume identity; keep rounds pending when identity generation fails (repolens-r8-p2-3).
+
+- Give Generic investigators their generated ID and exact findings path, and include their dispatched findings in round digests while continuing to reject undispatched generated IDs.
 
 - Keep every explicitly requested specification required during prompt composition, so a disappearing file stops the next lens and remains resumable in audit and spec-change as well as greenfield (repolens-r8-p1-3).
 

@@ -1059,17 +1059,43 @@ _rounds_meta_dispatch_lens_entries() {
   done < "$dispatch_file"
 }
 
+# Reserve the finding's .md suffix as well as the artifact directory name.
+# A destination may not exist yet; its nearest existing directory determines
+# the filesystem limit without creating artifacts during dispatch parsing.
+_rounds_meta_generic_slug_limit() {
+  local dispatch_dir="$1" findings_dir="${2:-}" destination limit name_max=""
+  local base="${LOG_BASE:-$dispatch_dir}"
+  local -a destinations=("$base/generic")
+  destinations+=("${findings_dir:-$base/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs}")
+  if ${LOCAL_MODE:-false} && [[ -n "${OUTPUT_DIR:-}" ]]; then
+    destinations+=("$OUTPUT_DIR/generic")
+  fi
+  for destination in "${destinations[@]}"; do
+    while [[ ! -d "$destination" ]]; do
+      destination="$(dirname -- "$destination")" || return 1
+    done
+    limit="$(getconf NAME_MAX "$destination")" || return 1
+    [[ "$limit" =~ ^[0-9]+$ ]] && (( limit >= 36 )) || return 1
+    if [[ -z "$name_max" ]] || (( limit < name_max )); then name_max="$limit"; fi
+  done
+  printf '%s\n' "$((name_max - 3))"
+}
+
 _rounds_meta_dispatch_generic_entries() {
-  local dispatch_file="$1" line trimmed generic_attrs stripped attr_body
-  local role focus anchor exclude missed_angle tuple slug entry dedup_key digest index=0
+  local dispatch_file="$1" dispatch_dir line trimmed generic_attrs stripped attr_body
+  local role focus anchor exclude missed_angle tuple slug entry dedup_key digest slug_limit="" index=0
   local -A seen_entries=()
 
   [[ -f "$dispatch_file" ]] || return 0
+  dispatch_dir="$(dirname -- "$dispatch_file")" || return 1
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     trimmed="$(_rounds_meta_trim "$line")"
     if [[ "$trimmed" =~ ^-?[[:space:]]*GENERIC:[[:space:]]*(.*)$ ]]; then
       generic_attrs="${BASH_REMATCH[1]}"
+      if [[ -z "$slug_limit" ]]; then
+        slug_limit="$(_rounds_meta_generic_slug_limit "$dispatch_dir" "${2:-}")" || return 1
+      fi
       stripped="$(_rounds_meta_strip_rationale "$generic_attrs")"
       attr_body="$(_rounds_meta_trim "$stripped")"
 
@@ -1091,12 +1117,11 @@ _rounds_meta_dispatch_generic_entries() {
 
       slug="$(_rounds_meta_slug "${role}-${focus}")"
       [[ -n "$slug" ]] || slug="investigator-$index"
-      # Generic IDs name artifact directories. Keep every existing component
-      # that fits NAME_MAX=255 on supported filesystems; hash the full slug
+      # Keep IDs whose complete artifact filenames fit. Hash the full slug
       # when shortening so equal prefixes retain distinct stable identities.
-      if (( ${#slug} > 255 )); then
+      if (( ${#slug} > slug_limit )); then
         digest="$(sha256_text "$slug")" || return 1
-        slug="${slug:0:222}-${digest:0:32}"
+        slug="${slug:0:$((slug_limit - 33))}-${digest:0:32}"
       fi
       entry="generic/$slug"
       tuple="$(_rounds_meta_tuple_serialize "$entry" "$role" "$focus" "$anchor" "$exclude")"
@@ -2124,6 +2149,7 @@ _round_digest_rank_suspect_files() {
 
 build_round_digest() {
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
+  local dispatched_entry
   local file segment segment_sep field_sep segments_output frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
   local suspect_file audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
   local round_number confidence confidence_rank severity_rank_value score finding_id hypothesis files_display title_text finding_identity
@@ -2136,6 +2162,7 @@ build_round_digest() {
   local -A _round_digest_touched_domains=()
   local -A _round_digest_audit_domain_set=()
   local -A _round_digest_registered_lens_set=()
+  local -A _round_digest_dispatched_generic_set=()
   local -A _round_digest_suspect_file_counts=()
   local -A _round_digest_omitted_lens_counts=()
 
@@ -2162,6 +2189,14 @@ build_round_digest() {
     [[ -n "$registered_lens" ]] || continue
     _round_digest_registered_lens_set["$registered_lens"]=1
   done < <(_round_digest_registered_lenses "$domains_file" || true)
+  # Generated investigators are absent from the static registry. Trust only
+  # Generic IDs supplied by this round's driver, never IDs claimed by a file.
+  for dispatched_entry in "${@:2}"; do
+    dispatched_entry="${dispatched_entry%%|*}"
+    if [[ "$dispatched_entry" =~ ^generic/[a-z0-9][a-z0-9-]*$ ]]; then
+      _round_digest_dispatched_generic_set["$dispatched_entry"]=1
+    fi
+  done
   audit_total="${#_round_digest_audit_domain_set[@]}"
   if (( audit_total == 0 )); then
     audit_total=27
@@ -2217,7 +2252,8 @@ build_round_digest() {
         _round_digest_warn "Skipping malformed lens output $(basename "$file"): required frontmatter keys severity, domain, and lens_id or lens are required"
         continue
       fi
-      if [[ -z "${_round_digest_registered_lens_set[$lens]:-}" ]]; then
+      if [[ -z "${_round_digest_registered_lens_set[$lens]:-}" \
+          && -z "${_round_digest_dispatched_generic_set[$domain/$lens]:-}" ]]; then
         _round_digest_warn "Skipping untrusted lens output $(basename "$file"): lens id is not registered"
         continue
       fi
@@ -2750,7 +2786,19 @@ run_rounds() {
           log_warn "[round $round/$rounds_total] Custom lens materialization failed; round remains pending"
           return "$round_rc"
         fi
-        dispatched_generic_output="$(_rounds_meta_dispatch_generic_entries "$dispatch_path")"
+        if dispatched_generic_output="$(_rounds_meta_dispatch_generic_entries "$dispatch_path" "$current_round_dir/lens-outputs")"; then
+          :
+        else
+          round_rc=$?
+          ROUNDS_FAILURE_REASON="generic-dispatch-failed"
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          else
+            set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON"
+          fi
+          log_warn "[round $round/$rounds_total] Generic dispatch parsing failed; round remains pending"
+          return "$round_rc"
+        fi
         if _rounds_meta_dispatch_has_entries "$dispatch_path"; then
           dispatch_has_entries=1
         fi
@@ -2996,7 +3044,7 @@ run_rounds() {
       return 1
     fi
 
-    build_round_digest "$current_round_dir"
+    build_round_digest "$current_round_dir" "${active_lens_list[@]}"
     round_rc=$?
     if (( round_rc != 0 )); then
       _rounds_restore_completed_lenses_file "$had_completed_lenses_file" "$original_completed_lenses_file"

@@ -18,7 +18,7 @@
 # tests exercise the library entry point directly to keep the contract
 # under unit-level coverage.
 #
-# shellcheck disable=SC2034  # Test globals are read by the sourced rounds module.
+# shellcheck disable=SC2034,SC2329  # Test globals and callbacks are read by the sourced rounds module.
 
 # shellcheck disable=SC2218 # Pre-definition calls intentionally use sourced implementations.
 set -uo pipefail
@@ -775,5 +775,41 @@ fi
 assert_eq "multi-round completed_lenses_file is restored to unset state" \
           "unset" \
           "$completed_lenses_state"
+
+echo ""
+echo "Test 15: Generic hashing failures reject the entire dispatch and remain resumable"
+saved_sha256_text="$(declare -f sha256_text)"
+long_seed="$(printf '%0300d' 0 | tr 0 a)"
+for dispatch_shape in only-long short-then-long query-error query-invalid; do
+  reset_case "generic-hash-$dispatch_shape"
+  MODE=bugreport STRATEGY=waves
+  mkdir -p "$LOG_BASE/triage"
+  if [[ "$dispatch_shape" == short-then-long ]]; then
+    printf 'short investigation\n%s\n' "$long_seed" > "$LOG_BASE/triage/investigation-seeds.txt"
+  else
+    printf '%s\n' "$long_seed" > "$LOG_BASE/triage/investigation-seeds.txt"
+  fi
+  case "$dispatch_shape" in
+    query-error) getconf() { return 1; } ;;
+    query-invalid) getconf() { printf 'undefined\n'; } ;;
+    *) sha256_text() { return 1; } ;;
+  esac
+  for attempt in first retry; do
+    run_rounds 2 LENSES
+    rc=$?
+    assert_nonzero "$dispatch_shape/$attempt rejects failed hash" "$rc"
+    assert_eq "$dispatch_shape/$attempt runs no partial dispatch" "" "${RUN_LENS_CALLS[*]}"
+    assert_eq "$dispatch_shape/$attempt completes no round" "" "${MARKED_ROUNDS[*]}"
+    assert_eq "$dispatch_shape/$attempt records failure reason" "generic-dispatch-failed" "$ROUNDS_FAILURE_REASON"
+    assert_contains "$dispatch_shape/$attempt persists stop reason" "generic-dispatch-failed" "${STOP_REASONS[*]}"
+  done
+  eval "$saved_sha256_text"
+  unset -f getconf
+  run_rounds 2 LENSES
+  rc=$?
+  assert_eq "$dispatch_shape recovers after hashing is restored" "0" "$rc"
+  assert_contains "$dispatch_shape recovery runs long investigation" "generic/broader-" "${RUN_LENS_CALLS[*]}"
+done
+unset MODE STRATEGY
 
 finish

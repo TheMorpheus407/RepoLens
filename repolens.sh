@@ -4676,8 +4676,13 @@ run_lens() {
   vars+="|FORGE_ENHANCEMENT_LABEL_CREATE=$(forge_prompt_label_create "enhancement" "a2eeef" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   vars+="|FORGE_ISSUE_LIST_OPEN=$(forge_prompt_issue_list "open" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   vars+="|FORGE_ISSUE_LIST_CLOSED=$(forge_prompt_issue_list "closed" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
-  [[ -n "${CURRENT_ROUND_INDEX:-}" ]] && vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX}"
-  [[ -n "${CURRENT_ROUND_TOTAL:-}" ]] && vars+="|ROUND_TOTAL=${CURRENT_ROUND_TOTAL}"
+  if [[ "$domain" == generic ]]; then
+    vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX:-1}|ROUND_TOTAL=${CURRENT_ROUND_TOTAL:-1}"
+    vars+="|GENERIC_FINDINGS_FILE=$(template_var_escape "$LOG_BASE/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs/$lens_id.md")"
+  else
+    [[ -n "${CURRENT_ROUND_INDEX:-}" ]] && vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX}"
+    [[ -n "${CURRENT_ROUND_TOTAL:-}" ]] && vars+="|ROUND_TOTAL=${CURRENT_ROUND_TOTAL}"
+  fi
   vars+="|LENS_ROLE=$(template_var_escape "$lens_role")"
   vars+="|LENS_FOCUS=$(template_var_escape "$lens_focus")"
   vars+="|PRIOR_FINDING_ANCHOR=$(template_var_escape "$prior_finding_anchor")"

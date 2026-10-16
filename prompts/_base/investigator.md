@@ -74,7 +74,7 @@ Research alternative root causes that prior waves missed. You have full latitude
 Write your findings to a single Markdown file at:
 
 ```
-logs/<run-id>/rounds/round-{{ROUND_INDEX}}/lens-outputs/<lens_id>.md
+{{GENERIC_FINDINGS_FILE}}
 ```
 
 Each finding consists of a YAML frontmatter block followed by required Markdown body sections. Multiple findings in the same file are separated by a `---` line.
@@ -83,7 +83,7 @@ Each finding consists of a YAML frontmatter block followed by required Markdown 
 
 ```yaml
 ---
-lens_id: <generated investigator slug for this dispatch>
+lens_id: {{LENS_ID}}
 domain: generic
 round: {{ROUND_INDEX}}
 severity: critical | high | medium | low
