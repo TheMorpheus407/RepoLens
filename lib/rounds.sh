@@ -1375,35 +1375,33 @@ _rounds_meta_dispatch_has_entries() {
 }
 
 _rounds_meta_no_fresh_angles() {
-  local output_file="$1" line trimmed output
-
+  local output_file="$1"
+  local -a read_status
   [[ -f "$output_file" ]] || return 1
-  # Check the complete read before parsing: a while loop hides read(2) errors.
-  # A sentinel retains trailing newlines through command substitution; removing
-  # at most one newline below lets the here-string restore the original lines.
-  output="$(cat -- "$output_file" && printf '.')" || return 2
-  output="${output%.}"
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    trimmed="$(_rounds_meta_trim "$line")"
-    if [[ "$trimmed" == "NO_FRESH_ANGLES" ]]; then
-      return 0
-    fi
-  done <<< "${output%$'\n'}"
-
-  return 1
+  # Drain the producer after finding the marker too: its status certifies the
+  # complete read. awk scans lines without a response-sized shell allocation.
+  if cat -- "$output_file" | awk '
+      { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "")
+        if ($0 == "NO_FRESH_ANGLES") found=1 }
+      END { exit(found ? 0 : 1) }'; then
+    read_status=("${PIPESTATUS[@]}")
+  else
+    read_status=("${PIPESTATUS[@]}")
+  fi
+  (( read_status[0] == 0 )) || return 2
+  return "${read_status[1]}"
 }
 
 _rounds_meta_extract_hypotheses() {
   local output_file="$1" hypotheses_file="$2"
-  local line trimmed rest in_block=0 tmp_file output
+  local line trimmed rest in_block=0 tmp_file
 
-  output="$(cat -- "$output_file" && printf '.')" || return 1
-  output="${output%.}"
   tmp_file="${hypotheses_file}.tmp.$$"
   : > "$tmp_file" || return 1
 
+  if ! (set -o pipefail; cat -- "$output_file" | (
   while IFS= read -r line || [[ -n "$line" ]]; do
+    (( in_block != 2 )) || continue
     trimmed="$(_rounds_meta_trim "$line")"
 
     if (( in_block == 0 )); then
@@ -1420,7 +1418,8 @@ _rounds_meta_extract_hypotheses() {
 
     if [[ "$trimmed" =~ ^#{1,6}[[:space:]]+ ]] \
         || [[ "$trimmed" =~ ^-?[[:space:]]*(LENS|CUSTOM|GENERIC):[[:space:]]* ]]; then
-      break
+      in_block=2
+      continue
     fi
 
     # A later successful iteration must not hide an earlier append failure.
@@ -1428,22 +1427,47 @@ _rounds_meta_extract_hypotheses() {
       rm -f "$tmp_file"
       return 1
     fi
-  done <<< "${output%$'\n'}"
+  done
+  )); then
+    rm -f "$tmp_file"
+    return 1
+  fi
 
   mv "$tmp_file" "$hypotheses_file"
 }
 
 _rounds_meta_parse_output() {
   local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
+  local staging name target
+  mkdir -p "${dispatch_file%/*}" "${hypotheses_file%/*}" || return 1
+  staging="$(mktemp -d "${dispatch_file%/*}/.meta-parse.XXXXXX")" || return 1
+  # Parsing may produce candidates while cat is still reading. Publish only
+  # after BOTH producer and parser succeed, with no whole-response shell copy.
+  if ! (set -o pipefail; cat -- "$output_file" | _rounds_meta_parse_output_stream \
+      "$output_file" "$staging/dispatch.md" "$staging/hypotheses.md" "$lenses_dir"); then
+    rm -rf "$staging"
+    return 1
+  fi
+  for name in dispatch.md hypotheses.md; do
+    if [[ "$name" == dispatch.md ]]; then target="$dispatch_file"; else target="$hypotheses_file"; fi
+    if [[ -d "$target" ]] || ! mv "$staging/$name" "$target"; then
+      rm -rf "$staging"
+      return 1
+    fi
+  done
+  rm -rf "$staging"
+}
+
+# Internal stdin parser; the public wrapper owns read verification/promotion.
+_rounds_meta_parse_output_stream() {
+  local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
   local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_identity
   local lens_attrs lens_dispatch_line generic_attrs generic_dispatch_line stripped attr_body
   local role focus anchor exclude missed_angle dedup_key
-  local in_custom=0 in_fence=0 output
+  local in_custom=0 in_fence=0
   local -a lens_dispatch_lines=() custom_payloads=() generic_dispatch_lines=()
   local -A seen_lens_keys=() seen_custom=() seen_generic_keys=()
 
-  output="$(cat -- "$output_file" && printf '.')" || return 1
-  output="${output%.}"
   [[ -n "$lenses_dir" ]] || lenses_dir="$(_rounds_meta_lenses_dir)"
   dispatch_dir="${dispatch_file%/*}"
   hypotheses_dir="${hypotheses_file%/*}"
@@ -1540,7 +1564,7 @@ _rounds_meta_parse_output() {
       in_custom=1
       in_fence=0
     fi
-  done <<< "${output%$'\n'}"
+  done
 
   if (( in_custom )); then
     if (( in_fence )); then

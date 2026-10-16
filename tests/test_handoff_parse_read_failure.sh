@@ -175,7 +175,7 @@ for fail_read in 1 2 3; do
   check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 2
   must run_rounds 2 LENSES
 done
-# Checked buffering must preserve ordinary EOF and trailing hypothesis lines.
+# Checked streaming must preserve ordinary EOF and trailing hypothesis lines.
 for ending in none one two; do
   must printf 'HYPOTHESES_TO_VERIFY:\nEnds in a period.' > "$FIXTURE/eof-input"
   must printf 'Ends in a period.\n' > "$FIXTURE/eof-expected"
@@ -232,5 +232,14 @@ must run_rounds 2 LENSES
 check test "$(command cat "$saved/hypotheses.md")" = "$hypotheses_before"
 check test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1
 check test "$(wc -l < "$LOG_BASE/lens-calls")" -eq 2
+# Producer errors remain errors for library callers with pipefail disabled,
+# including a partial stream that already contains the saturation marker.
+rc=0
+(
+  set +o pipefail
+  cat() { builtin printf 'NO_FRESH_ANGLES\n'; return 1; }
+  _rounds_meta_no_fresh_angles "$FIXTURE/eof-input"
+) || rc=$?
+check test "$rc" -eq 2
 printf 'Results: %s passed, %s failed\n' "$passed" "$failed"
 (( failed == 0 ))
