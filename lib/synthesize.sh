@@ -223,7 +223,7 @@ _dedupe_resolve_sim_threshold() {
   printf '%s\n' "$((10#$raw))"
 }
 
-# _synthesize_filter_manifest_min_severity <manifest_path> <min_severity> [verification_path]
+# _synthesize_filter_manifest_min_severity <manifest_path> <min_severity> [verification_path] [preserved_path]
 #   Filters create-issue manifest entries below the configured severity
 #   threshold. Comment cross-link actions attached to valid severity-bearing
 #   entries below the threshold are preserved in a sidecar consumed by
@@ -248,7 +248,7 @@ _synthesize_filter_manifest_min_severity() {
   fi
 
   tmp="${manifest}.filtered.$$"
-  preserved="$(dirname "$manifest")/cross-link-actions.preserved.json"
+  preserved="${4:-$(dirname "$manifest")/cross-link-actions.preserved.json}"
   preserved_tmp="${preserved}.tmp.$$"
   verification_json='[]'
   if [[ -n "$verification" && -f "$verification" ]]; then
@@ -1054,6 +1054,8 @@ validate_manifest_against_verification() {
 #   captures the JSON manifest from stdout, validates it, and atomically
 #   promotes it to logs/<run-id>/final/manifest.json. If validation fails,
 #   the candidate is discarded and no consumable manifest.json remains.
+#   Scope outages instead retain published outputs and non-consumable pending
+#   evidence; retry regenerates from the current findings.
 #
 #   Required globals: AGENT, PROJECT_PATH.
 #   Optional globals: REPO_OWNER, REPO_NAME, FORGE_REPO, ROUNDS,
@@ -1065,11 +1067,13 @@ run_synthesizer() {
     return 2
   fi
 
-  local repo_root run_log_base rounds_dir final_dir candidate prompt_text agent_output
+  local repo_root run_log_base rounds_dir final_dir candidate prompt_text agent_output scope_rc
+  local candidate_actions
   repo_root="$(_synthesize_repo_root)"
   run_log_base="$(_synthesize_log_base "$run_id")"
   rounds_dir="$run_log_base/rounds"
   final_dir="$run_log_base/final"
+  candidate_actions="$final_dir/manifest.json.tmp.$$.cross-link-actions.json"
 
   local synthesize_template="$repo_root/prompts/_base/synthesize.md"
   if [[ ! -f "$synthesize_template" ]]; then
@@ -1093,17 +1097,19 @@ run_synthesizer() {
     return 1
   }
 
-  # Clear any stale manifest from a previous run before invoking the agent.
-  # This makes the "fatal validation leaves nothing consumable" guarantee
-  # hold across every failure path, not just post-validation failures.
-  rm -f "$final_dir/manifest.json"
-  rm -f "$final_dir/cross-link-actions.preserved.json"
-
+  # Scope outages preserve the previous publication, even for an empty tree.
+  if [[ "${MODE:-${REPOLENS_MODE:-}}" == branch-review ]]; then
+    _branch_scope_read_paths >/dev/null || return 1
+  fi
   local scope_output_dir
   for scope_output_dir in "$rounds_dir"/round-*/lens-outputs; do
     [[ -d "$scope_output_dir" ]] || continue
     branch_scope_filter_directory "$scope_output_dir" || return 1
   done
+
+  if [[ "${MODE:-${REPOLENS_MODE:-}}" != branch-review ]]; then
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
+  fi
 
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
@@ -1117,14 +1123,15 @@ run_synthesizer() {
     candidate="$final_dir/manifest.json.tmp.$$"
     if ! printf '[]\n' > "$candidate"; then
       echo "run_synthesizer: failed to write empty manifest.json" >&2
-      rm -f "$candidate"
+      rm -f "$candidate" "$candidate_actions"
       return 1
     fi
     if ! mv "$candidate" "$final_dir/manifest.json"; then
       echo "run_synthesizer: failed to promote empty manifest.json" >&2
-      rm -f "$candidate"
+      rm -f "$candidate" "$candidate_actions"
       return 1
     fi
+    rm -f "$final_dir/cross-link-actions.preserved.json" "$final_dir/manifest.scope-pending.json" "$final_dir/cross-link-actions.scope-pending.json"
     return 0
   fi
 
@@ -1159,15 +1166,18 @@ run_synthesizer() {
 
   if ! declare -F compose_prompt >/dev/null 2>&1; then
     echo "run_synthesizer: compose_prompt is not available (source lib/template.sh)" >&2
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
     return 2
   fi
   if ! declare -F run_agent >/dev/null 2>&1; then
     echo "run_synthesizer: run_agent is not available (source lib/core.sh)" >&2
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
     return 2
   fi
 
   prompt_text="$(compose_prompt "$synthesize_template" "$synthesize_template" "$vars")" || {
     echo "run_synthesizer: prompt composition failed" >&2
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
     return 1
   }
 
@@ -1194,26 +1204,31 @@ run_synthesizer() {
     fi
   elif (( agent_rc != 0 )); then
     echo "run_synthesizer: agent invocation failed" >&2
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
     return 6
   fi
 
   local extracted
   extracted="$(_synthesize_extract_json_array "$agent_output")" || {
     echo "run_synthesizer: agent output did not contain a JSON array" >&2
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
     return 4
   }
 
   candidate="$final_dir/manifest.json.tmp.$$"
   if ! printf '%s\n' "$extracted" > "$candidate"; then
     echo "run_synthesizer: failed to write candidate manifest" >&2
-    rm -f "$candidate"
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
+    rm -f "$candidate" "$candidate_actions"
     return 1
   fi
 
+  # Stage below-threshold cross-links beside the candidate; they must not
+  # overwrite an earlier publication before the scope check succeeds.
   if [[ -n "${REPOLENS_MIN_SEVERITY:-}" ]]; then
-    if ! _synthesize_filter_manifest_min_severity "$candidate" "$REPOLENS_MIN_SEVERITY" "$final_dir/verification.json"; then
+    if ! _synthesize_filter_manifest_min_severity "$candidate" "$REPOLENS_MIN_SEVERITY" "$final_dir/verification.json" "$candidate_actions"; then
       echo "run_synthesizer: failed to apply min-severity filter" >&2
-      rm -f "$candidate"
+      rm -f "$candidate" "$candidate_actions"
       rm -f "$final_dir/manifest.json"
       rm -f "$final_dir/cross-link-actions.preserved.json"
       return 1
@@ -1226,7 +1241,7 @@ run_synthesizer() {
   # field (forward-compat). Pure, model-free, deterministic, idempotent.
   if ! _synthesize_attach_also_reported_by "$candidate"; then
     echo "run_synthesizer: failed to attach also_reported_by[]" >&2
-    rm -f "$candidate"
+    rm -f "$candidate" "$candidate_actions"
     rm -f "$final_dir/manifest.json"
     rm -f "$final_dir/cross-link-actions.preserved.json"
     return 1
@@ -1239,14 +1254,14 @@ run_synthesizer() {
   # tolerates them). Pure, model-free, deterministic, idempotent.
   if ! _synthesize_mark_duplicates "$candidate"; then
     echo "run_synthesizer: failed to mark duplicate records" >&2
-    rm -f "$candidate"
+    rm -f "$candidate" "$candidate_actions"
     rm -f "$final_dir/manifest.json"
     rm -f "$final_dir/cross-link-actions.preserved.json"
     return 1
   fi
 
   if ! validate_manifest "$candidate"; then
-    rm -f "$candidate"
+    rm -f "$candidate" "$candidate_actions"
     rm -f "$final_dir/manifest.json"
     rm -f "$final_dir/cross-link-actions.preserved.json"
     return 5
@@ -1257,22 +1272,38 @@ run_synthesizer() {
   # findings were all marked WRONG by the verifier. Absent verification.json
   # is a no-op.
   if ! validate_manifest_against_verification "$candidate" "$final_dir/verification.json"; then
-    rm -f "$candidate"
+    rm -f "$candidate" "$candidate_actions"
     rm -f "$final_dir/manifest.json"
     rm -f "$final_dir/cross-link-actions.preserved.json"
     return 5
   fi
 
-  if ! branch_scope_filter_manifest "$candidate"; then
-    rm -f "$candidate"
+  scope_rc=0
+  branch_scope_filter_manifest "$candidate" || scope_rc=$?
+  if (( scope_rc != 0 )); then
+    if (( scope_rc == 2 )); then
+      # Evidence only: a repaired retry regenerates from current draft findings.
+      mv "$candidate" "$final_dir/manifest.scope-pending.json" || return 1
+      if [[ -f "$candidate_actions" ]]; then
+        mv "$candidate_actions" "$final_dir/cross-link-actions.scope-pending.json" || return 1
+      fi
+    else
+      rm -f "$candidate" "$candidate_actions" "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
+    fi
     return 5
   fi
 
+  if [[ -f "$candidate_actions" ]]; then
+    mv "$candidate_actions" "$final_dir/cross-link-actions.preserved.json" || return 1
+  else
+    rm -f "$final_dir/cross-link-actions.preserved.json"
+  fi
   if ! mv "$candidate" "$final_dir/manifest.json"; then
     echo "run_synthesizer: failed to promote manifest" >&2
-    rm -f "$candidate"
+    rm -f "$candidate" "$candidate_actions"
     return 1
   fi
 
+  rm -f "$final_dir/manifest.scope-pending.json" "$final_dir/cross-link-actions.scope-pending.json"
   return 0
 }

@@ -275,7 +275,7 @@ branch_scope_verify_body() {
 branch_scope_filter_directory() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local dir="$1" file reason body files files_fd verification_rc filter_rc=0 list_complete=false
-  local -a finding_files=()
+  local -a finding_files=() rejected_files=() rejection_reasons=()
   [[ -d "$dir" ]] || return 0
   if ! _branch_scope_read_paths >/dev/null; then
     printf 'branch_scope_filter_directory: branch scope unavailable; retry after repair\n' >&2
@@ -326,16 +326,26 @@ branch_scope_filter_directory() {
         filter_rc=1
         break
       fi
-      # Keep the source eligible for retry until its diagnostic is saved.
-      if ! printf '%s\n' "$reason" > "$file.out-of-scope.reason"; then
-        filter_rc=1
-        break
-      fi
-      if ! mv -- "$file" "$file.out-of-scope"; then
-        rm -f -- "$file.out-of-scope.reason"
-        filter_rc=1
-        break
-      fi
+      rejected_files+=("$file")
+      rejection_reasons+=("$reason")
+    fi
+  done
+  (( filter_rc == 0 )) || return "$filter_rc"
+  # A later scope/read failure must not quarantine an earlier finding.
+  # Finish verification before committing any rejections.
+  local rejection_index
+  for rejection_index in "${!rejected_files[@]}"; do
+    file="${rejected_files[$rejection_index]}"
+    reason="${rejection_reasons[$rejection_index]}"
+    # Keep the source eligible for retry until its diagnostic is saved.
+    if ! printf '%s\n' "$reason" > "$file.out-of-scope.reason"; then
+      filter_rc=1
+      break
+    fi
+    if ! mv -- "$file" "$file.out-of-scope"; then
+      rm -f -- "$file.out-of-scope.reason"
+      filter_rc=1
+      break
     fi
   done
   return "$filter_rc"
@@ -343,11 +353,12 @@ branch_scope_filter_directory() {
 
 # Side effects: filter a synthesized candidate before promotion, preserve
 # rejected proposals, and retain the branch title convention mechanically.
+# Returns 2 on unavailable scope evidence, 1 on other filtering failures.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local manifest="$1" entry reason kept rejected verification_rc
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
-  _branch_scope_read_paths >/dev/null || return 1
+  _branch_scope_read_paths >/dev/null || return 2
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
   rejected="${kept}.rejected"
   : > "$rejected"
@@ -362,7 +373,7 @@ branch_scope_filter_manifest() {
       verification_rc=$?
       if (( verification_rc != 1 )); then
         rm -f "$kept" "$rejected"
-        return 1
+        return 2
       fi
       jq -cn --argjson finding "$entry" --arg reason "$reason" '{finding:$finding,reason:$reason}' >> "$rejected"
     fi
