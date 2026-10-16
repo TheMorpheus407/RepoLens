@@ -159,6 +159,10 @@ dedupe_local_markdown() {
     return 0
   fi
 
+  # Match ledger traversal before deriving relative duplicate/contributor
+  # links for standalone callers that supply trailing slashes.
+  while [[ "$output_dir" == */ && "$output_dir" != / ]]; do output_dir="${output_dir%/}"; done
+
   # On-demand source of the reused helpers. repolens.sh sources synthesize.sh but
   # not ledger.sh/dedupe.sh; standalone callers/tests may already have them.
   # Mirrors lib/dedupe.sh's lazy-source-on-demand pattern (cheap no-op when set).
@@ -245,7 +249,7 @@ dedupe_local_markdown() {
     canon_idx="$(jq -r '.canonical_idx' <<<"$group")" || continue
     canon_md="$(jq -r --argjson k "$canon_idx" '.[$k].markdown_path // ""' "$manifest")"
     [[ -n "$canon_md" && -f "$canon_md" ]] || continue
-    canon_rel="${canon_md#"$output_dir"/}"
+    canon_rel="${canon_md#"${output_dir%/}"/}"
 
     # Non-canonical contributor indices (every member except the canonical).
     contrib_idx_json="$(jq -c --argjson c "$canon_idx" \
@@ -280,7 +284,7 @@ dedupe_local_markdown() {
     ' "$manifest")" || tsv=""
     while IFS=$'\t' read -r clens cdomain cmd; do
       [[ -n "${clens}${cdomain}${cmd}" ]] || continue
-      crel="${cmd#"$output_dir"/}"
+      crel="${cmd#"${output_dir%/}"/}"
       arb+=$'\n'"  - lens: ${clens}"
       arb+=$'\n'"    domain: ${cdomain}"
       arb+=$'\n'"    markdown_path: ${crel}"
