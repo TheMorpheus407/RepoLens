@@ -136,7 +136,8 @@ _local_dedupe_mark_file() {
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
 
-# dedupe_local_markdown <output_dir>
+# dedupe_local_markdown <output_dir> [generic_raw_root]
+#   Optional physical rounds root forwards explicit Generic delivery selection.
 #   Public entry point. Walks the --local md tree under <output_dir>, groups
 #   near-duplicate findings with the shared match + canonical-selection helpers,
 #   and marks the files in place (see module header). Deterministic + idempotent.
@@ -196,7 +197,7 @@ dedupe_local_markdown() {
   #    markdown_path, normalized severity, frontmatter domain/lens). Files
   #    without a valid frontmatter block are skipped by the parser, so they
   #    never group and stay byte-identical.
-  if ! build_findings_jsonl_from_local "$output_dir" "$jsonl"; then
+  if ! build_findings_jsonl_from_local "$output_dir" "$jsonl" "${2:-}"; then
     echo "dedupe_local_markdown: failed to parse local markdown findings" >&2
     rm -rf "$tmpdir"
     return 1

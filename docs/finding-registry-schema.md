@@ -48,7 +48,14 @@ requested output. Each projection records `source_finding_path`,
 and its title comes from a supplied title or the hypothesis. The registry uses
 that source/segment identity alongside title/domain/lens, preserving distinct
 records when titles match. Private evidence, digests and verifier IDs are unchanged.
-Only generated, receipt-owned projection paths may be replaced or retired.
+Only findings with valid severity meeting `--min-severity` and a round-dispatched
+Generic identity are delivered. Round layout metadata, saved dispatch and completion
+receipts establish that identity; source files cannot grant themselves trust.
+Overlapping output is supported: generated projections are excluded from private
+digest/verifier/synthesizer discovery, and explicit delivery excludes private raw
+Generic evidence from local dedupe/indexing. Default builder source selection is
+unchanged. Only generated, receipt-owned projection paths with matching leading
+frontmatter identities may be replaced or retired.
 Failed delivery keeps the previous registry and reports; resume retries it from
 saved evidence without rerunning completed investigations.
 

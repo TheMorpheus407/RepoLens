@@ -121,6 +121,37 @@ optional_local_finalization
 test "$(wc -l < "$LOG_BASE/agent-calls")" -eq "$calls_before"
 test "$(sha256sum "$LOG_BASE/.rounds/round-1.lenses.completed" "$LOG_BASE/.rounds/round-2.lenses.completed")" = "$receipt_hash"
 jq -se 'length == 5' "$registry" >/dev/null
+# Follow the default-path resume hint, whose resolved output overlaps round 1.
+# Completed driver work, canonical raw bytes and digest/verifier inventory stay
+# stable while repeated delivery and local reports use only the projections.
+mapfile -t TRUSTED < "$LOG_BASE/.rounds/round-1.lenses.completed"
+build_round_digest "$LOG_BASE/rounds/round-1" "${TRUSTED[@]}"
+digest_before="$(sha256sum "$LOG_BASE/rounds/round-1/digest.md")"
+raw_before="$(find "$LOG_BASE/rounds" -name '*.md' -path '*/lens-outputs/*' -type f -print0 | sort -z | xargs -0 sha256sum)"
+OUTPUT_DIR="$LOG_BASE/rounds/round-1/lens-outputs"
+eval "$(sed -n '/^print_resume_hint() {/,/^}/p' "$REPO/lib/logging.sh")"
+_REPOLENS_RESUME_HINT_PRINTED=''
+hint="$(print_resume_hint 2>&1)"
+[[ "$hint" == *"--output $OUTPUT_DIR"* ]]
+for attempt in first repeated; do
+  run_rounds 2 LENSES
+  optional_local_finalization
+  jq -se 'length == 5 and ([.[].id] | unique | length) == 5' "$registry" >/dev/null
+  test "$(find "$OUTPUT_DIR/generic" -name '*.md' -type f | wc -l)" -eq 5
+  test "$(wc -l < "$LOG_BASE/agent-calls")" -eq "$calls_before"
+  test "$(sha256sum "$LOG_BASE/.rounds/round-1.lenses.completed" "$LOG_BASE/.rounds/round-2.lenses.completed")" = "$receipt_hash"
+  while IFS= read -r raw_source; do
+    grep -Fq "$raw_source" <<< "$raw_before"
+  done < <(find "$LOG_BASE/rounds" -name '*.md' -path '*/lens-outputs/*' ! -path '*/generic/*' -type f -print)
+  # sha256sum --check checks the saved private hashes, ignoring projections.
+  sha256sum --check --status <<< "$raw_before"
+  build_round_digest "$LOG_BASE/rounds/round-1" "${TRUSTED[@]}"
+  test "$(sha256sum "$LOG_BASE/rounds/round-1/digest.md")" = "$digest_before"
+  run_verifier "$RUN_ID"
+  test "$(jq length "$LOG_BASE/final/verification.json")" -eq 4
+  grep -Fq "$OUTPUT_DIR/generic/" "$LOG_BASE/final/TODO.md"
+done
+
 # Exercise publication failures after a real file replacement and after stale
 # retirement. Every earlier publication and the receipt must roll back intact.
 python3 -B - "$REPO" "$FIXTURE" <<'PYTRANSACTION'

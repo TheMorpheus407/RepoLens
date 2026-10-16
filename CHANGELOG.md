@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Deliver each Generic investigator finding into explicit local output, with source/segment provenance, stable identities and retryable publication; index that delivery without duplicate private-manifest representations (repolens-r9-p4-2).
+- Deliver each Generic investigator finding into explicit local output, with source/segment provenance, stable identities and retryable publication; respect severity and dispatch eligibility, handle large evidence, roll back cancellation at mutation boundaries, and keep overlapping-output resumes idempotent without duplicate private-manifest representations (repolens-r9-p4-2).
 
 - Reserve Polish remote attempts before POST, atomically save complete URL receipts, and stop retries without a saved URL receipt, preventing duplicate shortlist creation and run-wide cap overruns after receipt-write failure (repolens-r9-p4-1).
 

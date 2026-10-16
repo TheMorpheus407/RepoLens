@@ -5529,8 +5529,12 @@ finalize_summary "$SUMMARY_FILE"
 
 # --- Local-mode deterministic dedupe (non-fatal) ---
 _local_delivery_ready=true
+_local_generic_raw_root=""
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport ]]; then
+  if [[ -d "$LOG_BASE/rounds" ]]; then
+    _local_generic_raw_root="$(cd "$LOG_BASE/rounds" && pwd -P)"
+  fi
   if ! export_generic_local_findings "$OUTPUT_DIR"; then
     _local_delivery_ready=false
     log_warn "Generic delivery incomplete; preserving previous registry/reports. Repair output access and resume to retry saved findings."
@@ -5545,7 +5549,7 @@ fi
 # warns and NEVER touches REPOLENS_FINAL_STATE or RUN_ROUNDS_RC.
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && $LOCAL_MODE && $_local_delivery_ready && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
-  if dedupe_local_markdown "$OUTPUT_DIR"; then
+  if dedupe_local_markdown "$OUTPUT_DIR" "$_local_generic_raw_root"; then
     log_info "Local dedupe: reconciled duplicate markdown findings under $OUTPUT_DIR"
   elif [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
     log_info "Local dedupe: interrupted; remaining work deferred to resume"
@@ -5577,7 +5581,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && $LOCAL_MODE && $_local_delivery_ready && [[ -n "$OUTPUT_DIR" && -d "$OUTPUT_DIR" ]]; then
   if branch_scope_filter_directory "$OUTPUT_DIR" \
       && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-      && build_finding_registry "$RUN_ID" "$_local_registry_source" "$_local_registry_manifest"; then
+      && build_finding_registry "$RUN_ID" "$_local_registry_source" "$_local_registry_manifest" "$_local_generic_raw_root"; then
     _local_registry_ready=true
     log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
   else
@@ -5656,7 +5660,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
   fi
 fi
 
-unset _local_registry_ready _duplicate_report_ready _local_delivery_ready _local_registry_manifest _local_registry_source
+unset _local_registry_ready _duplicate_report_ready _local_generic_raw_root _local_delivery_ready _local_registry_manifest _local_registry_source
 
 apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"

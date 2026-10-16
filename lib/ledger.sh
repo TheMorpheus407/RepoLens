@@ -420,7 +420,9 @@ _ledger_frontmatter_scalar() {
   ' "$file"
 }
 
-# build_findings_jsonl_from_local <output_dir> <out_jsonl_path>
+# build_findings_jsonl_from_local <output_dir> <out_jsonl_path> [generic_raw_root]
+#   Optional physical rounds root excludes private raw Generic files during
+#   explicit delivery; standalone/default callers keep their source selection.
 #   Ingests the markdown findings written by `--local` mode into the canonical
 #   finding registry as JSON Lines. Recursively finds every `*.md` under
 #   <output_dir>, parses each file's leading YAML frontmatter
@@ -469,7 +471,7 @@ _ledger_frontmatter_scalar() {
 #   The list's completion sentinel must be consumed even for an empty tree;
 #   malformed readable source files continue to be skipped.
 build_findings_jsonl_from_local() {
-  local dir="${1:-}" out="${2:-}"
+  local dir="${1:-}" out="${2:-}" generic_raw_root="${3:-}"
   [[ -n "$dir" ]] || { echo "build_findings_jsonl_from_local: missing output_dir" >&2; return 2; }
   [[ -n "$out" ]] || { echo "build_findings_jsonl_from_local: missing out path" >&2; return 2; }
   [[ -d "$dir" ]] || { echo "build_findings_jsonl_from_local: output_dir not found: $dir" >&2; return 2; }
@@ -543,6 +545,12 @@ build_findings_jsonl_from_local() {
     fi
 
     generic_source_id="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" generic_source_id)")"
+    # Explicit Generic delivery indexes projections once, even when the user
+    # chose a destination containing the private multi-segment inventory.
+    if [[ -n "$generic_raw_root" && "$domain" == generic && -z "$generic_source_id" ]] \
+        && [[ "$(realpath -- "$file")" == "$generic_raw_root"/round-*/lens-outputs/* ]]; then
+      continue
+    fi
     if [[ "$domain" == generic && "$generic_source_id" =~ ^[a-f0-9]{64}$ ]]; then
       # Projected blocks may share title/lens while owning separate evidence.
       title="$(jq -r . <<< "$(_ledger_frontmatter_scalar "$snapshot" title)")" || { ingest_failed=1; break; }
@@ -847,7 +855,7 @@ _ledger_log_base() {
   printf '%s/logs/%s' "$(_ledger_repo_root)" "$run_id"
 }
 
-# build_finding_registry <run_id> [local_dir] [include_manifest=true]
+# build_finding_registry <run_id> [local_dir] [include_manifest=true] [generic_raw_root]
 #   Orchestrates the four source-specific builders above into the canonical
 #   finding registry under `<log_base>/final/`: findings.jsonl (full fidelity)
 #   plus findings.csv (flat projection). This is the single producer of
@@ -888,7 +896,7 @@ _ledger_log_base() {
 build_finding_registry() {
   local run_id="${1:-}"
   local local_dir="${2-${OUTPUT_DIR:-}}"
-  local include_manifest="${3:-true}"
+  local include_manifest="${3:-true}" generic_raw_root="${4:-}"
   if [[ -z "$run_id" ]]; then
     echo "build_finding_registry: missing run_id" >&2
     return 2
@@ -930,7 +938,7 @@ build_finding_registry() {
   # Source 2: --local markdown tree, when a directory is supplied. A
   # provided-but-missing dir is treated as "no local source" (forgiving).
   if [[ -n "$local_dir" && -d "$local_dir" ]]; then
-    if build_findings_jsonl_from_local "$local_dir" "$l_tmp"; then
+    if build_findings_jsonl_from_local "$local_dir" "$l_tmp" "$generic_raw_root"; then
       cat "$l_tmp" >> "$candidate"
     else
       echo "build_finding_registry: local ingest failed" >&2

@@ -32,10 +32,12 @@ import tempfile
 
 
 def digest(value):
+    """Hash a complete identity without filesystem component limits."""
     return hashlib.sha256(value.encode()).hexdigest()
 
 
 def checked_path(root, relative):
+    """Validate a managed path without following nested symlinks."""
     if not re.fullmatch(r"generic/[a-f0-9]{32}/[0-9]+\.md", relative):
         raise ValueError("invalid Generic delivery receipt path")
     path = root / relative
@@ -48,6 +50,7 @@ def checked_path(root, relative):
 
 
 def publish(plan, output, receipt, run_id):
+    """Stage and publish a complete delivery, restoring files and receipt on failure."""
     root = output.resolve(strict=True)
     old = json.loads(receipt.read_text()) if receipt.exists() else {}
     if not isinstance(old, dict):
@@ -80,12 +83,15 @@ def publish(plan, output, receipt, run_id):
         if path.exists():
             if name not in old:
                 raise ValueError(f"Generic delivery would overwrite an unowned file: {path}")
-            expected = f"generic_source_id: {old[name]}\n"
-            if expected not in path.read_text():
+            lines = path.read_text().splitlines()
+            frontmatter = lines[1:lines.index("---", 1)] if lines and lines[0] == "---" and "---" in lines[1:] else []
+            markers = [line for line in frontmatter if re.match(r"^\s*generic_source_id\s*:", line)]
+            if markers != [f"generic_source_id: {old[name]}"]:
                 raise ValueError(f"Generic delivery ownership changed: {path}")
 
     stage = Path(tempfile.mkdtemp(prefix=".generic-delivery-", dir=root))
-    receipt_stage = None
+    receipt_stage = receipt_backup = None
+    receipt_attempted = False
     changed, backups = [], {}
     keep_stage = False
     try:
@@ -101,41 +107,74 @@ def publish(plan, output, receipt, run_id):
         with os.fdopen(fd, "w") as stream:
             json.dump(identities, stream, sort_keys=True)
             stream.write("\n")
+        if receipt.exists():
+            fd, temporary = tempfile.mkstemp(prefix=".generic-receipt-backup-", dir=receipt.parent)
+            os.close(fd)
+            receipt_backup = Path(temporary)
+            shutil.copy2(receipt, receipt_backup)
         try:
             for i, (name, text) in enumerate(desired.items()):
                 path = checked_path(root, name)
                 if path.exists() and path.read_text() == text:
                     continue
                 path.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(stage / f"new-{i}", path)
+                # Track intent before a syscall: cancellation may arrive after
+                # the mutation succeeds but before the next Python instruction.
                 changed.append(name)
+                os.replace(stage / f"new-{i}", path)
             for name in old.keys() - desired.keys():
                 path = checked_path(root, name)
                 if path.exists():
-                    path.unlink()
                     changed.append(name)
+                    path.unlink()
+            receipt_attempted = True
             os.replace(receipt_stage, receipt)
         except BaseException:
-            for name in reversed(changed):
-                try:
-                    path = checked_path(root, name)
-                    if name in backups:
-                        os.replace(backups[name], path)
+            # Drain cancellation only after restoring the transaction; a second
+            # signal must not interrupt rollback and delete its backups.
+            blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+            try:
+                _rollback(root, changed, backups)
+                if receipt_attempted:
+                    if receipt_backup is None:
+                        receipt.unlink(missing_ok=True)
                     else:
-                        path.unlink(missing_ok=True)
-                except (OSError, ValueError) as rollback_error:
-                    keep_stage = True
-                    print(f"Generic delivery rollback pending in {stage}: {rollback_error}", file=sys.stderr)
+                        os.replace(receipt_backup, receipt)
+            except (OSError, ValueError) as rollback_error:
+                keep_stage = True
+                print(f"Generic delivery rollback pending in {stage}: {rollback_error}", file=sys.stderr)
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
             raise
     finally:
         if receipt_stage is not None:
             receipt_stage.unlink(missing_ok=True)
         if not keep_stage:
+            if receipt_backup is not None:
+                receipt_backup.unlink(missing_ok=True)
             shutil.rmtree(stage)
 
 
+def _rollback(root, changed, backups):
+    """Restore every attempted mutation, including a syscall interrupted on return."""
+    errors = []
+    for name in reversed(changed):
+        try:
+            path = checked_path(root, name)
+            if name in backups:
+                os.replace(backups[name], path)
+            else:
+                path.unlink(missing_ok=True)
+        except (OSError, ValueError) as error:
+            errors.append(str(error))
+    if errors:
+        raise OSError("; ".join(errors))
+
+
 def main():
+    """Load the staged plan and report retryable publication failures."""
     def interrupted(signum, _frame):
+        """Translate ordinary cancellation into transaction rollback."""
         raise InterruptedError(f"delivery interrupted by {signal.Signals(signum).name}")
 
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):

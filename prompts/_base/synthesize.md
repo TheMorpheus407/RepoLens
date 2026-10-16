@@ -14,6 +14,7 @@ Read every round output produced for this run:
 
 - Walk `logs/{{RUN_ID}}/rounds/round-*/lens-outputs/*.md` and ingest every finding produced by every lens in every round.
 - Also traverse recursively under `logs/{{RUN_ID}}/rounds/round-*/lens-outputs/` so nested domain/lens output files are not missed.
+- Exclude generated local delivery projections (`generic/<32-hex-source-key>/NNN.md`, marked by `generic_source_id` in frontmatter). They may overlap the private inventory after resume; ingest only their canonical raw sources.
 - Treat each source path as evidence and preserve it in `source_finding_paths`.
 - If `logs/{{RUN_ID}}/final/verification.json` exists, read it. It is a JSON array of `{ "finding_id", "status", "notes", ... }` entries produced by the verifier — see "Verification gate" below for how to apply it. If the file does not exist (verifier was disabled or failed), proceed without filtering.
 - Read existing OPEN issues exactly once with this read-only forge command:

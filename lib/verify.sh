@@ -244,7 +244,7 @@ run_verifier() {
 
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
-    total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*.md' -type f 2>/dev/null | wc -l | tr -d ' ')
+    total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*.md' -type f 2>/dev/null | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}')
   fi
   # Enumeration can finish after a parent signal, including with no findings.
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
