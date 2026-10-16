@@ -22,15 +22,24 @@ FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 source "$REPO/lib/local-dedupe.sh" || exit 1
 passed=0 failed=0
+# Abort fixture setup or ingestion when a prerequisite fails.
 must() { "$@" || exit 1; }
+# Record an assertion without hiding failures in later path variants.
 check() {
   if "$@"; then passed=$((passed + 1));
   else failed=$((failed + 1)); printf 'FAIL: %s\n' "$*" >&2; fi
 }
+# Check a stored link is relative to the supplied output root and exists.
 relative_link() {
   local target
   target="$(_ledger_frontmatter_scalar "$1" duplicate_of)" || return 1
   [[ -n "$target" && "$target" != /* && -f "${2%/}/$target" ]]
+}
+# Inspect Markdown provenance directly; registry ingestion reconstructs it.
+relative_contributor_link() {
+  local target
+  target="$(_ledger_frontmatter_scalar "$1" markdown_path)" || return 1
+  [[ -n "$target" && "$target" != /* && "${2%/}/$target" -ef "$3" ]]
 }
 for variant in plain slash repeated-slash symlink-slash root; do
   case_dir="$FIXTURE/$variant"
@@ -70,9 +79,12 @@ for variant in plain slash repeated-slash symlink-slash root; do
   must dedupe_local_markdown "$argument"
   must build_findings_jsonl_from_local "$argument" "$case_dir/records.jsonl"
   check jq -se 'length == 2 and ([.[]|select(.status=="duplicate")]|length)==1 and ([.[]|select(.status=="new")]|length)==1 and ([.[]|(.also_reported_by // [])[]]|length)==1' "$case_dir/records.jsonl"
+  duplicate_md="$(jq -r 'select(.status=="duplicate")|.markdown_path' "$case_dir/records.jsonl")" || exit 1
   for md in "$output_dir"/security/*/001.md; do
     if [[ "$(_ledger_frontmatter_scalar "$md" status)" == duplicate ]]; then
       check relative_link "$md" "$link_root"
+    else
+      check relative_contributor_link "$md" "$link_root" "$duplicate_md"
     fi
   done
   LOG_BASE="$case_dir/run"
