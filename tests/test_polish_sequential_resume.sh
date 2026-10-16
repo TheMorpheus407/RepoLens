@@ -128,5 +128,86 @@ for resume_case in empty remaining higher-count; do
     check test "$(classify_summary_health "$SUMMARY_FILE")" = ok
   done
 done
+# repolens-r9-p4-1: a successful remote POST followed by ENOSPC at the
+# URL receipt must remain reserved across every resume, even with a new batch.
+LOG_BASE="$FIXTURE/receipt-enospc" SUMMARY_FILE="$FIXTURE/receipt-enospc/summary.json"
+RUN_ID=probe MODE=polish LOCAL_MODE=false MAX_ISSUES=1 GLOBAL_ISSUES_CREATED=0 REPOLENS_FINAL_STATE=finished
+mkdir -p "$LOG_BASE/polish"
+: > "$LOG_BASE/posts"
+init_summary "$SUMMARY_FILE" probe "$FIXTURE" polish mock '' 1 github ''
+printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+forge_issue_create() {
+  builtin printf 'created\n' >> "$LOG_BASE/posts"
+  builtin printf 'https://github.com/fixture/repo/issues/%s\n' "$(wc -l < "$LOG_BASE/posts")"
+}
+printf() {
+  if [[ "${FUNCNAME[1]:-}" == run_polish_issue_emission && "${2:-}" == https://github.com/fixture/repo/issues/* ]]; then
+    builtin printf '%s\n' "$2" > /dev/full
+    return $?
+  fi
+  # shellcheck disable=SC2059 # Transparent wrapper must forward the caller's format and arguments.
+  builtin printf "$@"
+}
+rc=0
+run_polish_issue_emission probe 3 || rc=$?
+unset -f printf
+check test "$rc" -ne 0
+check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+check test "$(find "$LOG_BASE/polish/filed" -name '*.url' -size +0c | wc -l)" -eq 0
+for retry_case in same changed empty; do
+  if [[ "$retry_case" == changed ]]; then
+    printf '[{"domain":"fluency","lens_id":"new-lens","title":"Changed ranking","body":"Other suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+  elif [[ "$retry_case" == empty ]]; then
+    printf '[]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+  fi
+  GLOBAL_ISSUES_CREATED=0
+  rc=0
+  run_polish_issue_emission probe 3 || rc=$?
+  check test "$rc" -ne 0
+  check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+  check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 0
+  printf 'receipt failure resume %s: rc=%s posts=%s\n' "$retry_case" "$rc" "$(wc -l < "$LOG_BASE/posts")"
+done
+# Simulate independent reconciliation of the one known fixture POST. A saved
+# URL must restore accounting without repeating publication, even on an empty batch.
+printf 'https://github.com/fixture/repo/issues/1\n' > "$LOG_BASE/polish/filed/fluency-spacing-consistency.url"
+GLOBAL_ISSUES_CREATED=0
+rc=0
+run_polish_issue_emission probe 3 || rc=$?
+check test "$rc" -eq 0
+check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
+check test "$(jq .totals.issues_created "$SUMMARY_FILE")" -eq 1
+# An existing reservation must also block a fresh run before the POST.
+LOG_BASE="$FIXTURE/preexisting-attempt" SUMMARY_FILE="$FIXTURE/preexisting-attempt/summary.json"
+GLOBAL_ISSUES_CREATED=0
+mkdir -p "$LOG_BASE/polish/filed"
+: > "$LOG_BASE/posts"
+: > "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted"
+printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+init_summary "$SUMMARY_FILE" probe "$FIXTURE" polish mock '' 1 github ''
+rc=0
+run_polish_issue_emission probe 3 || rc=$?
+check test "$rc" -ne 0
+check test "$(wc -l < "$LOG_BASE/posts")" -eq 0
+# A reservation appearing after preflight must not be overwritten at POST.
+LOG_BASE="$FIXTURE/late-attempt" SUMMARY_FILE="$FIXTURE/late-attempt/summary.json"
+GLOBAL_ISSUES_CREATED=0
+mkdir -p "$LOG_BASE/polish/filed"
+: > "$LOG_BASE/posts"
+printf '[{"domain":"fluency","lens_id":"spacing-consistency","title":"Spacing","body":"Concrete suggestion","voice_fit":"strong","polish_rank_x1000":1500}]\n' > "$LOG_BASE/polish/ranked-suggestions.json"
+init_summary "$SUMMARY_FILE" probe "$FIXTURE" polish mock '' 1 github ''
+eval "$(declare -f _polish_render_issue_body | sed '1s/_polish_render_issue_body/original_polish_render_issue_body/')"
+_polish_render_issue_body() {
+  original_polish_render_issue_body "$@" || return $?
+  printf 'existing attempt\n' > "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted"
+}
+rc=0
+run_polish_issue_emission probe 3 || rc=$?
+check test "$rc" -ne 0
+check test "$(wc -l < "$LOG_BASE/posts")" -eq 0
+check test "$(cat "$LOG_BASE/polish/filed/fluency-spacing-consistency.attempted")" = 'existing attempt'
+unset -f _polish_render_issue_body
+eval "$(declare -f original_polish_render_issue_body | sed '1s/original_polish_render_issue_body/_polish_render_issue_body/')"
+unset -f original_polish_render_issue_body
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))
