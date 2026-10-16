@@ -1061,7 +1061,7 @@ _rounds_meta_dispatch_lens_entries() {
 
 _rounds_meta_dispatch_generic_entries() {
   local dispatch_file="$1" line trimmed generic_attrs stripped attr_body
-  local role focus anchor exclude missed_angle tuple slug entry dedup_key index=0
+  local role focus anchor exclude missed_angle tuple slug entry dedup_key digest index=0
   local -A seen_entries=()
 
   [[ -f "$dispatch_file" ]] || return 0
@@ -1091,6 +1091,13 @@ _rounds_meta_dispatch_generic_entries() {
 
       slug="$(_rounds_meta_slug "${role}-${focus}")"
       [[ -n "$slug" ]] || slug="investigator-$index"
+      # Generic IDs name artifact directories. Keep every existing component
+      # that fits NAME_MAX=255 on supported filesystems; hash the full slug
+      # when shortening so equal prefixes retain distinct stable identities.
+      if (( ${#slug} > 255 )); then
+        digest="$(sha256_text "$slug")" || return 1
+        slug="${slug:0:222}-${digest:0:32}"
+      fi
       entry="generic/$slug"
       tuple="$(_rounds_meta_tuple_serialize "$entry" "$role" "$focus" "$anchor" "$exclude")"
       printf '%s\n' "$tuple"

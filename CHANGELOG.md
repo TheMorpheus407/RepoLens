@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Bound generated Generic artifact directory names with a stable hash of the complete slug, preserving full focus text and resume identity for long investigation seeds (repolens-r8-p2-3).
+
 - Keep every explicitly requested specification required during prompt composition, so a disappearing file stops the next lens and remains resumable in audit and spec-change as well as greenfield (repolens-r8-p1-3).
 
 - Preserve successful Polish issue receipts and counters across sequential HUP/INT/TERM, and restore the run-wide issue budget from saved receipts on resume (repolens-r8-p2-1, repolens-r8-p2-2).
