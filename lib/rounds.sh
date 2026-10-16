@@ -511,6 +511,7 @@ _rounds_meta_certify_success() {
 # finish. Matching artifacts retain their bytes and modification times.
 _rounds_meta_restore_success() {
   local dir="$1" fingerprint saved_proof staging="" rc=0 name legacy_format
+  local snapshot output_hash hash_context="$1" scan_rc=0
   META_ORCH_SATURATED=0
   [[ -f "$dir/meta-orchestrator-success.json" ]] || return 1
   # Reject missing/non-file output only in a searchable directory. A
@@ -538,6 +539,7 @@ _rounds_meta_restore_success() {
       rm -rf "$staging"
       return 2
     fi
+    hash_context="$staging/hash-context"
     if ! jq -e --argjson expected "$fingerprint" '. == $expected' \
         <<< "$saved_proof" >/dev/null 2>&1; then
       rm -rf "$staging"
@@ -547,11 +549,28 @@ _rounds_meta_restore_success() {
   if [[ -z "$staging" ]]; then
     staging="$(mktemp -d "$dir/.handoff.XXXXXX")" || return 2
   fi
-  if _rounds_meta_no_fresh_angles "$dir/meta-orchestrator-output.txt"; then
+  # Parsing must consume the same bytes that the proof accepted. A late read
+  # error is pending verification, never an empty dispatch or new model call.
+  # staging is a private mktemp directory and is removed on every exit below.
+  snapshot="$staging/meta-orchestrator-output.txt"
+  if ! cat -- "$dir/meta-orchestrator-output.txt" > "$snapshot" \
+      || ! output_hash="$(_rounds_meta_git -C "$hash_context" hash-object --stdin < "$snapshot")"; then
+    rm -rf "$staging"
+    return 2
+  fi
+  if ! jq -e --arg output "$output_hash" '.output == $output' \
+      <<< "$fingerprint" >/dev/null 2>&1; then
+    rm -rf "$staging"
+    return 1
+  fi
+  _rounds_meta_no_fresh_angles "$snapshot" || scan_rc=$?
+  if (( scan_rc == 0 )); then
     _rounds_meta_write_no_fresh_dispatch "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
     META_ORCH_SATURATED=1
+  elif (( scan_rc == 1 )); then
+    _rounds_meta_parse_output "$snapshot" "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
   else
-    _rounds_meta_parse_output "$dir/meta-orchestrator-output.txt" "$staging/dispatch.md" "$staging/hypotheses.md" || rc=2
+    rc=2
   fi
   if (( rc == 0 )); then
     for name in dispatch.md hypotheses.md; do
@@ -1365,7 +1384,7 @@ _rounds_meta_no_fresh_angles() {
     if [[ "$trimmed" == "NO_FRESH_ANGLES" ]]; then
       return 0
     fi
-  done < "$output_file"
+  done < "$output_file" || return 2
 
   return 1
 }
@@ -1395,7 +1414,7 @@ _rounds_meta_extract_hypotheses() {
     fi
 
     printf '%s\n' "$line" >> "$tmp_file"
-  done < "$output_file"
+  done < "$output_file" || { rm -f "$tmp_file"; return 1; }
 
   mv "$tmp_file" "$hypotheses_file"
 }
@@ -1505,7 +1524,7 @@ _rounds_meta_parse_output() {
       in_custom=1
       in_fence=0
     fi
-  done < "$output_file"
+  done < "$output_file" || return 1
 
   if (( in_custom )); then
     if (( in_fence )); then
