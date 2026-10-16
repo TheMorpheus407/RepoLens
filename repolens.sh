@@ -5561,8 +5561,8 @@ fi
 # --- Local-mode finding registry (non-fatal) ---
 # The non-local registry hook above ( ! $LOCAL_MODE) never fires for --local.
 # For default per-round output, use the synthesized manifest when present to
-# preserve verification filtering. Explicit --output uses a shared directory
-# outside the round-only synthesis inventory, so keep indexing its Markdown.
+# preserve verification filtering. Explicit --output uses a user-selected shared
+# directory that may overlap the round inventory, so index its selected Markdown.
 # The orchestrator writes only into
 # logs/<run-id>/final/ (resolved from LOG_BASE, NOT $OUTPUT_DIR), so the user's
 # output dir stays pure md. Build after dedupe and before the digest/triage

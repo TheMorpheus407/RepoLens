@@ -55,14 +55,19 @@ Overlapping output is supported: generated projections are excluded from private
 digest/verifier/synthesizer discovery, and explicit delivery excludes private raw
 Generic evidence from local dedupe/indexing. Default builder source selection is
 unchanged. Only generated, receipt-owned projection paths with matching leading
-frontmatter identities may be replaced or retired.
+frontmatter identities may be replaced or retired. A run/destination-bound pending
+publication record saves exact before/after content hashes and rollback copies.
+After process termination, resume restores that interrupted transaction before
+retrying saved evidence. Recovery refuses changed content or nested symlinks,
+preserving the pending record and backups for repair. This covers process crashes;
+power-loss durability is not guaranteed.
 Failed delivery keeps the previous registry and reports; resume retries it from
 saved evidence without rerunning completed investigations.
 
-An explicit `--output` uses a shared Markdown directory outside the round-only
-verifier/synthesizer inventory. It retains direct Markdown indexing, even when
-round synthesis writes an empty manifest; these findings have not been checked
-by that cross-round verifier. Without a manifest, default local output also
+An explicit `--output` uses a user-selected shared Markdown directory, which may
+overlap the round-only verifier/synthesizer inventory. It retains direct Markdown
+indexing, even when round synthesis writes an empty manifest; these findings have
+not been checked by that cross-round verifier. Without a manifest, default local output also
 uses direct Markdown indexing.
 
 The registry collapses identical IDs to one record, preferring a non-duplicate

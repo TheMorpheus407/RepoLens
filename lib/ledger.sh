@@ -864,7 +864,7 @@ _ledger_log_base() {
 #
 #   Source selection (both may run, results are concatenated). The optional
 #   third argument false selects only the supplied local tree, as required for
-#   explicit output outside the private synthesis inventory.
+#   user-selected explicit output, including overlap with private inventory.
 #   - if `<log_base>/final/manifest.json` exists, ingest it via
 #     build_findings_jsonl_from_manifest.
 #   - if a local output dir is supplied (2nd arg, else the OUTPUT_DIR global;

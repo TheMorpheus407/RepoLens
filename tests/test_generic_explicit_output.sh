@@ -74,7 +74,41 @@ test "$(cat "$registry")" = "$registry_before"
 raw="$(cat "$LOG_BASE/finding-paths")"
 second="$(sed 's/Mock evidence\./Independent second-block evidence./' "$raw")"
 printf '%s\n' "$second" >> "$raw"
+# A real publisher SIGKILL must preserve reports and completed agent work.
+# Resume recovers the pending transaction and delivers the newly added segment.
+reports_before_crash="$(sha256sum "$LOG_BASE/final/"{findings.jsonl,findings.csv,TODO.md,SUMMARY.md,NEEDS_REVIEW.md,DUPLICATES.md,HUMAN_REVIEW.md})"
+completion_before_crash="$(sha256sum "$LOG_BASE/.rounds/round-1.lenses.completed" "$LOG_BASE/.rounds/round-2.lenses.completed")"
+raw_before_crash="$(sha256sum "$raw")"
+python3() {
+  if [[ "${1:-}" != "$REPO/lib/generic_output.py" ]]; then
+    command python3 "$@"
+    return $?
+  fi
+  command python3 -B - "$@" <<'PYCRASH'
+import os
+from pathlib import Path
+import runpy
+import signal
+import sys
+real_replace = os.replace
+def replace(source, destination):
+    real_replace(source, destination)
+    if Path(destination).name == "002.md":
+        os.kill(os.getpid(), signal.SIGKILL)
+os.replace = replace
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+PYCRASH
+}
+optional_local_finalization 2> "$FIXTURE/crash-delivery-error"
+unset -f python3
+grep -Fq 'Generic delivery incomplete' "$FIXTURE/crash-delivery-error"
+test "$(sha256sum "$LOG_BASE/final/"{findings.jsonl,findings.csv,TODO.md,SUMMARY.md,NEEDS_REVIEW.md,DUPLICATES.md,HUMAN_REVIEW.md})" = "$reports_before_crash"
+run_rounds 2 LENSES
 optional_local_finalization
+test "$(wc -l < "$LOG_BASE/agent-calls")" -eq "$calls_before"
+test "$(sha256sum "$LOG_BASE/.rounds/round-1.lenses.completed" "$LOG_BASE/.rounds/round-2.lenses.completed")" = "$completion_before_crash"
+test "$(sha256sum "$raw")" = "$raw_before_crash"
 jq -se 'length == 2 and ([.[].id] | unique | length) == 2' "$registry" >/dev/null
 while IFS= read -r delivered; do test -f "$delivered"; done < <(jq -r .markdown_path "$registry")
 test "$(grep -rl 'Independent second-block evidence.' "$OUTPUT_DIR" --include='*.md' | wc -l)" -eq 1

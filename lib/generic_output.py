@@ -17,7 +17,8 @@
 
 Only receipt-owned files are replaced/retired. Staging and rollback copies are
 necessary for publication, contain derived findings only, and are removed after
-success or successful rollback. Raw round evidence is never changed.
+success or successful rollback. A private pending record permits exact-state
+recovery after process death. Raw round evidence is never changed.
 """
 
 import hashlib
@@ -52,6 +53,8 @@ def checked_path(root, relative):
 def publish(plan, output, receipt, run_id):
     """Stage and publish a complete delivery, restoring files and receipt on failure."""
     root = output.resolve(strict=True)
+    pending = receipt.with_name(receipt.name + ".pending")
+    _recover_pending(root, receipt, pending, run_id)
     old = json.loads(receipt.read_text()) if receipt.exists() else {}
     if not isinstance(old, dict):
         raise ValueError("invalid Generic delivery receipt")
@@ -90,16 +93,17 @@ def publish(plan, output, receipt, run_id):
                 raise ValueError(f"Generic delivery ownership changed: {path}")
 
     stage = Path(tempfile.mkdtemp(prefix=".generic-delivery-", dir=root))
-    receipt_stage = receipt_backup = None
-    receipt_attempted = False
-    changed, backups = [], {}
+    receipt_stage = None
     keep_stage = False
     try:
+        states = {}
         for i, (name, path) in enumerate(paths.items()):
-            if path.exists():
-                backup = stage / f"backup-{i}"
-                shutil.copy2(path, backup)
-                backups[name] = backup
+            before = _content_hash(path)
+            if before is not None:
+                shutil.copy2(path, stage / f"backup-{i}")
+            states[name] = {"before": before,
+                            "after": digest(desired[name]) if name in desired else None,
+                            "backup": f"backup-{i}"}
         for i, (name, text) in enumerate(desired.items()):
             (stage / f"new-{i}").write_text(text)
         fd, temporary = tempfile.mkstemp(prefix=".generic-receipt-", dir=receipt.parent)
@@ -108,38 +112,31 @@ def publish(plan, output, receipt, run_id):
             json.dump(identities, stream, sort_keys=True)
             stream.write("\n")
         if receipt.exists():
-            fd, temporary = tempfile.mkstemp(prefix=".generic-receipt-backup-", dir=receipt.parent)
-            os.close(fd)
-            receipt_backup = Path(temporary)
-            shutil.copy2(receipt, receipt_backup)
+            shutil.copy2(receipt, stage / "receipt-before")
+        journal = {"root": str(root), "run_id": run_id, "stage": str(stage),
+                   "files": states, "receipt_stage": str(receipt_stage.resolve()),
+                   "receipt_before": _content_hash(receipt),
+                   "receipt_after": _content_hash(receipt_stage)}
+        # An atomic, flushed intent record precedes every public mutation. It
+        # binds exact pre/post bytes to this run and destination, not just an ID.
+        _write_pending(pending, journal)
         try:
             for i, (name, text) in enumerate(desired.items()):
                 path = checked_path(root, name)
                 if path.exists() and path.read_text() == text:
                     continue
                 path.parent.mkdir(parents=True, exist_ok=True)
-                # Track intent before a syscall: cancellation may arrive after
-                # the mutation succeeds but before the next Python instruction.
-                changed.append(name)
                 os.replace(stage / f"new-{i}", path)
             for name in old.keys() - desired.keys():
-                path = checked_path(root, name)
-                if path.exists():
-                    changed.append(name)
-                    path.unlink()
-            receipt_attempted = True
+                checked_path(root, name).unlink(missing_ok=True)
             os.replace(receipt_stage, receipt)
+            # Both publications are complete. Removing intent commits them;
+            # a crash before this point can still restore the previous state.
+            pending.unlink()
         except BaseException:
-            # Drain cancellation only after restoring the transaction; a second
-            # signal must not interrupt rollback and delete its backups.
             blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
             try:
-                _rollback(root, changed, backups)
-                if receipt_attempted:
-                    if receipt_backup is None:
-                        receipt.unlink(missing_ok=True)
-                    else:
-                        os.replace(receipt_backup, receipt)
+                _recover_pending(root, receipt, pending, run_id)
             except (OSError, ValueError) as rollback_error:
                 keep_stage = True
                 print(f"Generic delivery rollback pending in {stage}: {rollback_error}", file=sys.stderr)
@@ -149,26 +146,98 @@ def publish(plan, output, receipt, run_id):
     finally:
         if receipt_stage is not None:
             receipt_stage.unlink(missing_ok=True)
-        if not keep_stage:
-            if receipt_backup is not None:
-                receipt_backup.unlink(missing_ok=True)
+        # Preserve backups whenever intent survives, including a signal as
+        # its atomic rename returns.
+        if not keep_stage and not pending.exists() and stage.exists():
             shutil.rmtree(stage)
 
 
-def _rollback(root, changed, backups):
-    """Restore every attempted mutation, including a syscall interrupted on return."""
-    errors = []
-    for name in reversed(changed):
-        try:
-            path = checked_path(root, name)
-            if name in backups:
-                os.replace(backups[name], path)
-            else:
-                path.unlink(missing_ok=True)
-        except (OSError, ValueError) as error:
-            errors.append(str(error))
-    if errors:
-        raise OSError("; ".join(errors))
+def _content_hash(path):
+    """Fingerprint exact file bytes; absence is an explicit transaction state."""
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+def _write_pending(path, journal):
+    """Publish a flushed private intent record before touching delivered files."""
+    fd, temporary = tempfile.mkstemp(prefix=".generic-intent-", dir=path.parent)
+    temporary = Path(temporary)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(journal, stream, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _restore_copy(backup, destination):
+    """Restore atomically while keeping the backup for repeated crash recovery."""
+    fd, temporary = tempfile.mkstemp(prefix=".generic-restore-", dir=destination.parent)
+    os.close(fd)
+    temporary = Path(temporary)
+    try:
+        shutil.copy2(backup, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _recover_pending(root, receipt, pending, run_id):
+    """Validate all pre/post states, then idempotently restore interrupted delivery."""
+    if pending.is_symlink():
+        raise ValueError("Generic delivery refuses symlink pending record")
+    if not pending.exists():
+        return
+    journal = json.loads(pending.read_text())
+    if journal["root"] != str(root) or journal["run_id"] != run_id:
+        raise ValueError("Generic delivery pending record belongs to another run/destination")
+    stage = Path(journal["stage"])
+    if stage.parent != root or not re.fullmatch(r"\.generic-delivery-[a-z0-9_]+", stage.name) or stage.is_symlink():
+        raise ValueError("invalid Generic recovery stage")
+    receipt_stage = Path(journal["receipt_stage"])
+    if (receipt_stage.parent != receipt.parent.resolve()
+            or not re.fullmatch(r"\.generic-receipt-[a-z0-9_]+", receipt_stage.name)
+            or receipt_stage.is_symlink()):
+        raise ValueError("invalid Generic recovery receipt staging path")
+    # Complete admission before restoration: even a matching frontmatter marker
+    # cannot authorize overwriting bytes edited after an interrupted publication.
+    restores = []
+    for name, state in journal["files"].items():
+        path = checked_path(root, name)
+        current = _content_hash(path)
+        if current not in (state["before"], state["after"]):
+            raise ValueError(f"Generic recovery ownership/content changed: {path}")
+        if not re.fullmatch(r"backup-[0-9]+", state["backup"]):
+            raise ValueError("invalid Generic recovery backup")
+        backup = stage / state["backup"]
+        if current != state["before"]:
+            if state["before"] is not None and (backup.is_symlink() or _content_hash(backup) != state["before"]):
+                raise ValueError(f"Generic recovery backup changed: {backup}")
+            restores.append((path, backup, state["before"]))
+    current_receipt = _content_hash(receipt)
+    if receipt.is_symlink() or current_receipt not in (journal["receipt_before"], journal["receipt_after"]):
+        raise ValueError("Generic recovery receipt changed")
+    backup = stage / "receipt-before"
+    restore_receipt = current_receipt != journal["receipt_before"]
+    if restore_receipt and journal["receipt_before"] is not None:
+        if backup.is_symlink() or _content_hash(backup) != journal["receipt_before"]:
+            raise ValueError("Generic recovery receipt backup changed")
+    for path, saved, before in restores:
+        if before is None:
+            path.unlink(missing_ok=True)
+        else:
+            _restore_copy(saved, path)
+    if restore_receipt:
+        if journal["receipt_before"] is None:
+            receipt.unlink(missing_ok=True)
+        else:
+            _restore_copy(backup, receipt)
+    pending.unlink()
+    receipt_stage.unlink(missing_ok=True)
+    if stage.exists():
+        shutil.rmtree(stage)
 
 
 def main():
