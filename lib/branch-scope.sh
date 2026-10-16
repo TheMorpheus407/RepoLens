@@ -30,24 +30,33 @@
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
-  local body="$1" token path quoted_marker='quoted'
+  local body="$1" path quoted_marker='quoted'
   # Use a letter sequence absent from the input. Masking excluded spans with
   # '@' cannot fabricate that sequence or impersonate a quoted list member.
   while [[ "$body" == *"$quoted_marker"* ]]; do quoted_marker+='q'; done
   quoted_marker="@$quoted_marker@"
   {
-    while IFS= read -r token; do
-      path="${token%:*}"
-      [[ "$path" == *://* || "$path" =~ ^[0-9:]+$ ]] && continue
-      printf '%s\n' "$token"
-    done < <(grep -oE '`[^`]+:[0-9]+(-[0-9]+)?`' <<< "$body" | sed 's/^`//; s/`$//')
-    # Keep recognized quoted citations as opaque list members, while masking
-    # excluded spans. Neither replacement can join text into a bare path.
-    sed -E -e 's#https?://[^[:space:]<>`]+#@#g' \
-      -e 's#`[^`]*://[^`]*`#@#g' \
-      -e 's/`[0-9:]+:[0-9]+(-[0-9]+)?`/@/g' \
-      -e "s/\`[^\`]+:[0-9]+(-[0-9]+)?\`/$quoted_marker/g" \
-      -e 's/`[^`]*`/@/g' <<< "$body" \
+    # Consume code spans from left to right before looking for citations.
+    # A closing tick from one span cannot open a citation ending in the next.
+    local remaining="$body" masked='' span prefix span_pattern='`([^`]*)`'
+    while [[ "$remaining" =~ $span_pattern ]]; do
+      span="${BASH_REMATCH[1]}"
+      prefix="${remaining%%\`*}"
+      masked+="$prefix"
+      remaining="${remaining#*\`*\`}"
+      if [[ "$span" =~ ^.+:[0-9]+(-[0-9]+)?$ && "$span" != *$'\n'* ]]; then
+        path="${span%:*}"
+        if [[ "$path" != *://* && ! "$path" =~ ^[0-9:]+$ ]]; then
+          printf '%s\n' "$span"
+          masked+="$quoted_marker"
+          continue
+        fi
+      fi
+      masked+='@'
+    done
+    masked+="$remaining"
+    # Keep quoted citations opaque for the bare-token/list grammar.
+    sed -E 's#https?://[^[:space:]<>`]+#@#g' <<< "$masked" \
       | awk -v quoted_marker="$quoted_marker" '
         function unwrap(value, first, last) {
           first = substr(value, 1, 1)

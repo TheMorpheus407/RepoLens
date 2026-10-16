@@ -590,4 +590,20 @@ assert_eq "N15 nested evidence is preserved verbatim" "$nested_body" \
 assert_eq "N15 nested rejection names the supporting path" 'out-of-scope citation: src/missing.sh' \
   "$(cat "$TMP/malformed-findings/nested.md.out-of-scope.reason" 2>/dev/null)"
 
+# repolens-r8-p1-1: closing/opening ticks from distinct spans are not a quote.
+printf '["page.svelte"]\n' > "$SCOPE_FILE"
+for body in 'src/routes/`note`page.svelte:1`detail`' '`note`page.svelte:1`detail`'; do
+  extracted="$(repolens_extract_citations "$body")"
+  assert_eq "distinct code spans cannot manufacture a suffix citation" "" "$extracted"
+  rc=0
+  branch_scope_verify_body "$body" >/dev/null 2>&1 || rc=$?
+  assert_failure "manufactured suffix cannot pass branch scope" "$rc"
+  rc=0
+  entry="$(jq -n --arg body "$body" '{body:$body}')"
+  filing_verify_cluster_citations "$PROJECT_A" "$entry" >/dev/null 2>&1 || rc=$?
+  assert_failure "manufactured suffix cannot pass live verification" "$rc"
+done
+assert_eq "an independent actual quoted citation survives earlier code spans" \
+  'page.svelte:1' "$(repolens_extract_citations 'src/`note`page.svelte:1`detail` and `page.svelte:1`')"
+
 finish
