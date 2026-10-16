@@ -101,5 +101,39 @@ BASH
 check 'relative source renders after changing directory and preserves caller state' test "$rc" -eq 0
 check 'relative source report contains the current finding' grep -q 'Relative source finding' "$TMPROOT/relative source/final/HUMAN_REVIEW.md"
 check 'relative source leaves no staging' test -z "$(find "$TMPROOT/relative source/final" -name 'HUMAN_REVIEW.md.tmp.*' -print)"
+# A disposable module copy lets configuration differ from the static fallback
+# without changing the repository registry. A different cwd must not change
+# bucket membership, the digest, or surfaced/held-back accounting.
+config_root="$TMPROOT/config source"
+mkdir -p "$config_root/lib" "$config_root/config"
+cp "$ROOT/lib/human_review.sh" "$ROOT/lib/artifacts.sh" "$config_root/lib/"
+printf '%s\n' '{"domains":[{"id":"application-security"}]}' > "$config_root/config/domains.json"
+for kind in missing-config foreign-config; do
+  rc=0
+  bash -euo pipefail -s -- "$config_root" "$TMPROOT/$kind" "$kind" <<'BASH' || rc=$?
+cd "$1"
+source lib/human_review.sh
+LOG_BASE="$2/logs"
+mkdir -p "$LOG_BASE/final" "$2/cwd"
+printf '%s\n' '{"id":"configured","title":"Configured security finding","severity":"medium","domain":"application-security","status":"new"}' > "$LOG_BASE/final/findings.jsonl"
+human_review_bucketize "$LOG_BASE/final/findings.jsonl" > "$2/before.json"
+jq -e '.top_medium_security.items[0].id == "configured" and .remainder.count == 0' "$2/before.json" > /dev/null
+render_human_review_digest configured
+cp "$LOG_BASE/final/HUMAN_REVIEW.md" "$2/before.md"
+human_review_heldback_summary configured > "$2/before-summary.txt"
+if [[ "$3" == foreign-config ]]; then
+  mkdir -p "$2/cwd/lib" "$2/cwd/config"
+  printf '%s\n' '{"domains":[{"id":"foreign-security"}]}' > "$2/cwd/config/domains.json"
+fi
+cd "$2/cwd"
+human_review_bucketize "$LOG_BASE/final/findings.jsonl" > "$2/after.json"
+render_human_review_digest configured
+human_review_heldback_summary configured > "$2/after-summary.txt"
+BASH
+  check "$kind renders after directory change" test "$rc" -eq 0
+  check "$kind preserves configured security bucket" cmp -s "$TMPROOT/$kind/before.json" "$TMPROOT/$kind/after.json"
+  check "$kind preserves digest sections" cmp -s "$TMPROOT/$kind/before.md" "$TMPROOT/$kind/logs/final/HUMAN_REVIEW.md"
+  check "$kind preserves surfaced accounting" cmp -s "$TMPROOT/$kind/before-summary.txt" "$TMPROOT/$kind/after-summary.txt"
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

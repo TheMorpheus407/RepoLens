@@ -49,11 +49,10 @@ _HUMAN_REVIEW_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 #   documented static set {security, llm-security} when the config is missing,
 #   unreadable, or unparseable. Pure; prints one line; never errors.
 _human_review_security_domains() {
-  local config_file lib_dir out
-  lib_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || lib_dir=""
-  config_file="$lib_dir/../config/domains.json"
+  local config_file out
+  config_file="$_HUMAN_REVIEW_REPO_ROOT/config/domains.json"
 
-  if [[ -n "$lib_dir" && -f "$config_file" && -r "$config_file" ]]; then
+  if [[ -f "$config_file" && -r "$config_file" ]]; then
     out="$(jq -c '
         [ .domains[]? | .id | select(type == "string") | ascii_downcase
           | select(test("security")) ] | unique
