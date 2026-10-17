@@ -20,6 +20,11 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
+# Explicit-output callbacks also run the real local inventory reconciliation.
+# shellcheck source=lib/core.sh
+source "$REPO/lib/core.sh"
+# shellcheck source=lib/ledger.sh
+source "$REPO/lib/ledger.sh"
 # shellcheck source=/dev/null
 source "$REPO/lib/template.sh"
 # shellcheck source=lib/rounds.sh

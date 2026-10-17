@@ -45,6 +45,16 @@ It is built from the existing finding outputs; it does not replace them.
   Trailing line feeds remain part of the decoded path; an unindexed target
   such as `"a.md\n"` cannot validate a link to `a.md`.
 
+For explicit-local bugreports, eligible ordinary destination files reserve the
+shared `--max-issues` capacity, including files from earlier runs and files
+written before an interrupted lens saved its summary. Generic evidence and
+projections are excluded from ordinary usage. Summary
+`totals.ordinary_issues_created` stores this inventory snapshot;
+`totals.governed_issues_created` stores the admitted Generic segment count.
+Per-lens `issues_created` values remain execution deltas. The run total is the
+sum of the two snapshots, so replaying a lens or reconciliation does not add
+existing findings again. Existing ordinary files above the cap are preserved.
+
 For Generic investigators with `bugreport --local --output`, finalization converts
 private multi-finding evidence to one ordinary Markdown file per segment in the
 requested output. Each projection records `source_finding_path`,
@@ -65,8 +75,13 @@ After process termination, resume restores that interrupted transaction before
 retrying saved evidence. Recovery refuses changed content or nested symlinks,
 preserving the pending record and backups for repair. This covers process crashes;
 power-loss durability is not guaranteed.
-Failed delivery keeps the previous registry and reports; resume retries it from
-saved evidence without rerunning completed investigations.
+Failed requested Generic delivery keeps the previous registry and reports and
+fails the invocation with a nonzero exit and `generic-delivery-failed` reason.
+The terminal status, attempt history and completion event reflect that failure;
+accepted interruption signals keep precedence. Repair the destination and use
+the printed resume hint to retry saved evidence without rerunning completed
+investigations. Successful delivery clears its saved failure reason. Optional
+report rendering remains non-fatal.
 
 An explicit `--output` uses a user-selected shared Markdown directory, which may
 overlap the round-only verifier/synthesizer inventory. It retains direct Markdown

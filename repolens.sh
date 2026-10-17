@@ -1116,8 +1116,11 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
     die "Persisted run summary must not be a symlink: $_resume_summary"
   fi
   # A resumed governed branch review keeps its creation cap unless the caller
-  # explicitly supplies a replacement. Drafts deferred by the cap remain usable.
-  if [[ "$MODE" == branch-review && "$LOCAL_MODE" == false && -z "$MAX_ISSUES" && -f "$_resume_summary" ]]; then
+  # explicitly supplies a replacement. Explicit-local bugreports retain their
+  # shared finding cap too, including saved segments withheld by that cap.
+  if [[ -z "$MAX_ISSUES" && -f "$_resume_summary" ]] \
+      && { [[ "$MODE" == branch-review && "$LOCAL_MODE" == false ]] \
+        || [[ "$MODE" == bugreport && "$LOCAL_MODE" == true && "$OUTPUT_DIR_SET" == true ]]; }; then
     require_cmd jq
     MAX_ISSUES="$(jq -r '.max_issues // empty' "$_resume_summary")" \
       || die "Unable to read persisted issue limit."
@@ -1958,6 +1961,10 @@ resolve_why_stopped() {
       143) printf 'interrupted-sigterm' ;;
       *) printf 'interrupted-sigint' ;;
     esac
+    return 0
+  fi
+  if [[ "${ROUNDS_FAILURE_REASON:-}" == generic-delivery-failed ]]; then
+    printf '%s' "$ROUNDS_FAILURE_REASON"
     return 0
   fi
   reason="$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || printf '')"
@@ -4563,6 +4570,11 @@ _reconcile_initial_filing_counts() {
 }
 
 GLOBAL_ISSUES_CREATED=0
+# Saved Generic plans consume the same local budget on resume, even if the
+# previous attempt ended before its summary counter was persisted.
+if $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport ]]; then
+  reconcile_generic_local_counts || die "Unable to reconcile local Generic finding counts."
+fi
 
 if [[ "$MODE" == branch-review ]] && ! $LOCAL_MODE; then
   if ! _reconcile_initial_filing_counts "$RUN_ID"; then
@@ -4732,6 +4744,10 @@ run_lens() {
   vars+="|FORGE_ENHANCEMENT_LABEL_CREATE=$(forge_prompt_label_create "enhancement" "a2eeef" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   vars+="|FORGE_ISSUE_LIST_OPEN=$(forge_prompt_issue_list "open" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   vars+="|FORGE_ISSUE_LIST_CLOSED=$(forge_prompt_issue_list "closed" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
+  local generic_local_budget=false generic_findings_file="" generic_baseline=0
+  if $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport && "$domain" == generic && -n "$MAX_ISSUES" ]]; then
+    generic_local_budget=true
+  fi
   if [[ "$domain" == generic ]]; then
     local generic_findings_dir="$LOG_BASE/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs"
     if [[ -n "$dispatch_path" ]]; then
@@ -4745,7 +4761,11 @@ run_lens() {
       return 1
     fi
     vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX:-1}|ROUND_TOTAL=${CURRENT_ROUND_TOTAL:-1}"
-    vars+="|GENERIC_FINDINGS_FILE=$(template_var_escape "$generic_findings_dir/$lens_id.md")"
+    generic_findings_file="$generic_findings_dir/$lens_id.md"
+    if $generic_local_budget; then
+      generic_baseline="$(count_generic_local_findings "$generic_findings_file")" || return 1
+    fi
+    vars+="|GENERIC_FINDINGS_FILE=$(template_var_escape "$generic_findings_file")"
   else
     [[ -n "${CURRENT_ROUND_INDEX:-}" ]] && vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX}"
     [[ -n "${CURRENT_ROUND_TOTAL:-}" ]] && vars+="|ROUND_TOTAL=${CURRENT_ROUND_TOTAL}"
@@ -4866,7 +4886,11 @@ run_lens() {
   # original bug: summary claimed 0 while the forge actually held N > 0.
   local issues_baseline=0
   if $LOCAL_MODE; then
-    issues_baseline="$(count_dry_run_issues "$lens_local_dir")"
+    if $generic_local_budget; then
+      issues_baseline="$generic_baseline"
+    else
+      issues_baseline="$(count_dry_run_issues "$lens_local_dir")"
+    fi
   else
     local _baseline_out=""
     if _baseline_out="$(forge_issue_list_count "$FORGE_REPO_SLUG" "$lens_label")"; then
@@ -5088,7 +5112,15 @@ run_lens() {
     # delta, not an authoritative forge total.
     local current_issue_count=""
     if $LOCAL_MODE; then
-      current_issue_count="$(count_dry_run_issues "$lens_local_dir")"
+      if $generic_local_budget; then
+        if ! current_issue_count="$(count_generic_local_findings "$generic_findings_file")"; then
+          log_error "[$domain/$lens_id] Unable to count Generic findings; leaving investigation pending."
+          exit_status="lens-execution-failed"
+          break
+        fi
+      else
+        current_issue_count="$(count_dry_run_issues "$lens_local_dir")"
+      fi
     else
       if ! current_issue_count="$(forge_issue_list_count "$FORGE_REPO_SLUG" "$lens_label")"; then
         local fallback_issue_count
@@ -5206,7 +5238,12 @@ run_lens() {
   record_lens "$SUMMARY_FILE" "$domain" "$lens_id" "$iteration" "$exit_status" "$lens_issues" "$rate_limit_sleep_seconds" \
     "$lens_start_iso" "$lens_end_iso" "$lens_duration_seconds" "$findings_drafted"
   local completion_rc=0
-  if [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
+  if $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport ]] \
+      && ! reconcile_generic_local_counts; then
+    log_error "[$domain/$lens_id] Unable to reconcile local finding counts; leaving investigation pending."
+    completion_rc=1
+  fi
+  if (( completion_rc == 0 )) && [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
       && "$exit_status" != "auth-expired" && "$exit_status" != "model-unavailable" \
       && "$exit_status" != "budget-exhausted" && "$exit_status" != "agent-refused" \
       && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" \
@@ -5555,6 +5592,16 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
   if ! export_generic_local_findings "$OUTPUT_DIR"; then
     _local_delivery_ready=false
     log_warn "Generic delivery incomplete; preserving previous registry/reports. Repair output access and resume to retry saved findings."
+    # Requested Markdown delivery is required even though optional report
+    # rendering below is non-fatal. Retain an earlier failure or parent signal.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && "${RUN_ROUNDS_RC:-0}" -eq 0 ]]; then
+      REPOLENS_FINAL_STATE=failed
+      RUN_ROUNDS_RC=1
+      ROUNDS_FAILURE_REASON=generic-delivery-failed
+    fi
+  elif [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
+      && "$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null)" == generic-delivery-failed ]]; then
+    clear_stop_reason "$SUMMARY_FILE" || log_warn "Unable to clear recovered Generic delivery failure reason"
   fi
 fi
 
@@ -5678,6 +5725,15 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
 fi
 
 unset _local_registry_ready _duplicate_report_ready _local_generic_raw_root _local_delivery_ready _local_registry_manifest _local_registry_source
+
+# Persist required delivery failure after the artifact-preservation boundary.
+# Failed accounting admission leaves the summary inventory snapshot intact;
+# recording the invocation outcome is a separate, best-effort terminal write.
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
+    && "${ROUNDS_FAILURE_REASON:-}" == generic-delivery-failed ]]; then
+  set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON" \
+    || log_warn "Unable to persist Generic delivery failure reason"
+fi
 
 apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"
@@ -5840,6 +5896,9 @@ if [[ -f "$LOG_BASE/.agent-no-progress-abort" || -f "$LOG_BASE/.systemic-failure
 fi
 
 if [[ "$RUN_ROUNDS_RC" -ne 0 ]]; then
+  if [[ "${ROUNDS_FAILURE_REASON:-}" == generic-delivery-failed ]]; then
+    print_resume_hint
+  fi
   exit "$RUN_EXIT_CODE"
 fi
 

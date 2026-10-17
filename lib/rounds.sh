@@ -1992,15 +1992,65 @@ _round_digest_finding_segments() {
 # Deliver Generic raw segments as ordinary local findings. The private source
 # remains canonical for digest/verification; publication can be retried even
 # after all lens/round completion receipts have been written.
-export_generic_local_findings() (
-  local output_dir="$1" stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
+_generic_local_findings() (
+  local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count=0 count total physical_rounds physical_source ordinary_complete=0
+  local stage="" stage_root candidate physical_output="" source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
   local rounds_dir="${LOG_BASE:-}/rounds"
-  [[ -d "$rounds_dir" ]] || return 0
   mkdir -p "$LOG_BASE/final" || return 1
-  stage="$(mktemp -d "$LOG_BASE/final/.generic-plan.XXXXXX")" || return 1
+  # TMPDIR can itself be inside a scanned tree, including through a symlink.
+  # Select an outside location before allocation so peer cleanup cannot race
+  # either the ordinary inventory or the private round-source traversal.
+  physical_rounds="$(realpath -m -- "$rounds_dir")" || return 1
+  if [[ -n "$output_dir" ]]; then
+    physical_output="$(realpath -m -- "$output_dir")" || return 1
+  fi
+  for candidate in "${TMPDIR:-/tmp}" /tmp /var/tmp "${physical_output:-/}/.." "$physical_rounds/.."; do
+    stage_root="$(realpath -e -- "$candidate")" || continue
+    if [[ -n "$physical_output" && ( "$stage_root" == "$physical_output" || "$stage_root" == "${physical_output%/}/"* ) ]] \
+        || [[ "$stage_root" == "$physical_rounds" || "$stage_root" == "${physical_rounds%/}/"* ]]; then
+      continue
+    fi
+    stage="$(mktemp -d "$stage_root/repolens-generic-plan.XXXXXX")" && break
+  done
+  [[ -n "$stage" ]] || { echo 'Generic delivery: no staging directory outside inventories' >&2; return 1; }
   trap 'rm -rf -- "$stage"' EXIT
-  if ! { (set -o pipefail; find -H "$rounds_dir" -type f -path '*/lens-outputs/*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$stage/files"; then
-    return 1
+  # Recover ordinary usage from the deliverable inventory, including writes
+  # interrupted before record_lens. Reuse registry ingestion and severity rules;
+  # Generic raw evidence and projections never reserve ordinary capacity.
+  if [[ -d "$output_dir" ]]; then
+    build_findings_jsonl_from_local "$output_dir" "$stage/ordinary.jsonl" || return 1
+    jq -j 'select(.domain != "generic") | .markdown_path, "\u0000", (.severity // ""), "\u0000"' "$stage/ordinary.jsonl" > "$stage/ordinary-values" || return 1
+    printf '\0' >> "$stage/ordinary-values" || return 1
+    while IFS= read -r -d '' source; do
+      if [[ -z "$source" ]]; then ordinary_complete=1; break; fi
+      IFS= read -r -d '' severity || return 1
+      # Flat and dispatch-nested round sources belong to Generic even when a
+      # partial draft has not written its domain yet. Ordinary lens files have
+      # at least domain/lens/file nesting below lens-outputs. Resolve symlink
+      # roots too, since explicit delivery may overlap the private inventory.
+      physical_source="$(realpath -- "$source")" || return 1
+      relative="${physical_source#"$physical_rounds/"}"
+      if [[ "$physical_source" == "$physical_rounds/"* \
+          && "$relative" =~ ^round-[1-9][0-9]*/lens-outputs/([^/]+/)?[^/]+\.md$ ]]; then
+        continue
+      fi
+      if [[ -z "${REPOLENS_MIN_SEVERITY:-}" ]] || severity_meets_min "$severity" "$REPOLENS_MIN_SEVERITY"; then
+        ordinary_count=$((ordinary_count + 1))
+      fi
+    done < "$stage/ordinary-values" || return 1
+    (( ordinary_complete )) || return 1
+  fi
+  if [[ -n "${MAX_ISSUES:-}" ]]; then
+    [[ "$MAX_ISSUES" =~ ^[1-9][0-9]*$ ]] || return 1
+    limit=$((10#$MAX_ISSUES - ordinary_count))
+    (( limit >= 0 )) || limit=0
+  fi
+  if [[ -d "$rounds_dir" ]]; then
+    if ! { (set -o pipefail; find -H "$rounds_dir" -type f -path '*/lens-outputs/*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$stage/files"; then
+      return 1
+    fi
+  else
+    printf '\0' > "$stage/files" || return 1
   fi
   : > "$stage/plan.jsonl" || return 1
   while IFS= read -r -d '' source; do
@@ -2060,7 +2110,14 @@ export_generic_local_findings() (
       if [[ -z "$title" ]]; then
         title="$(printf '%s' "$body" | _round_digest_section_text_from_stream hypothesis | _round_digest_inline_text 200)"
       fi
-      [[ -n "$title" ]] || { echo "Generic delivery: missing title/hypothesis in $source" >&2; return 1; }
+      if [[ -z "$title" ]]; then
+        # Pending investigators may have been interrupted midway through a
+        # draft. Counting omits incomplete segments so resume can repair them;
+        # publication still requires a fully valid inventory.
+        [[ "$action" == publish ]] || continue
+        echo "Generic delivery: missing title/hypothesis in $source" >&2
+        return 1
+      fi
       # Evidence and metadata are unbounded; pass them via files rather than
       # exec arguments (Linux also limits each individual argument to ~128 KiB).
       printf '%s' "$frontmatter" > "$stage/frontmatter" || return 1
@@ -2075,8 +2132,43 @@ export_generic_local_findings() (
     done
   done < "$stage/files" || return 1
   (( list_complete )) || return 1
-  python3 "$(_round_digest_repo_root)/lib/generic_output.py" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}"
+  local publisher
+  publisher="$(_round_digest_repo_root)/lib/generic_output.py"
+  count="$(python3 "$publisher" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}" count "$limit" "$count_source")" || return 1
+  if [[ "$action" == count ]]; then
+    printf '%s\n' "$count"
+    return 0
+  fi
+  # Admit accounting before publication, from this exact staged plan. After
+  # committing files no inventory read or summary lock can suppress rebuilding
+  # the registry/reports for the committed delivery.
+  reconcile_summary_filing "$SUMMARY_FILE" "$count" "${MAX_ISSUES:-}" "$ordinary_count" || return 1
+  total=$((ordinary_count + count))
+  if [[ "$action" == publish ]]; then
+    python3 "$publisher" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}" publish "$limit" || return 1
+  fi
+  printf '%s\n' "$total"
 )
+
+# Count and publish the same complete, trusted, severity-filtered segment plan.
+# Counting writes private scratch data only; publication remains post-round.
+# Update the caller only after the staged publication succeeds.
+export_generic_local_findings() {
+  local total
+  total="$(_generic_local_findings "$1" publish)" || return 1
+  GLOBAL_ISSUES_CREATED="$total"
+}
+count_generic_local_findings() {
+  local source="${1:-}"
+  source="${source#"${LOG_BASE:-}/rounds/"}"
+  _generic_local_findings "${OUTPUT_DIR:-}" count "$source"
+}
+reconcile_generic_local_counts() {
+  local total
+  total="$(_generic_local_findings "${OUTPUT_DIR:-}" reconcile)" || return 1
+  GLOBAL_ISSUES_CREATED="$total"
+}
+
 
 _round_digest_trim_yaml_value() {
   local value="$*"

@@ -145,7 +145,8 @@ assert_file_matches() {
 assert_str_matches() {
   local desc="$1" pattern="$2" haystack="$3"
   TOTAL=$((TOTAL + 1))
-  if printf '%s\n' "$haystack" | grep -Eq "$pattern"; then
+  # grep -q can close a printf pipe early and make pipefail reject a match.
+  if grep -Eq "$pattern" <<< "$haystack"; then
     pass_with "$desc"
   else
     fail_with "$desc" "Expected output to match: $pattern"
@@ -308,7 +309,7 @@ echo ""
 echo "Test 5: confirm_run wires up the wall-clock estimate"
 confirm_body="$(awk '/^confirm_run\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$REPO")"
 TOTAL=$((TOTAL + 1))
-if printf '%s' "$confirm_body" | grep -qi 'wall'; then
+if grep -qi 'wall' <<< "$confirm_body"; then
   pass_with "confirm_run body references the wall-clock estimate"
 else
   fail_with "confirm_run body references the wall-clock estimate" \
@@ -332,7 +333,7 @@ else
   guard_window="$(awk -v s="$win_start" -v e="$emit_line" 'NR>=s && NR<=e' "$REPO")"
   # Accept any defensive shape: a numeric regex test (=~ ... [0-9] ...), an
   # emptiness test (-z/-n), or a `declare -F` availability check on the helper.
-  if printf '%s\n' "$guard_window" | grep -qE '\[0-9\]|\[\[ -[zn] |declare -F'; then
+  if grep -qE '\[0-9\]|\[\[ -[zn] |declare -F' <<< "$guard_window"; then
     pass_with "wall-clock emission is guarded (numeric/emptiness/availability)"
   else
     fail_with "wall-clock emission is numeric-guarded" \

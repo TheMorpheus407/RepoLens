@@ -241,7 +241,11 @@ def _recover_pending(root, receipt, pending, run_id):
 
 
 def main():
-    """Load the staged plan and report retryable publication failures."""
+    """Select a capped plan, count its segments or publish with retryable failure.
+
+    Optional trailing CLI args: action (publish/count), limit, source-relative.
+    The count action never invokes publication or pending-transaction recovery.
+    """
     def interrupted(signum, _frame):
         """Translate ordinary cancellation into transaction rollback."""
         raise InterruptedError(f"delivery interrupted by {signal.Signals(signum).name}")
@@ -250,7 +254,19 @@ def main():
         signal.signal(signum, interrupted)
     try:
         plan = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
-        publish(plan, Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+        action = sys.argv[5] if len(sys.argv) > 5 else "publish"
+        if len(sys.argv) > 6 and sys.argv[6]:
+            limit = int(sys.argv[6])
+            if limit < 0:
+                raise ValueError("negative Generic finding limit")
+            plan = plan[:limit]
+        if action == "count":
+            source = sys.argv[7] if len(sys.argv) > 7 else ""
+            print(sum(1 for row in plan if not source or row["relative"] == source))
+        elif action == "publish":
+            publish(plan, Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
+        else:
+            raise ValueError("unknown Generic plan action")
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"Generic delivery failed: {error}", file=sys.stderr)
         return 1

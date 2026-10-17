@@ -30,6 +30,10 @@ for fault in "$@"; do
     SUMMARY_FILE="$LOG_BASE/summary.json" PROJECT_PATH="$FIXTURE/project"
     OUTPUT_DIR_SET=true RUN_ID=probe ROUNDS=1 MODE=bugreport LOCAL_MODE=true
     HUMAN_REVIEW=true REPOLENS_FINAL_STATE=finished
+    TMPDIR="$FIXTURE/$fault/temporary plans"
+    export TMPDIR
+    mkdir -p "$TMPDIR"
+    fault_marker="$FIXTURE/$fault/snapshot-fault-hit"
     raw="$LOG_BASE/rounds/round-1/lens-outputs/probe.md"
     mkdir -p "$(dirname "$raw")" "$OUTPUT_DIR" "$PROJECT_PATH"
     init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
@@ -52,7 +56,8 @@ for fault in "$@"; do
       fi
     }
     awk() {
-      if [[ "${!#}" == "$LOG_BASE/final/.generic-plan."*/source ]]; then
+      if [[ "${!#}" == "$TMPDIR"/repolens-generic-plan.*/source ]]; then
+        : > "$fault_marker"
         case "$fault" in
           empty-error) return 74 ;;
           partial-error) command awk "$@"; return 74 ;;
@@ -68,6 +73,7 @@ for fault in "$@"; do
     export_generic_local_findings "$OUTPUT_DIR" || rc=$?
     printf 'snapshot=%s export_rc=%s\n' "$fault" "$rc"
     test "$rc" -ne 0
+    test -f "$fault_marker"
     optional_local_finalization
     test "$(sha256sum "${saved[@]}")" = "$before"
     unset -f cat awk
