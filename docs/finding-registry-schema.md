@@ -48,6 +48,9 @@ It is built from the existing finding outputs; it does not replace them.
   nested provenance and Markdown body fields cannot supply missing values.
   Uniformly indented root mappings are supported, and dedupe preserves that
   indentation when replacing its root fields and contributor list.
+  If the leading frontmatter delimiters become incomplete after ingestion,
+  dedupe warns and leaves that file byte-identical instead of publishing a
+  partial rewrite.
 
 For explicit-local bugreports, eligible ordinary destination files reserve the
 shared `--max-issues` capacity, including files from earlier runs and files

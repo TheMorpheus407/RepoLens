@@ -77,7 +77,9 @@ _local_dedupe_lib_dir() {
 #   arguments are passed via the environment (literal, no awk escape handling).
 #   Caller guarantees <file> has a valid leading frontmatter block (only group
 #   members reach here, and those come from build_findings_jsonl_from_local which
-#   requires one). Writes atomically (tmp + mv). No model invoked.
+#   requires one). Recheck delimiters while marking in case the file changed
+#   since ingestion; incomplete input fails without replacing the original.
+#   Writes atomically (tmp + mv). No model invoked.
 _local_dedupe_mark_file() {
   local file="$1" fm_add="$2" note="$3"
   local tmp="${file}.rldedupe.$$"
@@ -117,7 +119,7 @@ _local_dedupe_mark_file() {
     }
     {
       if (state == "pre") {
-        # First line is the opening "---" (guaranteed valid frontmatter).
+        if ($0 != "---") exit 1
         print $0
         state = "fm"
         next
@@ -148,6 +150,9 @@ _local_dedupe_mark_file() {
       next
     }
     END {
+      # Never publish buffered, incomplete frontmatter or append a body note
+      # to a file that changed after ingestion. The caller discards the temp.
+      if (state != "body") exit 1
       while (nb > 0 && body[nb] == "") nb--   # trim trailing blank lines
       for (k = 1; k <= nb; k++) print body[k]
       if (length(note) > 0) {

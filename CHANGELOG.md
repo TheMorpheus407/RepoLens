@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Read local canonical metadata only from the root frontmatter mapping, preserving directory fallbacks and stable finding identities when dedupe adds nested contributor provenance. Preserve root indentation when replacing dedupe fields so indented findings also rebuild correctly (repolens-r11-p5-1).
+- Read local canonical metadata only from the root frontmatter mapping, preserving directory fallbacks and stable finding identities when dedupe adds nested contributor provenance. Preserve root indentation when replacing dedupe fields so indented findings also rebuild correctly, and leave files intact if their frontmatter delimiters become incomplete before marking (repolens-r11-p5-1).
 
 - Bind static round-digest trust to registered domain/lens pairs, requiring explicit dispatch for Generic/Custom investigators with colliding static names (repolens-r11-p4-4).
 
