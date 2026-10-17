@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Refuse symlinked scope-rejection diagnostic destinations and publish diagnostics atomically, preserving external files and pending findings for retry (repolens-r12-p5-5).
+- Refuse symlinked scope-rejection diagnostic destinations and publish diagnostics atomically on GNU and BSD/macOS, preserving external files and pending findings for retry (repolens-r12-p5-5).
 
 - Read local canonical metadata only from the root frontmatter mapping, preserving directory fallbacks and stable finding identities when dedupe adds nested contributor provenance. Preserve root indentation when replacing dedupe fields so indented findings also rebuild correctly, and leave files intact if their frontmatter delimiters become incomplete before marking (repolens-r11-p5-1).
 

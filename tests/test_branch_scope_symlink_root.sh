@@ -105,5 +105,71 @@ for variant in physical linked dangling; do
   check "$variant repaired diagnostic retries successfully" branch_scope_filter_directory "$dir"
   check "$variant retry quarantines finding" test -f "$base/real/rejected.md.out-of-scope"
 done
+# Exercise portable publication and failures after staging, rather than only
+# destinations rejected before mktemp. No native BSD host is needed to model
+# its mv option contract; all ordinary moves still use the real executable.
+for fault in bsd-mv stage-write publish; do
+  base="$TMPROOT/publication-$fault"
+  mkdir -p "$base/real/nested dir"
+  rejected="$base/real/nested dir/rejected.md"
+  write_finding "$rejected" 'Rejected finding' untouched.sh
+  cp -- "$rejected" "$base/original"
+  printf 'previous diagnostic\n' > "$rejected.out-of-scope.reason"
+  mv() {
+    local arg
+    if [[ "$fault" == bsd-mv ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == -T ]]; then
+          printf 'mv: illegal option -- T\n' >&2
+          return 64
+        fi
+      done
+    fi
+    if [[ "$fault" == publish && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
+      : > "$base/publication-attempted"
+      return 1
+    fi
+    command mv "$@"
+  }
+  python3() {
+    if [[ "$fault" == publish && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
+      : > "$base/publication-attempted"
+      return 1
+    fi
+    command python3 "$@"
+  }
+  # shellcheck disable=SC2329 # Invoked by the sourced scope filter.
+  printf() {
+    if [[ "$fault" == stage-write && "${1:-}" == '%s\n' &&
+        "${2:-}" == 'out-of-scope citation: untouched.sh' ]]; then
+      : > "$base/write-attempted"
+      builtin printf 'partial reason'
+      return 1
+    fi
+    # shellcheck disable=SC2059 # Forward the caller's original format and args.
+    builtin printf "$@"
+  }
+  rc=0
+  branch_scope_filter_directory "$base/real" || rc=$?
+  unset -f mv python3 printf
+  if [[ "$fault" == bsd-mv ]]; then
+    check 'BSD mv permits rejection publication' test "$rc" -eq 0
+    check 'BSD mv quarantines source' test -f "$rejected.out-of-scope"
+    check 'BSD mv publishes full reason' grep -Fxq 'out-of-scope citation: untouched.sh' "$rejected.out-of-scope.reason"
+  else
+    marker="$base/write-attempted"
+    [[ "$fault" != publish ]] || marker="$base/publication-attempted"
+    check "$fault reaches staged failure" test -f "$marker"
+    check "$fault reports failure" test "$rc" -ne 0
+    check "$fault preserves source bytes" cmp -s "$base/original" "$rejected"
+    check "$fault publishes no quarantine" test ! -e "$rejected.out-of-scope"
+    check "$fault preserves previous diagnostic" grep -Fxq 'previous diagnostic' "$rejected.out-of-scope.reason"
+    check "$fault cleans failed staging before retry" test -z "$(find "$base/real" -name '.branch-scope-*' -print)"
+    check "$fault retry succeeds" branch_scope_filter_directory "$base/real"
+    check "$fault retry quarantines exact source" cmp -s "$base/original" "$rejected.out-of-scope"
+    check "$fault retry publishes full reason" grep -Fxq 'out-of-scope citation: untouched.sh' "$rejected.out-of-scope.reason"
+  fi
+  check "$fault removes staged scratch files" test -z "$(find "$base/real" -name '.branch-scope-*' -print)"
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
