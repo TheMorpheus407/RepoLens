@@ -699,7 +699,19 @@ build_findings_jsonl_from_local() {
     return 1
   fi
   rm -f "$tmp" "$components"
-  mv "$tmp.groups" "$out" || { rm -f "$tmp.groups"; return 1; }
+  # Share the exact-path promoter with reports. Plain mv treats an existing
+  # directory (or directory symlink) as a container and reports false success.
+  # Load in a subshell so standalone ingestion does not mutate caller state.
+  if ! (
+    # shellcheck source=lib/artifacts.sh
+    source "$(_ledger_repo_root)/lib/artifacts.sh" || exit 1
+    _artifacts_replace_report "$tmp.groups" "$out"
+  ); then
+    # Imported artifact functions have their own local tmp; ours is unchanged.
+    # shellcheck disable=SC2031
+    rm -f "$tmp.groups"
+    return 1
+  fi
 }
 
 # build_findings_csv <findings_jsonl_path> <out_csv_path>

@@ -724,4 +724,46 @@ for suffix in '' / ///; do
     "$expected_metadata" "$(jq -cs 'map([.title, .domain, .lens, .type, .id]) | sort' "$TMPDIR/linked-registry/final/findings.jsonl")"
 done
 
+echo "=== exact-path publication rejects directory destinations ==="
+destination_input="$TMPDIR/destination-input"
+mkdir -p "$destination_input/security/injection"
+cat > "$destination_input/security/injection/finding.md" <<'EOF'
+---
+title: Destination regression
+severity: high
+---
+body
+EOF
+for destination_kind in directory directory-link; do
+  destination_target="$TMPDIR/target-$destination_kind"
+  destination_out="$TMPDIR/registry-$destination_kind.jsonl"
+  mkdir -p "$destination_target"
+  printf 'preserve me\n' > "$destination_target/sentinel"
+  if [[ "$destination_kind" == directory ]]; then
+    destination_out="$destination_target"
+  else
+    ln -s "$destination_target" "$destination_out"
+  fi
+  build_findings_jsonl_from_local "$destination_input" "$destination_out"
+  destination_rc=$?
+  assert_failure "$destination_kind returns a publication error" "$destination_rc"
+  assert_eq "$destination_kind preserves sentinel bytes" 'preserve me' "$(cat "$destination_target/sentinel")"
+  assert_eq "$destination_kind adds no file inside the directory" 'sentinel' \
+    "$(find "$destination_target" -mindepth 1 -maxdepth 1 -exec basename {} \;)"
+  assert_eq "$destination_kind leaves no staging files beside the target" '' \
+    "$(find "$TMPDIR" -maxdepth 1 -name "${destination_out##*/}.tmp.*" -print)"
+  if [[ "$destination_kind" == directory-link ]]; then
+    assert_eq 'directory symlink is unchanged' "$destination_target" "$(readlink "$destination_out")"
+    rm "$destination_out"
+  else
+    # Keep the original nonempty destination intact; retry at a file path.
+    destination_out="$TMPDIR/retry-registry.jsonl"
+  fi
+  printf 'previous registry\n' > "$destination_out"
+  build_findings_jsonl_from_local "$destination_input" "$destination_out"
+  assert_success "$destination_kind retries successfully at an exact file path" "$?"
+  assert_eq "$destination_kind publishes one valid finding after retry" 'Destination regression' \
+    "$(jq -r '.title' "$destination_out")"
+done
+
 finish
