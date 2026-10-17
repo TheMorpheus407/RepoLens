@@ -233,7 +233,50 @@ case_manifest_stream() (
   check test -z "$(find "$LOG_BASE/final" -name 'manifest.json.scope.*' -print)"
   printf 'PASS: %s manifest stream failure preserves publication and retries\n' "$stream_fault"
 )
+# Exercise the synthesis caller too: operational stream failures must not
+# enter its invalid-candidate cleanup and delete a previous publication.
+case_synthesis_stream() (
+  local stream_fault="$1" fault=repaired before rc candidate
+  fresh "synthesis-stream-$stream_fault"
+  mkdir -p "$LOG_BASE/rounds/round-1/lens-outputs/security"
+  printf 'src/probe.sh:1\n' > "$LOG_BASE/rounds/round-1/lens-outputs/security/finding.md"
+  printf '[{"retained":true}]\n' > "$LOG_BASE/final/manifest.json.out-of-scope.json"
+  printf '[{"cluster_id":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+  # Include a below-threshold action so both candidate artifacts are staged.
+  REPOLENS_MIN_SEVERITY=high CROSS_LINK_MODE=comment
+  jq '. + [(.[0] | .cluster_id="c2" | .title="Second finding"), (.[0] | .cluster_id="low" | .severity="low" | .cross_link_actions=[{type:"comment",issue_number:9,body:"src/probe.sh:1"}])]' "$LOG_BASE/final/manifest.json" > "$LOG_BASE/agent.json"
+  before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  candidate="$LOG_BASE/final/manifest.json.tmp.$$"
+  # Other synthesis passes enumerate entries too; fail only the scope read.
+  jq() {
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "$#" == 3 && "$1" == -c && "$2" == '.[]' && "$3" == "$candidate" ]]; then
+      [[ "$stream_fault" != partial ]] || command jq -c '.[0]' "$candidate"
+      printf 'injected synthesis manifest stream read error\n' >&2
+      return 74
+    fi
+    command jq "$@"
+  }
+  rc=0
+  run_synthesizer probe || rc=$?
+  printf 'synthesis stream=%s rc=%s\n' "$stream_fault" "$rc"
+  check test "$rc" -ne 0
+  check test "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$before"
+  check jq -e 'length == 2 and .[0].cluster_id == "c1" and .[1].cluster_id == "c2"' "$LOG_BASE/final/manifest.scope-pending.json"
+  check jq -e 'length == 1 and .[0].cluster_id == "low"' "$LOG_BASE/final/cross-link-actions.scope-pending.json"
+  check test -z "$(find "$LOG_BASE/final" -name 'manifest.json.tmp.*' -print)"
+  check test ! -e "$LOG_BASE/posts"
+  unset -f jq
+  check run_synthesizer probe
+  check jq -e 'length == 2 and .[0].title == "[REGRESSION][HIGH] Finding" and .[1].title == "[REGRESSION][HIGH] Second finding"' "$LOG_BASE/final/manifest.json"
+  check jq -e 'length == 0' "$LOG_BASE/final/manifest.json.out-of-scope.json"
+  check jq -e 'length == 1 and .[0].cluster_id == "low"' "$LOG_BASE/final/cross-link-actions.preserved.json"
+  check test ! -e "$LOG_BASE/final/manifest.scope-pending.json"
+  check test ! -e "$LOG_BASE/final/cross-link-actions.scope-pending.json"
+  check test -z "$(find "$LOG_BASE/final" -name 'manifest.json.tmp.*' -print)"
+  printf 'PASS: synthesis preserves all publications on %s stream failure and retries\n' "$stream_fault"
+)
 case "${1:-all}" in
+  synthesis-stream-*) case_synthesis_stream "${1#synthesis-stream-}" ;;
   stream-*) case_manifest_stream "${1#stream-}" ;;
   directory) case_directory ;;
   synthesis) for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done ;;
@@ -242,5 +285,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac

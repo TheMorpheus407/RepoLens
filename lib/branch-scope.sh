@@ -355,7 +355,8 @@ branch_scope_filter_directory() {
 
 # Side effects: filter a synthesized candidate before promotion, preserve
 # rejected proposals, and retain the branch title convention mechanically.
-# Returns 2 on unavailable scope evidence, 1 on other filtering failures.
+# Returns 2 on unavailable scope evidence or an incomplete candidate read,
+# preserving publications through the synthesis caller; 1 on other failures.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local manifest="$1" entry reason kept rejected verification_rc entries
@@ -364,7 +365,7 @@ branch_scope_filter_manifest() {
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
   rejected="${kept}.rejected"
   # Capture and check the whole stream before filtering or publishing a prefix.
-  entries="$(jq -c '.[]' "$manifest")" || { rm -f "$kept"; return 1; }
+  entries="$(jq -c '.[]' "$manifest")" || { rm -f "$kept"; return 2; }
   : > "$rejected"
   while IFS= read -r entry; do
     [[ -n "$entry" ]] || continue
