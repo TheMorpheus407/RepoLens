@@ -1866,30 +1866,22 @@ _round_digest_registered_lenses() {
   ' "$domains_file"
 }
 
+# Return 1 for readable malformed frontmatter, 2 for a failed source read.
+# Read the complete snapshot before trusting even a valid leading block.
 _round_digest_frontmatter_block() {
-  local file="$1"
-
-  awk '
-    NR == 1 && $0 == "---" {
-      in_frontmatter = 1
-      next
-    }
-    NR == 1 {
-      exit 1
-    }
-    in_frontmatter && $0 == "---" {
-      found_end = 1
-      exit 0
-    }
-    in_frontmatter {
-      print
-    }
+  local file="$1" parsed
+  parsed="$(awk '
+    NR == 1 { in_frontmatter = ($0 == "---"); next }
+    in_frontmatter && $0 == "---" { found_end = 1; in_frontmatter = 0; next }
+    in_frontmatter { block = block $0 "\n" }
     END {
-      if (!found_end) {
-        exit 1
-      }
+      if (found_end) { printf "valid\n%s", block }
+      else { print "invalid" }
     }
-  ' "$file"
+  ' "$file")" || return 2
+  [[ "$parsed" != valid ]] || return 0
+  [[ "$parsed" == valid$'\n'* ]] || return 1
+  printf '%s\n' "${parsed#*$'\n'}"
 }
 
 _round_digest_finding_segments() {
@@ -2016,7 +2008,12 @@ export_generic_local_findings() (
     cat -- "$source" > "$stage/source" || return 1
     # Other lenses retain their own local-output contract; malformed ordinary
     # drafts must not prevent delivery of independent Generic evidence.
-    frontmatter="$(_round_digest_frontmatter_block "$stage/source")" || continue
+    if frontmatter="$(_round_digest_frontmatter_block "$stage/source")"; then
+      :
+    else
+      [[ "$?" == 1 ]] && continue
+      return 1
+    fi
     domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)"
     [[ "$domain" == generic ]] || continue
     # An overlapping destination may live in the private inventory. Projections
