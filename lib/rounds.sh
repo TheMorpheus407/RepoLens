@@ -528,6 +528,21 @@ _rounds_meta_certify_success() {
   fi
 }
 
+# Exact-path promotion, including when a directory appears after admission.
+# os.replace never treats the target as a container and works on BSD/macOS.
+_rounds_meta_replace_file() {
+  python3 -c '
+import os
+import sys
+try:
+    if os.path.isdir(sys.argv[2]):
+        sys.exit(1)
+    os.replace(sys.argv[1], sys.argv[2])
+except OSError:
+    sys.exit(1)
+' "$1" "$2"
+}
+
 # Return 1 for absent/invalid proof; 2 when verification or installation cannot
 # finish. Matching artifacts retain their bytes and modification times.
 _rounds_meta_restore_success() {
@@ -596,7 +611,7 @@ _rounds_meta_restore_success() {
   if (( rc == 0 )); then
     for name in dispatch.md hypotheses.md; do
       if cmp -s "$staging/$name" "$dir/$name"; then continue; fi
-      if [[ -d "$dir/$name" ]] || ! mv "$staging/$name" "$dir/$name"; then
+      if [[ -d "$dir/$name" ]] || ! _rounds_meta_replace_file "$staging/$name" "$dir/$name"; then
         rc=2
         break
       fi
@@ -1557,7 +1572,7 @@ _rounds_meta_parse_output() {
   fi
   for name in dispatch.md hypotheses.md; do
     if [[ "$name" == dispatch.md ]]; then target="$dispatch_file"; else target="$hypotheses_file"; fi
-    if [[ -d "$target" ]] || ! mv "$staging/$name" "$target"; then
+    if [[ -d "$target" ]] || ! _rounds_meta_replace_file "$staging/$name" "$target"; then
       rm -rf "$staging"
       return 1
     fi
