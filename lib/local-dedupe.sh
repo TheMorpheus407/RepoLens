@@ -240,7 +240,7 @@ dedupe_local_markdown() {
 
   # 4. Mark each duplicate group in place.
   local group canon_idx canon_md canon_rel contrib_idx_json m dup_md
-  local arb tsv clens cdomain cmd crel groups_marked=0
+  local arb groups_marked=0
   while IFS= read -r group; do
     if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
       rm -rf "$tmpdir"
@@ -276,20 +276,32 @@ dedupe_local_markdown() {
     fi
 
     # 4b. Build the sorted also_reported_by: YAML list + annotate the canonical.
-    arb='also_reported_by:'
-    tsv="$(jq -r --argjson idx "$contrib_idx_json" '
+    # Keep empty values and filename bytes in JSON throughout; @tsv plus
+    # whitespace-IFS read drops empty fields and leaves escaped paths behind.
+    # Escape the extra Unicode controls/noncharacters YAML forbids, and Unicode
+    # line breaks that YAML readers may fold. Ordinary paths stay readable.
+    if ! arb="$(jq -r --argjson idx "$contrib_idx_json" --arg root "${output_dir%/}/" '
+      def yaml_string:
+        @json | explode | map(
+          if (. >= 127 and . <= 159) or . == 8232 or . == 8233
+             or . == 65534 or . == 65535 then
+            . as $cp | "\\u" + ([4096, 256, 16, 1]
+              | map((($cp / . | floor) % 16) as $digit
+                  | "0123456789abcdef"[$digit:$digit+1]) | join(""))
+          else [.] | implode end) | join("");
       [ $idx[] as $k
         | { lens: (.[$k].lens // ""), domain: (.[$k].domain // ""), md: (.[$k].markdown_path // "") } ]
       | sort_by(.domain, .lens, .md)
-      | .[] | [.lens, .domain, .md] | @tsv
-    ' "$manifest")" || tsv=""
-    while IFS=$'\t' read -r clens cdomain cmd; do
-      [[ -n "${clens}${cdomain}${cmd}" ]] || continue
-      crel="${cmd#"${output_dir%/}"/}"
-      arb+=$'\n'"  - lens: ${clens}"
-      arb+=$'\n'"    domain: ${cdomain}"
-      arb+=$'\n'"    markdown_path: ${crel}"
-    done <<< "$tsv"
+      | "also_reported_by:", (.[]
+          | "  - lens: " + (.lens | yaml_string)
+            + "\n    domain: " + (.domain | yaml_string)
+            + "\n    markdown_path: " + (.md | ltrimstr($root)
+                | if test("^[A-Za-z0-9_./-]+$") then . else yaml_string end))
+    ' "$manifest")"; then
+      echo "dedupe_local_markdown: failed to serialize contributor provenance" >&2
+      rm -rf "$tmpdir"
+      return 1
+    fi
 
     if ! _local_dedupe_mark_file "$canon_md" "$arb" \
       "> Also reported by other lenses; see \`also_reported_by\` in the frontmatter above."; then

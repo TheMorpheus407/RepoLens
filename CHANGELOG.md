@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve empty contributor fields and literal filename bytes in canonical local-dedupe provenance, including relative paths under backslash-containing output roots and YAML-safe escapes for Unicode controls and line breaks (repolens-r9-p3-2).
+
 - Encode finding and contributor paths in all Markdown report links so spaces and special filename characters resolve to their original files; keep label markup literal and flatten label line breaks without changing destinations (repolens-r9-p2-3).
 
 - Reject directory and directory-symlink destinations for HUMAN_REVIEW.md, preserving the target and reporting write failure instead of placing reports inside it. Standalone rendering also works after sourcing the library by a relative path and changing directories, retaining the source repository's security-domain configuration (repolens-r9-p2-2).
