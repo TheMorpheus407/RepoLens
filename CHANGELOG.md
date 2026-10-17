@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Read Generic delivery and round-digest metadata only from the root frontmatter mapping, so nested provenance cannot lower severity, override trusted lens identity, or remove an existing high-priority projection on resume (repolens-r12-p4-2).
+
 - Promote certified handoffs and private parser outputs to their exact paths, refusing directory races instead of silently placing dispatch files inside directories and falling back to old investigations (repolens-r12-p3-2).
 
 - Reject incomplete saved dispatch reads across LENS, CUSTOM, GENERIC and directive-presence parsing before executing any entry, stopping rounds safely on EIO and retaining resumable handoffs without parent-side read loops or source-sized here-string temporary files (repolens-r12-p1-1).
