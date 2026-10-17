@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject directory and directory-symlink destinations in standalone local registry building, preserving the target and cleaning staging files. Keep standalone library imports working after a caller changes directories (repolens-r11-p3-1).
+
 - Retire saved verification decisions before synthesis when resuming with `--no-verifier`, and stop safely if cleanup fails (repolens-r11-p5-2).
 
 - Apply the shared local finding cap to Generic segments, stop additional investigators when it is spent, retain the cap on resume, and recover ordinary usage from the explicit destination. Keep incomplete drafts resumable, admit accounting from the delivery plan before publication, and isolate temporary plans from overlapping output scans during parallel runs, including when TMPDIR points inside the scanned tree. Failed requested Generic delivery now reports failure with a nonzero exit and a resume hint while preserving completed work and previous reports (repolens-r11-p4-5).
