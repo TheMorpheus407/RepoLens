@@ -30,6 +30,7 @@ cp "$LOG_BASE/final/findings.jsonl" "$FIXTURE/before.jsonl"
 cp "$LOG_BASE/final/findings.csv" "$FIXTURE/before.csv"
 jq -se 'length == 1' "$FIXTURE/before.jsonl" >/dev/null
 PASS=0 FAIL=0
+# Count assertions without interrupting the remaining independent fault cases.
 check() {
   local desc="$1"; shift
   if "$@"; then PASS=$((PASS + 1))
@@ -38,6 +39,7 @@ check() {
 # Real EACCES after a successful copy, plus deterministic EIO at each reader.
 # No product command, source file or other checkout is modified.
 fail_reader=none partial=false
+# Copy normally, then revoke access only to the completed private snapshot.
 cat() {
   command cat "$@" || return $?
   if [[ "$fail_reader" == permission && "${!#}" == "$FIXTURE/findings/001.md" ]]; then
@@ -46,9 +48,17 @@ cat() {
     chmod 000 "$destination"
   fi
 }
+# Inject reader errors, retaining real EACCES when mode bits prevent reading.
 awk() {
   if [[ "${!#}" == *.source.* ]]; then
-    if [[ "$fail_reader" == frontmatter && "${1:-}" != -v ]]         || [[ "${1:-}" == -v && "${2:-}" == "key=$fail_reader" ]]; then
+    if [[ "$fail_reader" == permission && -r "${!#}" ]]; then
+      printf 'snapshot remains readable after chmod; injecting reader failure\n' >&2
+      return 2
+    fi
+    if [[ "$fail_reader" == frontmatter && "${1:-}" != -v ]] \
+        || [[ "${1:-}" == -v && "${2:-}" == "key=$fail_reader" ]] \
+        || [[ "$fail_reader" == generic_title && "${2:-}" == key=title \
+              && "${FUNCNAME[2]:-}" == build_findings_jsonl_from_local ]]; then
       [[ "$partial" != true ]] || command awk "$@"
       printf 'injected snapshot read error\n' >&2
       return 2
@@ -72,8 +82,31 @@ done
 fail_reader=none
 build_finding_registry fixture "$FIXTURE/findings"
 check 'repaired snapshot rebuild succeeds unchanged' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+
+# Generic projections reread the JSON-quoted title after the ordinary scalar
+# reads. Fail only that direct reread (the first passes through the trim helper).
+printf -- '---\ntitle: "Generic authorization finding"\nseverity: high\ndomain: generic\nlens: investigator\ngeneric_source_id: %064d\n---\nEvidence\n' 0 > "$FIXTURE/findings/002.md"
+build_finding_registry fixture "$FIXTURE/findings"
+check 'Generic fixture is indexed with its decoded title' jq -se \
+  'length == 2 and any(.[]; .domain == "generic" and .title == "Generic authorization finding")' \
+  "$LOG_BASE/final/findings.jsonl"
+cp "$LOG_BASE/final/findings.jsonl" "$FIXTURE/before.jsonl"
+cp "$LOG_BASE/final/findings.csv" "$FIXTURE/before.csv"
+fail_reader=generic_title
+for partial in false true; do
+  rc=0
+  build_finding_registry fixture "$FIXTURE/findings" > "$FIXTURE/rebuild.log" 2>&1 || rc=$?
+  check "Generic title reread (partial=$partial) fails rebuilding" test "$rc" -ne 0
+  check 'Generic title reread preserves JSONL' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+  check 'Generic title reread preserves CSV' cmp -s "$FIXTURE/before.csv" "$LOG_BASE/final/findings.csv"
+  cp "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+  cp "$FIXTURE/before.csv" "$LOG_BASE/final/findings.csv"
+done
+fail_reader=none
+build_finding_registry fixture "$FIXTURE/findings"
+check 'repaired Generic reread succeeds unchanged' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
 # Empty and malformed-only trees still produce successful empty registries.
-rm "$FIXTURE/findings/001.md"
+rm "$FIXTURE/findings/001.md" "$FIXTURE/findings/002.md"
 printf 'ordinary notes without frontmatter\n' > "$FIXTURE/findings/notes.md"
 build_finding_registry fixture "$FIXTURE/findings"
 check 'readable malformed input stays skippable' test ! -s "$LOG_BASE/final/findings.jsonl"
