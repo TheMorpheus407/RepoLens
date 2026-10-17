@@ -305,12 +305,13 @@ filing_verify_cluster_citations() {
     fi
     # Treat a final line without a trailing newline as a real line, but never
     # interpret missing/partial output from a failed read as source evidence.
+    # Numeric bytes distinguish a literal space from an empty file.
     local last_byte
-    if ! last_byte="$(tail -c 1 "$file_path" | od -An -c | tr -d ' ')"; then
+    if ! last_byte="$(tail -c 1 "$file_path" | od -An -tu1 | tr -d '[:space:]')"; then
       printf '%s could not read source final byte\n' "$citation"
       return 1
     fi
-    if [[ -n "$last_byte" && "$last_byte" != '\n' ]]; then
+    if [[ -n "$last_byte" && "$last_byte" != 10 ]]; then
       line_count=$((line_count + 1))
     fi
     if (( lstart > line_count )) || (( lend > line_count )); then

@@ -81,15 +81,17 @@ _filing_real_agent probe c1 > "$FIXTURE/governor" 2>&1 || rc=$?
 check 'governor rejects failed final-byte read' test "$rc" -ne 0
 check 'governor sends no POST' test ! -e "$FIXTURE/posts"
 check 'governor writes no success receipt' test ! -e "$LOG_BASE/final/filed/c1.url"
-# Preserve valid newline-terminated and unterminated final lines, plus empties.
+# Preserve final-line bytes, including spaces that character dumps can erase.
 read_failure=none
-for content in $'return 0\n' 'return 0' ''; do
+for content in $'return 0\n' 'return 0' 'return 0 ' ' ' $'return 0\n ' $'return 0\t' ''; do
   printf '%s' "$content" > "$PROJECT_PATH/src/source.sh"
-  probe='{"body":"src/source.sh:1"}'
+  line=1
+  [[ "$content" != $'return 0\n ' ]] || line=2
+  probe="$(jq -cn --arg body "src/source.sh:$line" '{body:$body}')"
   rc=0
   filing_verify_cluster_citations "$PROJECT_PATH" "$probe" > "$FIXTURE/valid" || rc=$?
   if [[ -n "$content" ]]; then
-    check 'existing final line verifies' test "$rc" -eq 0
+    check "existing final line verifies (content=$(printf '%q' "$content"))" test "$rc" -eq 0
   else
     check 'empty file has no first line' test "$rc" -ne 0
   fi

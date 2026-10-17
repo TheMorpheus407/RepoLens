@@ -90,3 +90,10 @@ intervening prose into evidence. Location-shaped URL/timestamp spans retain
 their existing exclusion from optional snippet checks. The filing governance
 parsed-snippet cases exercise issue and cross-link publication with mocked
 forge readback, including rejection before any POST.
+
+Live-source verification rejects unsuccessful line-count, final-byte and
+snippet-context reads, including reads that return partial output. Empty files
+have no line 1; nonempty final lines count even without a newline, including
+lines ending in spaces or tabs. `tests/test_citation_read_errors.sh` covers these
+boundaries and confirms that a failed final-byte read prevents publication and
+a success receipt.

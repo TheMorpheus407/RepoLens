@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Reject failed or partial source reads during citation verification before admitting publication (repolens-r10-p1-1).
+- Reject failed or partial source reads during citation verification before admitting publication, while preserving valid unterminated lines ending in spaces (repolens-r10-p1-1).
 
 - Apply branch-scope filtering through an explicit symlink finding root, matching registry ingestion without following nested symlinks (repolens-r9-p3-3).
 
