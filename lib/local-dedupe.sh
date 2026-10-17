@@ -239,8 +239,19 @@ dedupe_local_markdown() {
   fi
 
   # 4. Mark each duplicate group in place.
-  local group canon_idx canon_md canon_rel contrib_idx_json m dup_md
+  local group canon_idx canon_md canon_rel canon_yaml contrib_idx_json m dup_md
   local arb groups_marked=0
+  # Share YAML-safe quoting between the canonical link and contributor paths.
+  local yaml_string_filter='
+      def yaml_string:
+        @json | explode | map(
+          if (. >= 127 and . <= 159) or . == 8232 or . == 8233
+             or . == 65534 or . == 65535 then
+            . as $cp | "\\u" + ([4096, 256, 16, 1]
+              | map((($cp / . | floor) % 16) as $digit
+                  | "0123456789abcdef"[$digit:$digit+1]) | join(""))
+          else [.] | implode end) | join("");
+  '
   while IFS= read -r group; do
     if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
       rm -rf "$tmpdir"
@@ -251,6 +262,13 @@ dedupe_local_markdown() {
     canon_md="$(jq -r --argjson k "$canon_idx" '.[$k].markdown_path // ""' "$manifest")"
     [[ -n "$canon_md" && -f "$canon_md" ]] || continue
     canon_rel="${canon_md#"${output_dir%/}"/}"
+    if ! canon_yaml="$(jq -nr --arg path "$canon_rel" "$yaml_string_filter"'
+      $path | if test("^[A-Za-z0-9_./-]+$") then . else yaml_string end
+    ')"; then
+      echo "dedupe_local_markdown: failed to serialize canonical path" >&2
+      rm -rf "$tmpdir"
+      return 1
+    fi
 
     # Non-canonical contributor indices (every member except the canonical).
     contrib_idx_json="$(jq -c --argjson c "$canon_idx" \
@@ -264,7 +282,7 @@ dedupe_local_markdown() {
       dup_md="$(jq -r --argjson k "$m" '.[$k].markdown_path // ""' "$manifest")"
       [[ -n "$dup_md" && -f "$dup_md" ]] || continue
       if ! _local_dedupe_mark_file "$dup_md" \
-        "$(printf 'status: duplicate\nduplicate_of: %s' "$canon_rel")" \
+        "$(printf 'status: duplicate\nduplicate_of: %s' "$canon_yaml")" \
         "> Duplicate of \`$canon_rel\` — see the canonical finding for the full details."; then
         echo "dedupe_local_markdown: failed to mark duplicate $dup_md" >&2
       fi
@@ -280,15 +298,7 @@ dedupe_local_markdown() {
     # whitespace-IFS read drops empty fields and leaves escaped paths behind.
     # Escape the extra Unicode controls/noncharacters YAML forbids, and Unicode
     # line breaks that YAML readers may fold. Ordinary paths stay readable.
-    if ! arb="$(jq -r --argjson idx "$contrib_idx_json" --arg root "${output_dir%/}/" '
-      def yaml_string:
-        @json | explode | map(
-          if (. >= 127 and . <= 159) or . == 8232 or . == 8233
-             or . == 65534 or . == 65535 then
-            . as $cp | "\\u" + ([4096, 256, 16, 1]
-              | map((($cp / . | floor) % 16) as $digit
-                  | "0123456789abcdef"[$digit:$digit+1]) | join(""))
-          else [.] | implode end) | join("");
+    if ! arb="$(jq -r --argjson idx "$contrib_idx_json" --arg root "${output_dir%/}/" "$yaml_string_filter"'
       [ $idx[] as $k
         | { lens: (.[$k].lens // ""), domain: (.[$k].domain // ""), md: (.[$k].markdown_path // "") } ]
       | sort_by(.domain, .lens, .md)

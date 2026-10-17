@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve canonical duplicate paths with quotes, whitespace and line breaks through YAML-safe serialization and JSON-string decoding, retaining one actionable finding and contributor provenance (repolens-r10-p3-2, repolens-r10-p5-1).
+
 - Reject staged-source appends that report read errors when assembling the registry, including after partial output, preserving the last JSONL, CSV and triage reports for a successful retry (repolens-r10-p2-1).
 
 - Fail verification and synthesis on incomplete finding inventories, retaining saved results until successful enumeration and preserving legitimate empty-run behavior (repolens-r10-p4-1).
