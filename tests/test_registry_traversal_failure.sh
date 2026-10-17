@@ -194,9 +194,12 @@ for fault in empty partial reason reopen move read-empty read-partial; do
     # A directory makes the diagnostic redirection fail even as root.
     check mkdir "$rejected.out-of-scope.reason"
   fi
-  mv() {
-    if [[ "$fault" == move && "${2:-}" == "$rejected" ]]; then return 1; fi
-    command mv "$@"
+  python3() {
+    if [[ "$fault" == move && "${!#}" == "$rejected.out-of-scope" ]]; then
+      : > "$TMP/scope-$fault-attempted"
+      return 1
+    fi
+    command python3 "$@"
   }
   scope_reads=0
   read() {
@@ -239,6 +242,7 @@ for fault in empty partial reason reopen move read-empty read-partial; do
   }
   check finalize_local
   printf 'scope fault=%s registry_records=%s\n' "$fault" "$(jq -s length "$LOG_BASE/final/findings.jsonl")"
+  if [[ "$fault" == move ]]; then check test -f "$TMP/scope-$fault-attempted"; fi
   # A failed list read must precede every quarantine and preserve publication.
   check test -f "$rejected"
   check test ! -e "$rejected.out-of-scope"
@@ -246,7 +250,7 @@ for fault in empty partial reason reopen move read-empty read-partial; do
   rc=0
   branch_scope_filter_directory "$OUTPUT_DIR" || rc=$?
   check test "$rc" -ne 0
-  unset -f find mv read
+  unset -f find python3 read
   check test -f "$rejected"
   check test ! -e "$rejected.out-of-scope"
   if [[ "$fault" == reason ]]; then

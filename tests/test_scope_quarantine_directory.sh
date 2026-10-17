@@ -25,7 +25,7 @@ trap 'rm -rf -- "$FIXTURE"' EXIT
 # shellcheck disable=SC2034 # Consumed by sourced scope filter.
 MODE=branch-review BRANCH_SCOPE_FILE="$FIXTURE/scope.json"
 printf '["src/changed.sh"]\n' > "$BRANCH_SCOPE_FILE"
-for kind in directory symlink-directory; do
+for kind in directory symlink-directory hardlink; do
   root="$FIXTURE/$kind"
   mkdir -p "$root/findings" "$root/outside"
   source_file="$root/findings/bad.md"
@@ -39,11 +39,11 @@ lens: injection
 src/unchanged.sh:1
 FINDING
   cp "$source_file" "$root/original"
-  if [[ "$kind" == directory ]]; then
-    mkdir "$source_file.out-of-scope"
-  else
-    ln -s "$root/outside" "$source_file.out-of-scope"
-  fi
+  case "$kind" in
+    directory) mkdir "$source_file.out-of-scope" ;;
+    symlink-directory) ln -s "$root/outside" "$source_file.out-of-scope" ;;
+    hardlink) ln "$source_file" "$source_file.out-of-scope" ;;
+  esac
   rc=0
   branch_scope_filter_directory "$root/findings" || rc=$?
   printf '%s: filter exit=%s (expected nonzero)\n' "$kind" "$rc"
@@ -54,7 +54,11 @@ FINDING
   if [[ "$kind" == directory ]]; then
     rmdir "$source_file.out-of-scope"
   else
-    test -L "$source_file.out-of-scope"
+    if [[ "$kind" == symlink-directory ]]; then
+      test -L "$source_file.out-of-scope"
+    else
+      test "$source_file" -ef "$source_file.out-of-scope"
+    fi
     rm "$source_file.out-of-scope"
   fi
   # Once repaired, the same finding can be quarantined and cannot reappear in
