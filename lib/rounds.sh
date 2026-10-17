@@ -2207,35 +2207,48 @@ _round_digest_trim_yaml_value() {
   printf '%s\n' "$value"
 }
 
+# Select only fields belonging to the root frontmatter mapping. Buffer the
+# block first: nested provenance can precede the canonical keys, and uniformly
+# indented root mappings are valid. Lists may use indentless sequence markers.
 _round_digest_frontmatter_values() {
   local key="$1"
 
   awk -v key="$key" '
+    # Emit one nonempty scalar or list item after trimming outer whitespace.
     function emit(value) {
       sub(/^[[:space:]]*/, "", value)
       sub(/[[:space:]]*$/, "", value)
-      if (value != "") {
-        print value
+      if (value != "") print value
+    }
+    {
+      lines[++count] = $0
+      if ($0 ~ /^[[:space:]]*[^#[:space:]-][^:]*:/) {
+        match($0, /^[[:space:]]*/)
+        if (!have_root || RLENGTH < root_indent) {
+          root_indent = RLENGTH
+          have_root = 1
+        }
       }
     }
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*:" {
-      collecting = 1
-      value = $0
-      sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "", value)
-      if (value != "") {
-        emit(value)
-        exit 0
+    END {
+      for (i = 1; i <= count; i++) {
+        line = lines[i]
+        match(line, /^[[:space:]]*/)
+        indent = RLENGTH
+        if (indent == root_indent && line ~ "^[[:space:]]*" key "[[:space:]]*:") {
+          collecting = 1
+          value = line
+          sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "", value)
+          if (value != "") { emit(value); break }
+          continue
+        }
+        if (collecting && indent == root_indent && line ~ /^[[:space:]]*[^#[:space:]-][^:]*:/) break
+        if (collecting && line ~ /^[[:space:]]*-[[:space:]]*/) {
+          value = line
+          sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+          emit(value)
+        }
       }
-      next
-    }
-    collecting && $0 ~ "^[[:space:]]*-[[:space:]]*" {
-      value = $0
-      sub("^[[:space:]]*-[[:space:]]*", "", value)
-      emit(value)
-      next
-    }
-    collecting && $0 ~ "^[A-Za-z0-9_][A-Za-z0-9_-]*[[:space:]]*:" {
-      exit 0
     }
   '
 }
