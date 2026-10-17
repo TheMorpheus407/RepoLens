@@ -196,8 +196,9 @@ validate_verification_manifest() {
 #                     AGENT_TIMEOUT_SECS, AGENT_KILL_GRACE_SECS.
 #
 #   Returns 0 on success (verification.json promoted or no findings to verify),
-#   non-zero on dispatch / validation failure or parent interruption (signal
-#   exit code). Rechecks cancellation after preparation before agent admission.
+#   7 on inventory/cleanup failure (saved output retained; caller must stop),
+#   otherwise non-zero on dispatch / validation failure or parent interruption
+#   (signal exit code). Rechecks cancellation before agent admission.
 run_verifier() {
   local run_id="${1:-}"
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
@@ -235,19 +236,24 @@ run_verifier() {
     return 1
   }
 
-  # Clear any stale verification.json from a previous run before invoking the
-  # agent. This makes the "fatal validation leaves nothing consumable"
-  # guarantee hold across every failure path. The synthesizer treats a missing
-  # verification.json as "no verifier ran" and proceeds without filtering,
-  # which is the safe fallback per the issue.
-  rm -f "$final_dir/verification.json"
-
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
-    total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*.md' -type f 2>/dev/null | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}')
+    if ! total_findings=$(set -o pipefail; find "$rounds_dir" -path '*/lens-outputs/*.md' -type f | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}'); then
+      echo "run_verifier: cannot enumerate complete finding inventory" >&2
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 7
+    fi
   fi
   # Enumeration can finish after a parent signal, including with no findings.
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+
+  # Preserve the previous result until enumeration succeeds. Once the source
+  # inventory is complete, retain the normal fatal-agent-validation semantics.
+  if ! rm -f "$final_dir/verification.json"; then
+    echo "run_verifier: cannot retire saved verification result" >&2
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return 7
+  fi
 
   # Zero findings → no verifier work needed. Write an empty array as the
   # canonical sentinel so the synthesizer sees an explicit "verifier ran,
