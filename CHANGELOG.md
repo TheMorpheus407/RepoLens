@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Read local canonical metadata only from the root frontmatter mapping, preserving directory fallbacks and stable finding identities when dedupe adds nested contributor provenance (repolens-r11-p5-1).
+
 - Bind static round-digest trust to registered domain/lens pairs, requiring explicit dispatch for Generic/Custom investigators with colliding static names (repolens-r11-p4-4).
 
 - Reject directory and directory-symlink destinations in standalone local registry building, preserving the target and cleaning staging files. Keep standalone library imports working after a caller changes directories (repolens-r11-p3-1).
