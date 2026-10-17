@@ -33,7 +33,7 @@ initialize_counts() {
   # shellcheck source=/dev/null
   source <(awk '/^GLOBAL_ISSUES_CREATED=0$/ {copy=1} copy && /^if \[\[ "\$MODE" == branch-review/ {exit} copy {print}' "$REPO/repolens.sh")
 }
-for scenario in ${1:-cap ordinary partial publication admission reuse-below reuse-at reuse-above severity partial-overlap partial-overlap-link}; do
+for scenario in ${1:-cap ordinary partial publication admission reuse-below reuse-at reuse-above severity partial-overlap partial-overlap-link parallel-overlap parallel-overlap-link}; do
   (
     LOG_BASE="$FIXTURE/$scenario/run" OUTPUT_DIR="$FIXTURE/$scenario/output"
     PROJECT_PATH="$FIXTURE/project" SUMMARY_FILE="$LOG_BASE/summary.json"
@@ -48,6 +48,55 @@ for scenario in ${1:-cap ordinary partial publication admission reuse-below reus
     printf '%s\n' '{"lens_ids":["generic/probe|deeper|Probe||"]}' > "$LOG_BASE/rounds/round-1/metadata.json"
     printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\n---\n## hypothesis\nSaved finding\n## evidence\nSaved evidence\n' > "$raw"
     case "$scenario" in
+      parallel-overlap|parallel-overlap-link)
+        MAX_ISSUES='' PARALLEL=true OUTPUT_DIR="$FIXTURE/$scenario"
+        TMPDIR="$FIXTURE/temporary plans"
+        export TMPDIR
+        mkdir -p "$TMPDIR"
+        if [[ "$scenario" == parallel-overlap-link ]]; then
+          ln -s "$OUTPUT_DIR" "$FIXTURE/output-alias"
+          OUTPUT_DIR="$FIXTURE/output-alias"
+        fi
+        # Model a peer using the same staging location. Force its cleanup at
+        # the exact point GNU find visits it, without timing-dependent sleeps.
+        mktemp() {
+          local created peer
+          created="$(command mktemp "$@")" || return 1
+          if [[ "$1" == -d && "$created" == *generic-plan.* ]]; then
+            peer="$(command mktemp -d "${created%/*}/peer-generic-plan.XXXXXX")" || return 1
+            printf '%s\n' "$created" > "$FIXTURE/stage-path"
+            printf '%s\n' "$peer" > "$FIXTURE/peer-path"
+          fi
+          printf '%s\n' "$created"
+        }
+        find() {
+          local peer
+          if [[ "$1" == -H && "$2" == "$OUTPUT_DIR" ]]; then
+            peer="$(cat "$FIXTURE/peer-path")" || return 1
+            if [[ "$peer" == "$FIXTURE/$scenario/"* ]]; then
+              peer="$OUTPUT_DIR/${peer#"$FIXTURE/$scenario/"}"
+            fi
+            # Removing a directory after enumeration but before descent must
+            # still be an inventory error. Staging must avoid that inventory.
+            command find "$@" -o '(' -type d -path "$peer" -exec rm -rf -- '{}' ';' ')'
+          else
+            command find "$@"
+          fi
+        }
+        rc=0
+        run_lens generic/probe || rc=$?
+        stage_path="$(cat "$FIXTURE/stage-path")"
+        peer_path="$(cat "$FIXTURE/peer-path")"
+        rm -rf -- "$peer_path"
+        unset -f mktemp find
+        test "$rc" -eq 0
+        test ! -e "$stage_path"
+        grep -Fxq generic/probe "$completed_lenses_file"
+        test "$GLOBAL_ISSUES_CREATED" = 1
+        jq -e '.totals.issues_created == 1 and .max_issues == null' "$SUMMARY_FILE" >/dev/null
+        optional_local_finalization
+        jq -se 'length == 1 and .[0].domain == "generic"' "$LOG_BASE/final/findings.jsonl" >/dev/null
+        ;;
       cap)
         cat "$raw" "$raw" > "$FIXTURE/two.md"
         mv "$FIXTURE/two.md" "$raw"

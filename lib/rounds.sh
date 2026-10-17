@@ -1997,7 +1997,9 @@ _generic_local_findings() (
   local stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
   local rounds_dir="${LOG_BASE:-}/rounds"
   mkdir -p "$LOG_BASE/final" || return 1
-  stage="$(mktemp -d "$LOG_BASE/final/.generic-plan.XXXXXX")" || return 1
+  # Parallel reconcilers may scan an output root enclosing LOG_BASE. Keep
+  # disposable plans outside that tree so peer cleanup cannot break traversal.
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/repolens-generic-plan.XXXXXX")" || return 1
   trap 'rm -rf -- "$stage"' EXIT
   # Recover ordinary usage from the deliverable inventory, including writes
   # interrupted before record_lens. Reuse registry ingestion and severity rules;
