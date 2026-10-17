@@ -131,6 +131,11 @@ link destinations while preserving directory separators. Labels escape Markdown
 and HTML syntax and replace carriage returns and newlines with spaces; the
 encoded destination retains the original path bytes.
 
+Standalone local registry building replaces the exact requested file path
+atomically. Directory and directory-symlink destinations fail without changing
+their contents, and failed publication removes staged registry files. Relative
+sourcing of `lib/ledger.sh` remains valid after the caller changes directories.
+
 Triage reports replace their requested file paths atomically. A directory or
 symlink to a directory at a report path causes generation to fail, preserving
 the directory contents and cleaning staged Markdown. Promotion never puts a

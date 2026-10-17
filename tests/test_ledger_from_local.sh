@@ -766,4 +766,24 @@ for destination_kind in directory directory-link; do
     "$(jq -r '.title' "$destination_out")"
 done
 
+echo "=== relative library sourcing survives a working-directory change ==="
+relative_out="$TMPDIR/relative-registry.jsonl"
+if bash -c '
+  set -euo pipefail
+  cd "$1"
+  source lib/ledger.sh
+  cd "$2"
+  build_findings_jsonl_from_local . "$3"
+  [[ $- == *e* ]]
+' bash "$SCRIPT_DIR" "$destination_input" "$relative_out"; then
+  relative_rc=0
+else
+  relative_rc=$?
+fi
+assert_success 'relative source publishes after changing directory and preserves errexit' "$relative_rc"
+assert_eq 'relative source publishes the expected finding' 'Destination regression' \
+  "$(jq -r '.title' "$relative_out" 2>/dev/null)"
+assert_eq 'relative source leaves no staging files' '' \
+  "$(find "$TMPDIR" -maxdepth 1 -name 'relative-registry.jsonl.tmp.*' -print)"
+
 finish

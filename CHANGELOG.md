@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Reject directory and directory-symlink destinations in standalone local registry building, preserving the target and cleaning staging files (repolens-r11-p3-1).
+- Reject directory and directory-symlink destinations in standalone local registry building, preserving the target and cleaning staging files. Keep standalone library imports working after a caller changes directories (repolens-r11-p3-1).
 
 - Retire saved verification decisions before synthesis when resuming with `--no-verifier`, and stop safely if cleanup fails (repolens-r11-p5-2).
 

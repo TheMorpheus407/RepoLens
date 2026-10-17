@@ -15,9 +15,10 @@
 
 # RepoLens — evidence-ledger / finding-registry helpers.
 #
-# This module is sourceable; it defines functions only and has no top-level
-# side effects. Nearly every function works purely from its arguments — so it
-# is safe to source alone under `set -uo pipefail`. The sole exception is the
+# This module is sourceable; it captures its repository root at source time
+# without changing the caller's working directory or shell options. Nearly every
+# function works purely from its arguments, so it is safe to source alone under
+# `set -uo pipefail`. The sole exception is the
 # `build_finding_registry` orchestrator, which reads the optional `LOG_BASE`
 # and `OUTPUT_DIR` globals (both `${VAR:-}`-guarded) to resolve where the
 # registry lands and where to find a local `--local` md tree.
@@ -32,6 +33,9 @@
 # lens/domain/round/suspect-files for matching verification.json entries.
 # The registry id below is title-derived (content-stable, not suspect-file
 # derived) and carries an `fnd-` prefix to keep the two visually distinct.
+
+# Resolve relative BASH_SOURCE before a standalone caller changes directories.
+_LEDGER_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # _ledger_normalize_title <title>
 #   Normalizes a finding title for stable hashing: lowercases, strips an
@@ -875,13 +879,10 @@ validate_findings_jsonl() {
 
 # _ledger_repo_root
 #   Prints the repository root (the parent of this file's lib/ directory).
-#   Self-contained replica of lib/synthesize.sh::_synthesize_repo_root so the
-#   log-base resolver works when lib/ledger.sh is sourced on its own. Both
-#   files live in lib/, so `dirname/..` yields the same root.
+#   Captured when sourced so lazy imports and the standalone log-base fallback
+#   remain independent of later changes to the caller's working directory.
 _ledger_repo_root() {
-  local source_dir
-  source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  printf '%s' "$(cd "$source_dir/.." && pwd)"
+  printf '%s' "$_LEDGER_REPO_ROOT"
 }
 
 # _ledger_log_base <run_id>
