@@ -299,9 +299,19 @@ filing_verify_cluster_citations() {
       printf '%s file not found\n' "$citation"
       return 1
     fi
-    line_count="$(wc -l <"$file_path" | tr -d ' ')"
-    # Treat a final line without a trailing newline as a real line.
-    if [[ -s "$file_path" ]] && [[ "$(tail -c 1 "$file_path" | od -An -c | tr -d ' ')" != '\n' ]]; then
+    if ! line_count="$(wc -l <"$file_path" | tr -d ' ')"; then
+      printf '%s could not read source line count\n' "$citation"
+      return 1
+    fi
+    # Treat a final line without a trailing newline as a real line, but never
+    # interpret missing/partial output from a failed read as source evidence.
+    # Numeric bytes distinguish a literal space from an empty file.
+    local last_byte
+    if ! last_byte="$(tail -c 1 "$file_path" | od -An -tu1 | tr -d '[:space:]')"; then
+      printf '%s could not read source final byte\n' "$citation"
+      return 1
+    fi
+    if [[ -n "$last_byte" && "$last_byte" != 10 ]]; then
       line_count=$((line_count + 1))
     fi
     if (( lstart > line_count )) || (( lend > line_count )); then
@@ -320,7 +330,10 @@ filing_verify_cluster_citations() {
       (( context_start < 1 )) && context_start=1
       context_end=$(( lend + 20 ))
       (( context_end > line_count )) && context_end=$line_count
-      snippet_pattern="$(sed -n "${context_start},${context_end}p" "$file_path")"
+      if ! snippet_pattern="$(sed -n "${context_start},${context_end}p" "$file_path")"; then
+        printf '%s could not read source snippet\n' "$citation"
+        return 1
+      fi
       while IFS= read -r snippet; do
         if [[ "$snippet_pattern" != *"$snippet"* ]]; then
           printf '%s snippet not found near cited line\n' "$citation"
