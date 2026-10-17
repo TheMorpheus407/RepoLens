@@ -33,7 +33,7 @@ initialize_counts() {
   # shellcheck source=/dev/null
   source <(awk '/^GLOBAL_ISSUES_CREATED=0$/ {copy=1} copy && /^if \[\[ "\$MODE" == branch-review/ {exit} copy {print}' "$REPO/repolens.sh")
 }
-for scenario in ${1:-cap ordinary partial publication admission reuse-below reuse-at reuse-above severity partial-overlap partial-overlap-link parallel-overlap parallel-overlap-link}; do
+for scenario in ${1:-cap ordinary partial publication admission reuse-below reuse-at reuse-above severity partial-overlap partial-overlap-link parallel-overlap parallel-overlap-link parallel-overlap-tmp-inside parallel-overlap-link-tmp-inside parallel-overlap-tmp-link parallel-overlap-raw-tmp-inside}; do
   (
     LOG_BASE="$FIXTURE/$scenario/run" OUTPUT_DIR="$FIXTURE/$scenario/output"
     PROJECT_PATH="$FIXTURE/project" SUMMARY_FILE="$LOG_BASE/summary.json"
@@ -48,14 +48,27 @@ for scenario in ${1:-cap ordinary partial publication admission reuse-below reus
     printf '%s\n' '{"lens_ids":["generic/probe|deeper|Probe||"]}' > "$LOG_BASE/rounds/round-1/metadata.json"
     printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\n---\n## hypothesis\nSaved finding\n## evidence\nSaved evidence\n' > "$raw"
     case "$scenario" in
-      parallel-overlap|parallel-overlap-link)
+      parallel-overlap*)
         MAX_ISSUES='' PARALLEL=true OUTPUT_DIR="$FIXTURE/$scenario"
         TMPDIR="$FIXTURE/temporary plans"
         export TMPDIR
         mkdir -p "$TMPDIR"
-        if [[ "$scenario" == parallel-overlap-link ]]; then
-          ln -s "$OUTPUT_DIR" "$FIXTURE/output-alias"
-          OUTPUT_DIR="$FIXTURE/output-alias"
+        if [[ "$scenario" == *tmp-inside || "$scenario" == *tmp-link ]]; then
+          TMPDIR="$LOG_BASE/temporary plans"
+          if [[ "$scenario" == parallel-overlap-raw-tmp-inside ]]; then
+            OUTPUT_DIR="$FIXTURE/$scenario/output"
+            TMPDIR="$LOG_BASE/rounds/temporary plans"
+            mkdir -p "$OUTPUT_DIR"
+          fi
+          mkdir -p "$TMPDIR"
+          if [[ "$scenario" == *tmp-link ]]; then
+            ln -s "$TMPDIR" "$FIXTURE/$scenario-temporary-alias"
+            TMPDIR="$FIXTURE/$scenario-temporary-alias"
+          fi
+        fi
+        if [[ "$scenario" == parallel-overlap-link* ]]; then
+          ln -s "$OUTPUT_DIR" "$FIXTURE/$scenario-output-alias"
+          OUTPUT_DIR="$FIXTURE/$scenario-output-alias"
         fi
         # Model a peer using the same staging location. Force its cleanup at
         # the exact point GNU find visits it, without timing-dependent sleeps.
@@ -70,11 +83,12 @@ for scenario in ${1:-cap ordinary partial publication admission reuse-below reus
           printf '%s\n' "$created"
         }
         find() {
-          local peer
-          if [[ "$1" == -H && "$2" == "$OUTPUT_DIR" ]]; then
-            peer="$(cat "$FIXTURE/peer-path")" || return 1
-            if [[ "$peer" == "$FIXTURE/$scenario/"* ]]; then
-              peer="$OUTPUT_DIR/${peer#"$FIXTURE/$scenario/"}"
+          local peer physical_scan
+          if [[ "$1" == -H && ( "$2" == "$OUTPUT_DIR" || "$2" == "$LOG_BASE/rounds" ) ]]; then
+            peer="$(realpath -- "$(cat "$FIXTURE/peer-path")")" || return 1
+            physical_scan="$(realpath -- "$2")" || return 1
+            if [[ "$peer" == "$physical_scan/"* ]]; then
+              peer="$2/${peer#"$physical_scan/"}"
             fi
             # Removing a directory after enumeration but before descent must
             # still be an inventory error. Staging must avoid that inventory.
@@ -90,6 +104,10 @@ for scenario in ${1:-cap ordinary partial publication admission reuse-below reus
         rm -rf -- "$peer_path"
         unset -f mktemp find
         test "$rc" -eq 0
+        physical_stage="$(realpath -m -- "$stage_path")"
+        physical_output="$(realpath -- "$OUTPUT_DIR")"
+        [[ "$physical_stage" != "$physical_output/"* ]]
+        [[ "$physical_stage" != "$(realpath -- "$LOG_BASE/rounds")/"* ]]
         test ! -e "$stage_path"
         grep -Fxq generic/probe "$completed_lenses_file"
         test "$GLOBAL_ISSUES_CREATED" = 1

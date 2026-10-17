@@ -1994,19 +1994,31 @@ _round_digest_finding_segments() {
 # after all lens/round completion receipts have been written.
 _generic_local_findings() (
   local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count=0 count total physical_rounds physical_source ordinary_complete=0
-  local stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
+  local stage="" stage_root candidate physical_output="" source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
   local rounds_dir="${LOG_BASE:-}/rounds"
   mkdir -p "$LOG_BASE/final" || return 1
-  # Parallel reconcilers may scan an output root enclosing LOG_BASE. Keep
-  # disposable plans outside that tree so peer cleanup cannot break traversal.
-  stage="$(mktemp -d "${TMPDIR:-/tmp}/repolens-generic-plan.XXXXXX")" || return 1
+  # TMPDIR can itself be inside a scanned tree, including through a symlink.
+  # Select an outside location before allocation so peer cleanup cannot race
+  # either the ordinary inventory or the private round-source traversal.
+  physical_rounds="$(realpath -m -- "$rounds_dir")" || return 1
+  if [[ -n "$output_dir" ]]; then
+    physical_output="$(realpath -m -- "$output_dir")" || return 1
+  fi
+  for candidate in "${TMPDIR:-/tmp}" /tmp /var/tmp "${physical_output:-/}/.." "$physical_rounds/.."; do
+    stage_root="$(realpath -e -- "$candidate")" || continue
+    if [[ -n "$physical_output" && ( "$stage_root" == "$physical_output" || "$stage_root" == "${physical_output%/}/"* ) ]] \
+        || [[ "$stage_root" == "$physical_rounds" || "$stage_root" == "${physical_rounds%/}/"* ]]; then
+      continue
+    fi
+    stage="$(mktemp -d "$stage_root/repolens-generic-plan.XXXXXX")" && break
+  done
+  [[ -n "$stage" ]] || { echo 'Generic delivery: no staging directory outside inventories' >&2; return 1; }
   trap 'rm -rf -- "$stage"' EXIT
   # Recover ordinary usage from the deliverable inventory, including writes
   # interrupted before record_lens. Reuse registry ingestion and severity rules;
   # Generic raw evidence and projections never reserve ordinary capacity.
   if [[ -d "$output_dir" ]]; then
     build_findings_jsonl_from_local "$output_dir" "$stage/ordinary.jsonl" || return 1
-    physical_rounds="$(realpath -m -- "$rounds_dir")" || return 1
     jq -j 'select(.domain != "generic") | .markdown_path, "\u0000", (.severity // ""), "\u0000"' "$stage/ordinary.jsonl" > "$stage/ordinary-values" || return 1
     printf '\0' >> "$stage/ordinary-values" || return 1
     while IFS= read -r -d '' source; do
