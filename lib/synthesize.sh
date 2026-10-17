@@ -1115,10 +1115,16 @@ run_synthesizer() {
       return 1
     fi
   fi
+  # A returning parent signal handler may have cancelled during enumeration.
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
   # An unreadable/partial inventory cannot invalidate the saved publication.
   if [[ "${MODE:-${REPOLENS_MODE:-}}" != branch-review ]]; then
-    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
+    if ! rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"; then
+      echo "run_synthesizer: cannot retire saved synthesis results" >&2
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 1
+    fi
   fi
 
   # Zero findings require no model work. Write the canonical empty manifest so

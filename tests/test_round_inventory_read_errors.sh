@@ -41,7 +41,9 @@ run_agent() { : > "$LOG_BASE/unexpected-agent"; return 99; }
 find() {
   if [[ "${1:-}" == "$LOG_BASE/rounds" ]]; then
     : > "$LOG_BASE/inventory-read"
-    if [[ "$fault" == find-empty || "$fault" == find-partial ]]         || [[ "$fault" == permission && -r "$rawdir" ]]; then
+    [[ "$fault" != interrupted* ]] || kill -TERM "$$"
+    if [[ "$fault" == find-empty || "$fault" == find-partial || "$fault" == interrupted-error ]] \
+        || [[ "$fault" == permission && -r "$rawdir" ]]; then
       [[ "$fault" != find-partial ]] || command find "$@"
       printf 'injected incomplete inventory\n' >&2
       return 42
@@ -58,16 +60,30 @@ awk() {
   fi
   command awk "$@"
 }
+# Removal failures must stop before any agent can use saved output.
+rm() {
+  if [[ "$fault" == cleanup* && "${2:-}" == "$LOG_BASE/final/"* ]]; then
+    [[ "$fault" != cleanup-interrupted ]] || kill -TERM "$$"
+    printf 'injected saved-result cleanup failure\n' >&2
+    return 42
+  fi
+  command rm "$@"
+}
+trap 'REPOLENS_FINAL_STATE=interrupted; REPOLENS_INTERRUPT_EXIT_CODE=143' TERM
 # Compare bytes without retaining extra copies of generated metadata.
 same_bytes() { [[ -f "$1" && "$(sha256sum < "$1")" == "$2" ]]; }
 for phase in verifier synthesizer; do
-  for fault in permission find-empty find-partial counter; do
+  for fault in permission find-empty find-partial counter cleanup cleanup-interrupted interrupted interrupted-empty interrupted-error; do
+    REPOLENS_FINAL_STATE=finished
     LOG_BASE="$FIXTURE/$phase-$fault/run"
     rawdir="$LOG_BASE/rounds/round-1/lens-outputs"
     mkdir -p "$rawdir" "$LOG_BASE/final"
     printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\n---\n## hypothesis\nSaved finding\n' > "$rawdir/probe.md"
+    [[ "$fault" != interrupted-empty ]] || command rm "$rawdir/probe.md"
     printf '[{"finding_id":"saved","status":"VERIFIED","notes":"saved evidence"}]\n' > "$LOG_BASE/final/verification.json"
     printf '[{"cluster_id":"saved","title":"Saved finding"}]\n' > "$LOG_BASE/final/manifest.json"
+    printf '[{"type":"comment","issue_number":1,"body":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+    before_actions="$(sha256sum < "$LOG_BASE/final/cross-link-actions.preserved.json")"
     before_verification="$(sha256sum < "$LOG_BASE/final/verification.json")"
     before_manifest="$(sha256sum < "$LOG_BASE/final/manifest.json")"
     [[ "$fault" != permission ]] || chmod 000 "$rawdir"
@@ -77,10 +93,15 @@ for phase in verifier synthesizer; do
     check "$phase/$fault reports failure" test "$rc" -ne 0
     check "$phase/$fault preserves verification" same_bytes "$LOG_BASE/final/verification.json" "$before_verification"
     check "$phase/$fault preserves manifest" same_bytes "$LOG_BASE/final/manifest.json" "$before_manifest"
+    check "$phase/$fault preserves cross-link actions" same_bytes "$LOG_BASE/final/cross-link-actions.preserved.json" "$before_actions"
+    if [[ "$fault" == interrupted* || "$fault" == cleanup-interrupted ]]; then
+      check "$phase returns the interrupt code" test "$rc" -eq 143
+    fi
     check "$phase/$fault invokes no model" test ! -e "$LOG_BASE/unexpected-agent"
     check "$phase/$fault reaches inventory" test -e "$LOG_BASE/inventory-read"
   done
   # Truly empty, readable inventories still publish their canonical sentinel.
+  REPOLENS_FINAL_STATE=finished
   fault=none
   LOG_BASE="$FIXTURE/$phase-empty/run"
   rawdir="$LOG_BASE/rounds/round-1/lens-outputs"

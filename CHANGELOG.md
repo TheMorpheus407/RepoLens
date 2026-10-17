@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - Fail verification and synthesis on incomplete finding inventories, retaining saved results until successful enumeration and preserving legitimate empty-run behavior (repolens-r10-p4-1).
+  Stop before synthesis when verifier preparation fails with saved decisions, check saved-result cleanup, and retain synthesis output on interruption during enumeration.
 
 - Abort local registry rebuilding on private snapshot read failures, retaining the last complete publication while still skipping readable malformed frontmatter (repolens-r10-p3-1).
 

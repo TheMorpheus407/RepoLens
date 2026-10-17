@@ -2654,7 +2654,7 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
 fi
 # A failed marker write must not leave an old execution error on a successful retry.
 if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
-    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|custom-lens-materialization-failed|process-scope-cleanup-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
+    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|custom-lens-materialization-failed|process-scope-cleanup-failed|verifier-preparation-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
@@ -5339,19 +5339,28 @@ fi
 # --- Verifier (post-rounds, pre-synthesizer) ---
 # Re-reads every finding's cited code locations and emits
 # logs/<run-id>/final/verification.json so the synthesizer can skip WRONG
-# findings and downrank STALE ones. Verifier failures are non-fatal: a missing
-# verification.json simply means the synthesizer proceeds without filtering.
+# findings and downrank STALE ones. Agent/validation failures are non-fatal
+# after saved output is retired. Preparation failures stop before synthesis
+# so retained decisions cannot filter current findings.
 if [[ "$RUN_ROUNDS_RC" -eq 0 && "${NO_VERIFIER:-true}" != "true" && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
   log_info "Verifier: re-reading cited code locations for evidence accuracy"
   if run_verifier "$RUN_ID"; then
     log_info "Verifier: verification.json promoted"
-  elif [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
-    log_info "Verifier: interrupted"
-  elif [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
-    log_warn "Verifier: rate-limited — aborting before synthesis"
-    RUN_ROUNDS_RC=1
   else
-    log_warn "Verifier: failed — synthesizer will proceed without verification filtering"
+    verifier_rc=$?
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      log_info "Verifier: interrupted"
+    elif [[ -f "$LOG_BASE/.rate-limit-abort" ]]; then
+      log_warn "Verifier: rate-limited — aborting before synthesis"
+      RUN_ROUNDS_RC=1
+    elif [[ "$verifier_rc" -eq 7 || -e "$LOG_BASE/final/verification.json" ]]; then
+      log_warn "Verifier: preparation failed — saved results retained; repair access and resume before synthesis"
+      REPOLENS_FINAL_STATE="failed"
+      set_stop_reason "$SUMMARY_FILE" "verifier-preparation-failed"
+      RUN_ROUNDS_RC=1
+    else
+      log_warn "Verifier: failed — synthesizer will proceed without verification filtering"
+    fi
   fi
 fi
 
