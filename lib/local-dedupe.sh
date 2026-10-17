@@ -278,17 +278,25 @@ dedupe_local_markdown() {
     # 4b. Build the sorted also_reported_by: YAML list + annotate the canonical.
     # Keep empty values and filename bytes in JSON throughout; @tsv plus
     # whitespace-IFS read drops empty fields and leaves escaped paths behind.
-    # JSON-quoted scalars are also valid YAML. Ordinary safe relative paths keep
-    # their familiar plain representation; special filename bytes are quoted.
+    # Escape the extra Unicode controls/noncharacters YAML forbids, and Unicode
+    # line breaks that YAML readers may fold. Ordinary paths stay readable.
     if ! arb="$(jq -r --argjson idx "$contrib_idx_json" --arg root "${output_dir%/}/" '
+      def yaml_string:
+        @json | explode | map(
+          if (. >= 127 and . <= 159) or . == 8232 or . == 8233
+             or . == 65534 or . == 65535 then
+            . as $cp | "\\u" + ([4096, 256, 16, 1]
+              | map((($cp / . | floor) % 16) as $digit
+                  | "0123456789abcdef"[$digit:$digit+1]) | join(""))
+          else [.] | implode end) | join("");
       [ $idx[] as $k
         | { lens: (.[$k].lens // ""), domain: (.[$k].domain // ""), md: (.[$k].markdown_path // "") } ]
       | sort_by(.domain, .lens, .md)
       | "also_reported_by:", (.[]
-          | "  - lens: " + (.lens | @json)
-            + "\n    domain: " + (.domain | @json)
+          | "  - lens: " + (.lens | yaml_string)
+            + "\n    domain: " + (.domain | yaml_string)
             + "\n    markdown_path: " + (.md | ltrimstr($root)
-                | if test("^[A-Za-z0-9_./-]+$") then . else @json end))
+                | if test("^[A-Za-z0-9_./-]+$") then . else yaml_string end))
     ' "$manifest")"; then
       echo "dedupe_local_markdown: failed to serialize contributor provenance" >&2
       rm -rf "$tmpdir"

@@ -21,16 +21,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/lib/local-dedupe.sh"
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf -- "$TMPROOT"' EXIT
-for variant in flat backslash-root missing-domain missing-lens special-path newline-path; do
+for variant in flat backslash-root missing-domain missing-lens special-path newline-path unicode-control-path unicode-break-path unicode-path; do
   output="$TMPROOT/$variant"
   [[ "$variant" != backslash-root ]] || output="$output/with\\backslash"
   mkdir -p "$output"
   contributor='b.md'
   [[ "$variant" != special-path ]] || contributor=$'b back\\slash: [x]\t#?.md'
   [[ "$variant" != newline-path ]] || contributor=$'b\n\nx.md'
+  [[ "$variant" != unicode-control-path ]] || contributor=$'b\u007f\u0080\u009f\ufffe\uffff.md'
+  [[ "$variant" != unicode-break-path ]] || contributor=$'b\u0085\u2028\u2029.md'
+  [[ "$variant" != unicode-path ]] || contributor=$'b M\u00fcnchen \U0001f50d.md'
   lens='' domain=''
   case "$variant" in
-    backslash-root|special-path|newline-path) lens=auth; domain=security ;;
+    backslash-root|special-path|newline-path|unicode-*) lens=auth; domain=security ;;
     missing-domain) lens=auth ;;
     missing-lens) domain=security ;;
   esac
@@ -62,15 +65,18 @@ for case in sorted(root.glob('*-expected.json')):
     output=pathlib.Path(fixture['root']);doc=(output/'a.md').read_text()
     block=doc.split('also_reported_by:\n',1)[-1].split('\n---',1)[0]
     actual={};parse_ok=True
-    # Decode the generated scalar subset independently. JSON strings are valid
-    # quoted YAML scalars; plain paths/IDs remain readable for ordinary values.
-    for line in block.splitlines():
+    # Check the generated YAML subset independently: JSON quotes/escapes plus
+    # printable literals only, with no raw YAML line breaks inside scalars.
+    # json.loads alone would accept characters that YAML forbids or folds.
+    yaml_safe=not re.search(r"[\x7f-\x9f\u2028\u2029\ufffe\uffff]",block)
+    for line in block.split("\n"):
         m=re.fullmatch(r'  (?:- |  )(lens|domain|markdown_path): ?(.*)',line)
         if not m:parse_ok=False;continue
         key,value=m.groups()
         try:actual[key]=json.loads(value) if value.startswith('"') else value
         except ValueError:parse_ok=False
     checks={
+        'YAML scalars avoid forbidden literals and line folding':yaml_safe,
         'lossless optional fields and relative path':parse_ok and actual==fixture['expected'],
         'contributor path resolves to original file':bool(actual.get('markdown_path')) and not pathlib.Path(actual['markdown_path']).is_absolute() and (output/actual['markdown_path']).is_file(),
         'canonical remains a non-duplicate':not re.search(r'^status: duplicate$',doc,re.M),
@@ -83,3 +89,39 @@ for case in sorted(root.glob('*-expected.json')):
 print(f'Results: {passed} passed, {failed} failed')
 sys.exit(bool(failed))
 VERIFY
+
+# Fail only the provenance serialization, after real ingestion and grouping.
+# Exercise both a fresh canonical and one with an existing provenance block.
+for state in fresh annotated; do
+  (
+    output="$TMPROOT/failure-$state"
+    mkdir -p "$output" "$TMPROOT/scratch-$state"
+    if [[ "$state" == annotated ]]; then
+      cp -- "$TMPROOT/flat/"*.md "$output/"
+    else
+      for name in a b; do
+        printf -- '---\ntitle: Missing authorization permits unauthorized account deletion\nseverity: %s\n---\nEvidence: src/account.sh:10\n' "$([[ "$name" == a ]] && echo high || echo low)" > "$output/$name.md"
+      done
+    fi
+    cp -- "$output/a.md" "$TMPROOT/canonical-$state.before"
+    # shellcheck disable=SC2329 # Invoked indirectly by dedupe and its helpers.
+    jq() {
+      if [[ "$*" == *'also_reported_by:'* && "$*" == *'--arg root '* ]]; then
+        printf 'also_reported_by:\n  - lens: "partial"\n'
+        return 42
+      fi
+      command jq "$@"
+    }
+    if TMPDIR="$TMPROOT/scratch-$state" dedupe_local_markdown "$output" > "$TMPROOT/failure-$state.log" 2>&1; then
+      echo "FAIL: $state: serialization failure was reported as success" >&2
+      exit 1
+    fi
+    grep -q 'failed to serialize contributor provenance' "$TMPROOT/failure-$state.log"
+    cmp -- "$TMPROOT/canonical-$state.before" "$output/a.md"
+    [[ -z "$(find "$TMPROOT/scratch-$state" -mindepth 1 -print -quit)" ]]
+    unset -f jq
+    dedupe_local_markdown "$output"
+    grep -q '^also_reported_by:' "$output/a.md"
+    echo "PASS: $state: serialization failure returns nonzero, preserves canonical, cleans scratch; retry succeeds"
+  )
+done
