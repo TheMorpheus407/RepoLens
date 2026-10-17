@@ -67,7 +67,9 @@ for role in canonical duplicate; do
   [[ "$role" == canonical ]] || { damage_target="$duplicate"; other="$canonical"; }
   # Leave no final newline so an attempted reserialization is detected too.
   printf -- '---\ntitle: Concurrent edit\nseverity: high\nEvidence: preserve my edit' > "$FIXTURE/expected"
-  dedupe_local_markdown "$output" > "$FIXTURE/dedupe.log" 2>&1
+  rc=0
+  dedupe_local_markdown "$output" > "$FIXTURE/dedupe.log" 2>&1 || rc=$?
+  check "$role dedupe remains best-effort" test "$rc" -eq 0
   check "$role write rejects the incomplete input" test "$(cat "$FIXTURE/mark-status")" -ne 0
   check "$role concurrent edit survives dedupe" cmp -s "$FIXTURE/expected" "$damage_target"
   check "$role write failure is reported" grep -q 'failed to' "$FIXTURE/dedupe.log"
