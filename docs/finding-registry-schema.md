@@ -66,8 +66,12 @@ For Generic investigators with `bugreport --local --output`, finalization conver
 private multi-finding evidence to one ordinary Markdown file per segment in the
 requested output. Each projection records `source_finding_path`,
 `source_finding_segment` and `generic_source_id`; its `lens` comes from `lens_id`
-and its title comes from a supplied title or the hypothesis. The registry uses
-that source/segment identity alongside title/domain/lens, preserving distinct
+and its title comes from a supplied title or the hypothesis. Projection headers
+and retained source metadata share a root mapping at column zero. Uniform source
+root indentation is removed while nested provenance keeps its relative indentation;
+the source evidence remains unchanged. Projected bodies retain their content, with
+a final newline added by the segment parser when the source lacks one. The registry
+uses that source/segment identity alongside title/domain/lens, preserving distinct
 records when titles match. Private evidence, digests and verifier IDs are unchanged.
 Only findings with valid severity meeting `--min-severity` and a round-dispatched
 Generic identity are delivered. Round layout metadata, saved dispatch and completion
