@@ -1137,7 +1137,7 @@ _filing_cross_link_enact() {
 #        markers and counted in the aggregate output).
 #     1  on parent cancellation or infrastructure failure: invalid manifest,
 #        failed process-scope initialization/launch/cleanup, or a missing
-#        callback outcome, or failed cross-link saved-receipt quarantine.
+#        callback outcome, or failed saved-receipt quarantine.
 #
 #   Aggregate output on stdout:
 #     Filed: X, Verification-failed: Y, Skipped-existing: Z
@@ -1251,7 +1251,13 @@ dispatch_filing_batch() {
       if (( reconcile_rc == 2 )); then admission_rc=1; break; fi
       if (( reconcile_rc != 0 )); then
         _filing_cancelled && break
-        _filing_fail "$filed_dir" "$cid" 'success marker could not be reconciled'
+        if ! _filing_fail "$filed_dir" "$cid" 'success marker could not be reconciled'; then
+          # A retained receipt is pending reconciliation, not verified success.
+          # Stop before callbacks/cross-links and release queued reservations.
+          echo "dispatch_filing_batch: saved receipt quarantine failed for $cid" >&2
+          admission_rc=1
+          break
+        fi
       fi
     fi
     _filing_cancelled && break

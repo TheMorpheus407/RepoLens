@@ -63,7 +63,7 @@ case_io() (
     # Both the governor's quarantine and the dispatcher's fallback move fail.
     dispatch_rc=0
     dispatch_filing_batch probe > "$LOG_BASE/first-dispatch" || dispatch_rc=$?
-    [[ "$dispatch_rc" == 0 ]]
+    [[ "$dispatch_rc" == 1 ]]
   elif [[ "$mode" == rollback ]]; then
     # Recount has no governor and this historical success has no attempt marker.
     rc=0
@@ -79,7 +79,7 @@ case_io() (
       "$(test -f "$prefix.url" && echo yes || echo no)" \
       "$(test -e "$prefix.unverified-url" && echo yes || echo no)" \
       "$(test -e "$prefix.governor" && echo yes || echo no)"
-    [[ -f "$prefix.url" && ! -e "$prefix.unverified-url" && ! -e "$prefix.governor" ]]
+    [[ "$dispatch_rc" == 1 && -f "$prefix.url" && ! -e "$prefix.unverified-url" && ! -e "$prefix.governor" ]]
     rmdir "$prefix.attempted"
   fi
 
