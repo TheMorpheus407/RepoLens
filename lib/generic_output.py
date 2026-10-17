@@ -88,7 +88,9 @@ def publish(plan, output, receipt, run_id):
                 raise ValueError(f"Generic delivery would overwrite an unowned file: {path}")
             lines = path.read_text().splitlines()
             frontmatter = lines[1:lines.index("---", 1)] if lines and lines[0] == "---" and "---" in lines[1:] else []
-            markers = [line for line in frontmatter if re.match(r"^\s*generic_source_id\s*:", line)]
+            # Managed projections always emit this ownership key at column zero.
+            # Nested provenance markers cannot alter ownership on retry.
+            markers = [line for line in frontmatter if re.match(r"^generic_source_id\s*:", line)]
             if markers != [f"generic_source_id: {old[name]}"]:
                 raise ValueError(f"Generic delivery ownership changed: {path}")
 

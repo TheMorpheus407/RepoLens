@@ -47,6 +47,7 @@ root_cause_category:
 suspect_files:
   - src/right.sh:1'
 provenance='provenance:
+  generic_source_id: nested-provenance-marker
   title: Antecedent low finding
   domain: custom
   lens_id: decoy
@@ -75,6 +76,7 @@ scalar_is title ''
 scalar_is domain ''
 scalar_is lens_id ''
 scalar_is severity ''
+scalar_is generic_source_id ''
 # Valid indentless lists still belong to their root keys.
 FM='provenance:
   suspect_files:
@@ -106,5 +108,6 @@ check build_findings_jsonl_from_local "$OUTPUT_DIR" "$TMP/after.jsonl"
 check jq -se 'length==1 and .[0].title=="Actual high finding" and .[0].severity=="high" and .[0].domain=="generic" and .[0].lens=="probe"' "$TMP/after.jsonl"
 check jq -se --slurpfile old "$TMP/before.jsonl" 'length==1 and .[0].id==$old[0].id and .[0].markdown_path==$old[0].markdown_path' "$TMP/after.jsonl"
 check test "$(find "$OUTPUT_DIR" -type f -name '*.md' | wc -l)" -eq 1
+check export_generic_local_findings "$OUTPUT_DIR"
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
