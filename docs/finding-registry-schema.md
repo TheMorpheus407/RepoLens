@@ -17,9 +17,9 @@ It is built from the existing finding outputs; it does not replace them.
   and the `validate_manifest` schema block). `manifest.json` is the upstream
   source; the registry builder reads it and writes one normalized record per
   finding.
-- **`--local` multi-round runs with default output** use the synthesized
-  manifest alone when it exists. Raw Markdown cannot reintroduce findings
-  excluded by verification or synthesis. Manifest ingestion preserves duplicate
+- **`--local` multi-round bugreport runs with default output** use the synthesized
+  manifest alone after successful synthesis in the current attempt. Raw Markdown
+  cannot reintroduce findings excluded by verification or synthesis. Manifest ingestion preserves duplicate
   status and `also_reported_by` provenance, and links `markdown_path` to the
   absolute path of the first existing file in `source_finding_paths` without
   reading source contents. Relative contributor Markdown links are also made
@@ -71,8 +71,13 @@ saved evidence without rerunning completed investigations.
 An explicit `--output` uses a user-selected shared Markdown directory, which may
 overlap the round-only verifier/synthesizer inventory. It retains direct Markdown
 indexing, even when round synthesis writes an empty manifest; these findings have
-not been checked by that cross-round verifier. Without a manifest, default local output also
-uses direct Markdown indexing.
+not been checked by that cross-round verifier. Default local multi-round bugreport
+finalization preserves the previous registry and reports if rounds, verifier
+preparation or required synthesis fails, including when an older manifest remains.
+It also preserves them when no required manifest exists. Fresh failed runs leave
+these reports unpublished. A successful empty synthesis rebuilds the empty index
+and removes stale action reports. Other default local modes retain direct
+Markdown indexing when no manifest exists.
 
 The registry collapses identical IDs to one record, preferring a non-duplicate
 record over a marked duplicate while preserving the ID's first position.

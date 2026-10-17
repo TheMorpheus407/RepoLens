@@ -5539,6 +5539,14 @@ finalize_summary "$SUMMARY_FILE"
 # --- Local-mode deterministic dedupe (non-fatal) ---
 _local_delivery_ready=true
 _local_generic_raw_root=""
+# Default multi-round output is raw evidence until synthesis accepts it. A
+# failed attempt or missing required manifest must preserve prior reports,
+# never consume saved synthesis or raw findings verification may have rejected.
+if $LOCAL_MODE && ! ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport && "${ROUNDS:-1}" -gt 1 ]] \
+    && { [[ "${RUN_ROUNDS_RC:-0}" -ne 0 ]] || [[ ! -f "$LOG_BASE/final/manifest.json" ]]; }; then
+  _local_delivery_ready=false
+  log_warn "Local reports: required synthesis unavailable; preserving previous registry/reports"
+fi
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport ]]; then
   if [[ -d "$LOG_BASE/rounds" ]]; then
