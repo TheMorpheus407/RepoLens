@@ -1832,6 +1832,9 @@ _round_digest_audit_domains() {
   ' "$domains_file"
 }
 
+# Print exact domain/lens trust keys from a registry JSON path ($1).
+# Supports string lens entries and objects with an id; returns nonzero when
+# the registry is missing or jq cannot read/parse it.
 _round_digest_registered_lenses() {
   local domains_file="$1"
 
@@ -1839,31 +1842,10 @@ _round_digest_registered_lenses() {
     return 1
   fi
 
-  awk '
-    {
-      line = $0
-      if (!collecting) {
-        if (line !~ /"lenses"[[:space:]]*:/) {
-          next
-        }
-        collecting = 1
-        sub(/^.*"lenses"[[:space:]]*:[[:space:]]*/, "", line)
-      }
-
-      scan = line
-      while (match(scan, /"[^"]+"/)) {
-        value = substr(scan, RSTART + 1, RLENGTH - 2)
-        if (value != "") {
-          print value
-        }
-        scan = substr(scan, RSTART + RLENGTH)
-      }
-
-      if (line ~ /\]/) {
-        collecting = 0
-      }
-    }
-  ' "$domains_file"
+  jq -r '.domains[] | .id as $domain | .lenses[]
+    | (if type == "object" then .id else . end)
+    | select(type == "string" and length > 0)
+    | $domain + "/" + .' "$domains_file"
 }
 
 # Return 1 for readable malformed frontmatter, 2 for a failed source read.
@@ -2362,6 +2344,12 @@ _round_digest_rank_suspect_files() {
   done | LC_ALL=C sort -t "$(printf '\t')" -k1,1nr -k2,2 | head -n "$limit"
 }
 
+# Build <round_dir>/digest.md from finding Markdown under lens-outputs/.
+# Usage: build_round_digest <round_dir> [dispatched domain/lens[|attributes] ...]
+# Static findings require a registered domain/lens pair; Generic/Custom findings
+# require a matching dispatch argument. Malformed/untrusted findings are skipped.
+# Returns 2 for a missing round directory argument, 1 for publication failure,
+# and 0 on success (including an empty digest).
 build_round_digest() {
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
   local dispatched_entry
@@ -2404,7 +2392,8 @@ build_round_digest() {
     [[ -n "$registered_lens" ]] || continue
     _round_digest_registered_lens_set["$registered_lens"]=1
   done < <(_round_digest_registered_lenses "$domains_file" || true)
-  # Generated investigators are absent from the static registry. Trust only
+  # Static trust binds the domain and lens together. Generated investigators
+  # are absent from the static registry. Trust only
   # Generic/Custom IDs supplied by this round's driver, never IDs claimed by a file.
   for dispatched_entry in "${@:2}"; do
     dispatched_entry="${dispatched_entry%%|*}"
@@ -2469,7 +2458,7 @@ build_round_digest() {
         _round_digest_warn "Skipping malformed lens output $(basename "$file"): required frontmatter keys severity, domain, and lens_id or lens are required"
         continue
       fi
-      if [[ -z "${_round_digest_registered_lens_set[$lens]:-}" \
+      if [[ -z "${_round_digest_registered_lens_set[$domain/$lens]:-}" \
           && -z "${_round_digest_dispatched_generated_set[$domain/$lens]:-}" ]]; then
         _round_digest_warn "Skipping untrusted lens output $(basename "$file"): lens id is not registered"
         continue

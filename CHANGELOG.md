@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Bind static round-digest trust to registered domain/lens pairs, requiring explicit dispatch for Generic/Custom investigators with colliding static names (repolens-r11-p4-4).
+
 - Reject directory and directory-symlink destinations in standalone local registry building, preserving the target and cleaning staging files. Keep standalone library imports working after a caller changes directories (repolens-r11-p3-1).
 
 - Retire saved verification decisions before synthesis when resuming with `--no-verifier`, and stop safely if cleanup fails (repolens-r11-p5-2).

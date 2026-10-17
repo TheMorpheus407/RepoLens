@@ -815,6 +815,34 @@ warnings="$(printf '%s\n' "${LOG_WARN_MESSAGES[@]:-}")"
 assert_not_contains "mixed delimiter file does not warn as malformed" "001-mixed.md" "$warnings"
 
 echo ""
+echo "Test: static trust binds both domain and lens; generated collisions require dispatch"
+LOG_WARN_MESSAGES=()
+round_dir="$(make_round_dir "domain-bound-trust")"
+lens_dir="$round_dir/lens-outputs"
+for trust_domain in security generic custom testing; do
+  write_lens_id_finding "$lens_dir/$trust_domain.md" HIGH "$trust_domain" injection 0.9 \
+    src/probe.rb:1 src/probe.rb:2 "DOMAIN_TRUST_$trust_domain"
+done
+build_round_digest "$round_dir" generic/deeper-check
+assert_eq "unrelated generated dispatch builds successfully" 0 "$?"
+digest_content="$(read_if_exists "$round_dir/digest.md")"
+assert_contains "registered security/injection remains trusted without dispatch" DOMAIN_TRUST_security "$digest_content"
+for trust_domain in generic custom testing; do
+  assert_not_contains "static name cannot authorize $trust_domain/injection" "DOMAIN_TRUST_$trust_domain" "$digest_content"
+done
+build_round_digest "$round_dir" generic/injection custom/injection
+assert_eq "explicitly dispatched colliding generated names build successfully" 0 "$?"
+digest_content="$(read_if_exists "$round_dir/digest.md")"
+for trust_domain in generic custom; do
+  assert_contains "explicit dispatch authorizes $trust_domain/injection" "DOMAIN_TRUST_$trust_domain" "$digest_content"
+done
+assert_not_contains "generated dispatch cannot authorize testing/injection" DOMAIN_TRUST_testing "$digest_content"
+# Registry entries use domain/lens pairs for both supported lens representations.
+trust_registry="$TMPDIR/trust-registry.json"
+printf '%s\n' '{"domains":[{"id":"security","lenses":["injection",{"id":"authorization"}]}]}' > "$trust_registry"
+assert_eq "registry extraction returns exact pairs for strings and objects" \
+  $'security/injection\nsecurity/authorization' "$(_round_digest_registered_lenses "$trust_registry")"
+
 echo "Test 12: oversized digest output is semantically capped before the hard line cap"
 LOG_WARN_MESSAGES=()
 truncation_repo="$TMPDIR/truncation-repo"
