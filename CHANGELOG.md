@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Read Generic delivery and round-digest metadata only from the root frontmatter mapping, so nested provenance cannot lower severity, override trusted lens identity, or remove an existing high-priority projection on resume (repolens-r12-p4-2).
+- Read Generic delivery and round-digest metadata only from the root frontmatter mapping, so nested provenance cannot lower severity, override trusted lens identity, or remove an existing high-priority projection on resume. Nested ownership markers no longer block delivery retries (repolens-r12-p4-2).
 
 - Promote certified handoffs and private parser outputs to their exact paths, refusing directory races instead of silently placing dispatch files inside directories and falling back to old investigations (repolens-r12-p3-2).
 

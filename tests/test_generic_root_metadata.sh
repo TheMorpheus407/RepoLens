@@ -23,14 +23,16 @@ source "$ROOT/lib/ledger.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
 PASS=0 FAIL=0
+# Count failures without stopping the remaining behavioural assertions.
 check() { if "$@"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); printf 'FAIL: %s\n' "$*" >&2; fi; }
-# Capture failure explicitly so all behavioural assertions reach the summary.
+# Check both parser status and the dequoted first value.
 scalar_is() {
   local value rc=0
   value="$(printf '%s\n' "$FM" | _round_digest_frontmatter_scalar "$1")" || rc=$?
   check test "$rc" -eq 0
   check test "$value" = "$2"
 }
+# Check parser status and the complete ordered list, including empty results.
 values_are() {
   local value rc=0
   value="$(printf '%s\n' "$FM" | _round_digest_frontmatter_values "$1")" || rc=$?
@@ -41,6 +43,8 @@ canonical='title: Actual high finding
 domain: generic
 lens_id: probe
 severity: high
+confidence: high
+round: 1
 root_cause_category:
   - race
   - retry
@@ -52,6 +56,8 @@ provenance='provenance:
   domain: custom
   lens_id: decoy
   severity: low
+  confidence: low
+  round: 99
   root_cause_category:
     - wrong
   suspect_files:
@@ -66,6 +72,8 @@ for placement in before after; do
     scalar_is domain generic
     scalar_is lens_id probe
     scalar_is severity high
+    scalar_is confidence high
+    scalar_is round 1
     values_are root_cause_category $'race\nretry'
     values_are suspect_files src/right.sh:1
   done
@@ -77,6 +85,11 @@ scalar_is domain ''
 scalar_is lens_id ''
 scalar_is severity ''
 scalar_is generic_source_id ''
+values_are root_cause_category ''
+values_are suspect_files ''
+# The legacy lens alias is selected from the root mapping too.
+FM=$'provenance:\n  lens: decoy\nlens: probe'
+scalar_is lens probe
 # Valid indentless lists still belong to their root keys.
 FM='provenance:
   suspect_files:
@@ -102,7 +115,13 @@ check init_summary "$SUMMARY_FILE" probe "$TMP" bugreport mock '' '' local "$OUT
 check export_generic_local_findings "$OUTPUT_DIR"
 check build_findings_jsonl_from_local "$OUTPUT_DIR" "$TMP/before.jsonl"
 check jq -se 'length==1 and .[0].severity=="high"' "$TMP/before.jsonl"
+check build_round_digest "$LOG_BASE/rounds/round-1" generic/probe
+cp "$LOG_BASE/rounds/round-1/digest.md" "$TMP/before-digest.md"
+check grep -Fq 'high/high `generic/probe` category=race files=`src/right.sh:1`' "$TMP/before-digest.md"
 printf -- '---\n%s\n%s\n---\n## hypothesis\nActual high finding\n## evidence\nsrc/right.sh:1\n' "$provenance" "$canonical" > "$source_path"
+check build_round_digest "$LOG_BASE/rounds/round-1" generic/probe
+# Complete digest equality also pins the finding ID, category counts and files.
+check cmp -s "$TMP/before-digest.md" "$LOG_BASE/rounds/round-1/digest.md"
 check export_generic_local_findings "$OUTPUT_DIR"
 check build_findings_jsonl_from_local "$OUTPUT_DIR" "$TMP/after.jsonl"
 check jq -se 'length==1 and .[0].title=="Actual high finding" and .[0].severity=="high" and .[0].domain=="generic" and .[0].lens=="probe"' "$TMP/after.jsonl"
