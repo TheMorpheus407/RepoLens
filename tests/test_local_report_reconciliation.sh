@@ -19,7 +19,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
-for lib in core rounds ledger synthesize verify local-dedupe human_review artifacts branch-scope; do
+for lib in core summary rounds ledger synthesize verify local-dedupe human_review artifacts branch-scope; do
   # shellcheck source=/dev/null
   source "$REPO/lib/$lib.sh"
 done
@@ -86,6 +86,60 @@ case_local_verification() (
   jq -se 'length == 1 and .[0].title == "Approved manifest finding"' "$LOG_BASE/final/findings.jsonl" >/dev/null
   grep -q 'Approved manifest finding' "$LOG_BASE/final/TODO.md"
   if grep -q 'SQL injection\|Missing authorization' "$LOG_BASE/final/TODO.md"; then exit 1; fi
+)
+
+# A failed required synthesis must not publish raw, rejected findings or
+# erase the previous successful registry/reports during a retry.
+case_failed_synthesis() (
+  local response artifact before
+  for response in malformed agent-failure; do
+    for prior in fresh retained; do
+      (
+        LOG_BASE="$FIXTURE/failed-$response-$prior"
+        SUMMARY_FILE="$LOG_BASE/summary.json"
+        RUN_ID=probe MODE=bugreport ROUNDS=2 AGENT=mock LOCAL_MODE=true OUTPUT_DIR_SET=false
+        HUMAN_REVIEW=true REPOLENS_FINAL_STATE=finished RUN_ROUNDS_RC=0
+        PROJECT_PATH="$FIXTURE"
+        OUTPUT_DIR="$LOG_BASE/rounds/round-1/lens-outputs"
+        mkdir -p "$OUTPUT_DIR/security/injection" "$LOG_BASE/final"
+        printf '{}\n' > "$SUMMARY_FILE"
+        printf -- '---\ntitle: Rejected raw finding\nseverity: high\ndomain: security\nlens: injection\n---\nEvidence: src/probe.sh:1\n' \
+          > "$OUTPUT_DIR/security/injection/001-finding.md"
+        compose_prompt() { printf 'mock model prompt'; }
+        verifier_response() {
+          jq -cn --arg path "$OUTPUT_DIR/security/injection/001-finding.md" \
+            '[{finding_id:"rejected",source_finding_path:$path,status:"WRONG",notes:"Already checked."}]'
+        }
+        _VERIFIER_AGENT_CALLBACK=verifier_response
+        run_verifier "$RUN_ID"
+        if [[ "$prior" == retained ]]; then
+          for artifact in findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md HUMAN_REVIEW.md; do
+            printf 'Previous successful %s\n' "$artifact" > "$LOG_BASE/final/$artifact"
+          done
+          before="$(sha256sum "$LOG_BASE/final/"*.md "$LOG_BASE/final/findings."*)"
+        fi
+        run_agent() {
+          [[ "$response" != agent-failure ]] || return 1
+          printf 'Malformed response without an array\n'
+        }
+        # shellcheck source=/dev/null
+        source <(sed -n '/^# --- Synthesizer (post-rounds, post-verifier)/,/^# --- Finalize ---/p' "$REPO/repolens.sh")
+        test "$REPOLENS_FINAL_STATE" = failed
+        test "$RUN_ROUNDS_RC" -ne 0
+        test ! -e "$LOG_BASE/final/manifest.json"
+        jq -e '.[0].status == "WRONG"' "$LOG_BASE/final/verification.json" >/dev/null
+        optional_local_finalization
+        if [[ "$prior" == retained ]]; then
+          test "$(sha256sum "$LOG_BASE/final/"*.md "$LOG_BASE/final/findings."*)" = "$before"
+        else
+          test ! -e "$LOG_BASE/final/findings.jsonl"
+          test ! -e "$LOG_BASE/final/TODO.md"
+          test ! -e "$LOG_BASE/final/HUMAN_REVIEW.md"
+        fi
+        printf 'Failed synthesis preserves reports: %s %s\n' "$response" "$prior"
+      )
+    done
+  done
 )
 
 case_empty_resume() (
@@ -248,6 +302,7 @@ case_empty_preservation() (
 )
 
 case "${1:-all}" in
+  failed-synthesis) case_failed_synthesis ;;
   verification) case_local_verification ;;
   empty-resume) case_empty_resume ;;
   custom-output) case_custom_output ;;
@@ -258,6 +313,7 @@ case "${1:-all}" in
   manifest-links-project) case_manifest_metadata links-project ;;
   manifest-duplicates) case_manifest_metadata duplicates ;;
   all)
+    case_failed_synthesis
     case_local_verification
     case_empty_resume
     case_custom_output
