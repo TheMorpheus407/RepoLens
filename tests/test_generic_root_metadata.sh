@@ -118,10 +118,20 @@ check jq -se 'length==1 and .[0].severity=="high"' "$TMP/before.jsonl"
 check build_round_digest "$LOG_BASE/rounds/round-1" generic/probe
 cp "$LOG_BASE/rounds/round-1/digest.md" "$TMP/before-digest.md"
 check grep -Fq 'high/high `generic/probe` category=race files=`src/right.sh:1`' "$TMP/before-digest.md"
-printf -- '---\n%s\n%s\n---\n## hypothesis\nActual high finding\n## evidence\nsrc/right.sh:1\n' "$provenance" "$canonical" > "$source_path"
-check build_round_digest "$LOG_BASE/rounds/round-1" generic/probe
 # Complete digest equality also pins the finding ID, category counts and files.
-check cmp -s "$TMP/before-digest.md" "$LOG_BASE/rounds/round-1/digest.md"
+for placement in before after; do
+  for indent in 0 2 4; do
+    prefix="$(printf '%*s' "$indent" '')"
+    if [[ "$placement" == before ]]; then FM="$provenance"$'\n'"$canonical"
+    else FM="$canonical"$'\n'"$provenance"; fi
+    FM="$(printf '%s\n' "$FM" | sed "s/^/$prefix/")"
+    printf -- '---\n%s\n---\n## hypothesis\nActual high finding\n## evidence\nsrc/right.sh:1\n' "$FM" > "$source_path"
+    check build_round_digest "$LOG_BASE/rounds/round-1" generic/probe
+    check cmp -s "$TMP/before-digest.md" "$LOG_BASE/rounds/round-1/digest.md"
+  done
+done
+# Keep delivery on the zero-indented root; indented projection is separate scope.
+printf -- '---\n%s\n%s\n---\n## hypothesis\nActual high finding\n## evidence\nsrc/right.sh:1\n' "$provenance" "$canonical" > "$source_path"
 check export_generic_local_findings "$OUTPUT_DIR"
 check build_findings_jsonl_from_local "$OUTPUT_DIR" "$TMP/after.jsonl"
 check jq -se 'length==1 and .[0].title=="Actual high finding" and .[0].severity=="high" and .[0].domain=="generic" and .[0].lens=="probe"' "$TMP/after.jsonl"

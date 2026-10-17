@@ -2214,6 +2214,7 @@ _round_digest_frontmatter_values() {
   local key="$1"
 
   awk -v key="$key" '
+    # Emit one nonempty scalar or list item after trimming outer whitespace.
     function emit(value) {
       sub(/^[[:space:]]*/, "", value)
       sub(/[[:space:]]*$/, "", value)
