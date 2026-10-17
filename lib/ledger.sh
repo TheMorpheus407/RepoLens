@@ -404,22 +404,31 @@ _ledger_has_frontmatter() {
 }
 
 # _ledger_frontmatter_scalar <file> <key>
-#   Prints the raw (still-quoted) value of a scalar key found inside the leading
-#   `---` frontmatter block, or nothing when the key is absent. Reads ONLY the
-#   block (stops at the closing `---`), so a `key:`-looking line in the markdown
-#   body cannot be misparsed. Validity is checked separately by
-#   _ledger_has_frontmatter; this reader has no END block so its rule exits are
-#   authoritative (printing the value never gets clobbered by a guard).
+#   Prints a raw (still-quoted) scalar from the leading root mapping only.
+#   Determine its indentation across the complete frontmatter block so nested
+#   provenance cannot supply canonical fields, including before later root keys.
+#   Uniformly indented root mappings remain supported. Stop before the Markdown
+#   body; no END exit may mask an awk IO failure. Validity is checked separately
+#   by _ledger_has_frontmatter.
 _ledger_frontmatter_scalar() {
   local file="$1" key="$2"
   awk -v key="$key" '
     NR==1 && $0!="---" { exit 0 }
     NR==1 { next }
-    $0=="---" { exit 0 }
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*:" {
-      sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "")
-      print
-      exit 0
+    $0=="---" { if (found) print value; exit 0 }
+    /^[[:space:]]*[^#[:space:]-][^:]*:/ {
+      match($0, /^[[:space:]]*/)
+      indent=RLENGTH
+      if (!have_root || indent < root_indent) {
+        root_indent=indent
+        have_root=1
+        found=0
+      }
+      if (indent == root_indent && !found && $0 ~ "^[[:space:]]*" key "[[:space:]]*:") {
+        value=$0
+        sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "", value)
+        found=1
+      }
     }
   ' "$file"
 }

@@ -786,4 +786,74 @@ assert_eq 'relative source publishes the expected finding' 'Destination regressi
 assert_eq 'relative source leaves no staging files' '' \
   "$(find "$TMPDIR" -maxdepth 1 -name 'relative-registry.jsonl.tmp.*' -print)"
 
+echo "=== contributor metadata does not override canonical root fields ==="
+# Use the real dedupe writer: its nested provenance is valid frontmatter.
+# shellcheck source=lib/local-dedupe.sh
+source "$SCRIPT_DIR/lib/local-dedupe.sh"
+provenance_dir="$TMPDIR/root-provenance"
+mkdir -p "$provenance_dir/performance/algorithm" "$provenance_dir/security/authorization"
+canonical_path="$provenance_dir/performance/algorithm/a.md"
+cat > "$canonical_path" <<'EOF'
+---
+title: Repeated work for the same request
+severity: high
+---
+Evidence: src/account.sh:10
+EOF
+cat > "$provenance_dir/security/authorization/b.md" <<'EOF'
+---
+title: Repeated work for the same request
+severity: low
+domain: security
+lens: authorization
+---
+Evidence: src/account.sh:10
+EOF
+build_findings_jsonl_from_local "$provenance_dir" "$TMPDIR/root-before.jsonl"
+assert_success 'canonical registry builds before dedupe' "$?"
+canonical_before="$(jq -c 'select(.severity == "high") | [.domain,.lens,.type,.id,.status]' "$TMPDIR/root-before.jsonl")"
+dedupe_local_markdown "$provenance_dir"
+assert_success 'real dedupe writer adds contributor provenance' "$?"
+build_findings_jsonl_from_local "$provenance_dir" "$TMPDIR/root-after.jsonl"
+assert_success 'registry rebuilds after dedupe' "$?"
+assert_eq 'dedupe preserves canonical domain, lens, type, stable id and status' \
+  "$canonical_before" "$(jq -c 'select(.severity == "high") | [.domain,.lens,.type,.id,.status]' "$TMPDIR/root-after.jsonl")"
+assert_eq 'nested contributor domain is absent as a canonical scalar' '' \
+  "$(_ledger_frontmatter_scalar "$canonical_path" domain)"
+assert_eq 'registry retains contributor domain and lens' 'security/authorization' \
+  "$(jq -r 'select(.severity == "high") | .also_reported_by[] | .domain + "/" + .lens' "$TMPDIR/root-after.jsonl")"
+
+# Uniform indentation is a valid root mapping. Nested keys appearing earlier
+# must not win over later canonical keys, and body lines are never metadata.
+for root_indent in '' '  '; do
+  indented_path="$TMPDIR/indented-root.md"
+  printf '%s\n' '---' > "$indented_path"
+  while IFS= read -r metadata_line; do
+    printf '%s%s\n' "$root_indent" "$metadata_line" >> "$indented_path"
+  done <<'EOF'
+also_reported_by:
+  - lens: authorization
+    domain: security
+    title: Contributor title
+    severity: low
+    duplicate_of: nested-only.md
+title: Canonical title
+severity: high
+domain: performance
+lens: algorithm
+EOF
+  printf '%s\n' '---' 'duplicate_of: body-only.md' >> "$indented_path"
+  for root_field in title severity domain lens duplicate_of; do
+    case "$root_field" in
+      title) expected_field='Canonical title' ;;
+      severity) expected_field=high ;;
+      domain) expected_field=performance ;;
+      lens) expected_field=algorithm ;;
+      duplicate_of) expected_field='' ;;
+    esac
+    assert_eq "root field $root_field ignores nesting with ${#root_indent}-space indentation" \
+      "$expected_field" "$(_ledger_frontmatter_scalar "$indented_path" "$root_field")"
+  done
+done
+
 finish
