@@ -38,7 +38,16 @@ relative_link() {
 # Inspect Markdown provenance directly; registry ingestion reconstructs it.
 relative_contributor_link() {
   local target
-  target="$(_ledger_frontmatter_scalar "$1" markdown_path)" || return 1
+  # Inspect the writer's nested list independently of the root scalar reader.
+  target="$(awk '
+    NR == 1 { if ($0 != "---") exit; next }
+    $0 == "---" { exit }
+    /^also_reported_by:/ { in_contributors = 1; next }
+    in_contributors && /^[^[:space:]]/ { exit }
+    in_contributors && /^    markdown_path: / {
+      sub(/^    markdown_path: /, ""); print; exit
+    }
+  ' "$1")" || return 1
   [[ -n "$target" && "$target" != /* && "${2%/}/$target" -ef "$3" ]]
 }
 for variant in plain slash repeated-slash symlink-slash root; do

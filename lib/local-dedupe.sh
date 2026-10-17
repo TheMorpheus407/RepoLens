@@ -65,7 +65,8 @@ _local_dedupe_lib_dir() {
 #   Single awk pass that STRIPS the pass-owned content first, then re-adds it:
 #     - frontmatter: drops a pass-owned `status: duplicate`, any `duplicate_of:`,
 #       and the whole `also_reported_by:` block (key + its indented children),
-#       then inserts <fm_add> immediately before the closing `---`;
+#       then inserts <fm_add> at the existing root indentation immediately
+#       before the closing `---`. Nested names remain untouched;
 #     - body: drops everything from the `<!-- repolens-dedupe:begin -->` sentinel
 #       to EOF and trims trailing blank lines, then appends a fresh, blank-line-
 #       separated, sentinel-wrapped note carrying <note>.
@@ -90,6 +91,30 @@ _local_dedupe_mark_file() {
       seen_sentinel = 0  # past the body note sentinel (drop to EOF)
       nb = 0
     }
+    # Buffer frontmatter to determine root indentation before replacing any
+    # owned keys. A nested mapping may precede later canonical root fields.
+    function emit_frontmatter(    i, line, indent, text, count, additions) {
+      for (i = 1; i <= nf; i++) {
+        line = frontmatter[i]
+        match(line, /^[[:space:]]*/)
+        indent = RLENGTH
+        if (skip_arb) {
+          if (indent > root_indent || line ~ /^[[:space:]]*$/) continue
+          skip_arb = 0
+        }
+        text = substr(line, indent + 1)
+        if (indent == root_indent) {
+          if (text ~ /^also_reported_by:/) { skip_arb = 1; continue }
+          if (text ~ /^status:[[:space:]]*["'\'']?duplicate/) continue
+          if (text ~ /^duplicate_of:/) continue
+        }
+        print line
+      }
+      if (length(fm_add) > 0) {
+        count = split(fm_add, additions, "\n")
+        for (i = 1; i <= count; i++) print root_prefix additions[i]
+      }
+    }
     {
       if (state == "pre") {
         # First line is the opening "---" (guaranteed valid frontmatter).
@@ -99,19 +124,20 @@ _local_dedupe_mark_file() {
       }
       if (state == "fm") {
         if ($0 == "---") {
-          if (length(fm_add) > 0) print fm_add
+          emit_frontmatter()
           print "---"
           state = "body"
           next
         }
-        if (skip_arb == 1) {
-          if ($0 ~ /^[[:space:]]/) { next }   # indented continuation -> drop
-          skip_arb = 0                         # de-indented -> process normally
+        frontmatter[++nf] = $0
+        if ($0 ~ /^[[:space:]]*[^#[:space:]-][^:]*:/) {
+          match($0, /^[[:space:]]*/)
+          if (!have_root || RLENGTH < root_indent) {
+            have_root = 1
+            root_indent = RLENGTH
+            root_prefix = substr($0, 1, root_indent)
+          }
         }
-        if ($0 ~ /^also_reported_by:/)               { skip_arb = 1; next }
-        if ($0 ~ /^status:[[:space:]]*["'\'']?duplicate/) { next }
-        if ($0 ~ /^duplicate_of:/)                   { next }
-        print $0
         next
       }
       # state == body: buffer up to the sentinel, drop the sentinel block + after.
