@@ -1049,6 +1049,48 @@ validate_manifest_against_verification() {
   return 0
 }
 
+# _synthesize_retire_saved_results <final_dir>
+#   Snapshot the manifest and saved actions before removing either. A failed
+#   removal or parent cancellation restores both; a failed restore retains its
+#   recovery directory and reports its path. Returns 0 only after retirement.
+_synthesize_retire_saved_results() {
+  local final_dir="$1" backup saved rc=0 restore_rc=0
+  backup="$(mktemp -d "$final_dir/.synthesis-cleanup.XXXXXX")" || return 1
+  for saved in manifest.json cross-link-actions.preserved.json; do
+    if [[ -e "$final_dir/$saved" || -L "$final_dir/$saved" ]]; then
+      # Refuse non-file output paths without traversing or removing them.
+      if [[ ! -f "$final_dir/$saved" && ! -L "$final_dir/$saved" ]] \
+          || ! cp -pP -- "$final_dir/$saved" "$backup/$saved"; then
+        echo "run_synthesizer: cannot snapshot saved result: $final_dir/$saved" >&2
+        rm -rf -- "$backup"
+        return 1
+      fi
+    fi
+  done
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    rm -rf -- "$backup"
+    return 1
+  fi
+  rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json" || rc=1
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || rc=1
+  if (( rc != 0 )); then
+    for saved in manifest.json cross-link-actions.preserved.json; do
+      if [[ -e "$backup/$saved" || -L "$backup/$saved" ]]; then
+        # Never let mv treat an unexpected directory as a destination container.
+        if [[ -d "$final_dir/$saved" ]] || ! mv -f -- "$backup/$saved" "$final_dir/$saved"; then
+          restore_rc=1
+        fi
+      fi
+    done
+    if (( restore_rc != 0 )); then
+      echo "run_synthesizer: restore failed; saved results retained under $backup" >&2
+      return 1
+    fi
+  fi
+  rm -rf -- "$backup" || echo "run_synthesizer: cannot remove recovery directory: $backup" >&2
+  return "$rc"
+}
+
 # run_synthesizer <run_id>
 #   Composes the synthesizer prompt, invokes the active agent exactly once,
 #   captures the JSON manifest from stdout, validates it, and atomically
@@ -1120,7 +1162,7 @@ run_synthesizer() {
 
   # An unreadable/partial inventory cannot invalidate the saved publication.
   if [[ "${MODE:-${REPOLENS_MODE:-}}" != branch-review ]]; then
-    if ! rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"; then
+    if ! _synthesize_retire_saved_results "$final_dir"; then
       echo "run_synthesizer: cannot retire saved synthesis results" >&2
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1

@@ -34,7 +34,11 @@ check() {
 }
 # A complete mock boundary: no model or forge can be called by these tests.
 compose_prompt() { printf 'mock prompt\n'; }
-run_agent() { : > "$LOG_BASE/unexpected-agent"; return 99; }
+run_agent() {
+  if [[ "$fault" == retry ]]; then printf '[]\n'; return 0; fi
+  : > "$LOG_BASE/unexpected-agent"
+  return 99
+}
 # Fail enumeration before output, after genuine partial output, or through
 # real directory permissions. Privileged readers receive the same error via
 # injection instead of silently losing coverage when they bypass mode bits.
@@ -62,12 +66,40 @@ awk() {
 }
 # Removal failures must stop before any agent can use saved output.
 rm() {
+  if [[ "$fault" == cleanup-success-interrupted && "${2:-}" == "$LOG_BASE/final/manifest.json" ]]; then
+    command rm "$@"
+    kill -TERM "$$"
+    return 0
+  fi
+  if [[ "$fault" == cleanup-partial* && "${2:-}" == "$LOG_BASE/final/manifest.json" ]]; then
+    command rm -f -- "$2"
+    [[ "$fault" != cleanup-partial-interrupted ]] || kill -TERM "$$"
+    printf 'injected second-target cleanup failure\n' >&2
+    return 42
+  fi
   if [[ "$fault" == cleanup* && "${2:-}" == "$LOG_BASE/final/"* ]]; then
+    [[ "$fault" != cleanup-directory ]] || { command rm "$@"; return $?; }
     [[ "$fault" != cleanup-interrupted ]] || kill -TERM "$$"
     printf 'injected saved-result cleanup failure\n' >&2
     return 42
   fi
   command rm "$@"
+}
+# Failure to snapshot the second result must precede either removal.
+cp() {
+  if [[ "$fault" == snapshot && "${3:-}" == "$LOG_BASE/final/cross-link-actions.preserved.json" ]]; then
+    printf 'injected saved-actions snapshot failure\n' >&2
+    return 42
+  fi
+  command cp "$@"
+}
+# If restoring an unlinked manifest fails, retain its recoverable snapshot.
+mv() {
+  if [[ "$fault" == cleanup-partial-restore-failed && "${4:-}" == "$LOG_BASE/final/manifest.json" ]]; then
+    printf 'injected manifest restore failure\n' >&2
+    return 42
+  fi
+  command mv "$@"
 }
 trap 'REPOLENS_FINAL_STATE=interrupted; REPOLENS_INTERRUPT_EXIT_CODE=143' TERM
 # Compare bytes without retaining extra copies of generated metadata.
@@ -111,6 +143,59 @@ for phase in verifier synthesizer; do
   [[ "$phase" != synthesizer ]] || output=manifest
   check "$phase accepts a genuine empty inventory" test "$(cat "$LOG_BASE/final/$output.json")" = '[]'
   check "$phase empty inventory invokes no model" test ! -e "$LOG_BASE/unexpected-agent"
+done
+# A multi-target rm can delete the manifest before failing on saved actions.
+# Exercise both a real directory error and an error after the first unlink.
+for fault in cleanup-directory cleanup-partial cleanup-partial-interrupted cleanup-success-interrupted cleanup-partial-restore-failed snapshot; do
+  REPOLENS_FINAL_STATE=finished
+  LOG_BASE="$FIXTURE/synthesizer-$fault/run"
+  rawdir="$LOG_BASE/rounds/round-1/lens-outputs"
+  mkdir -p "$rawdir" "$LOG_BASE/final"
+  printf 'Current finding\n' > "$rawdir/probe.md"
+  printf '[{"cluster_id":"saved","title":"Saved publication"}]\n' > "$LOG_BASE/final/manifest.json"
+  printf '[{"type":"comment","issue_number":1,"body":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+  before_manifest="$(sha256sum < "$LOG_BASE/final/manifest.json")"
+  before_actions="$(sha256sum < "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  if [[ "$fault" == cleanup-directory ]]; then
+    command rm "$LOG_BASE/final/cross-link-actions.preserved.json"
+    mkdir "$LOG_BASE/final/cross-link-actions.preserved.json"
+  fi
+  rc=0
+  run_synthesizer probe > "$LOG_BASE/phase.log" 2>&1 || rc=$?
+  check "$fault reports failure" test "$rc" -ne 0
+  if [[ "$fault" == cleanup-partial-restore-failed ]]; then
+    recovery="$(command find "$LOG_BASE/final" -name '.synthesis-cleanup.*' -type d -print)"
+    check "$fault retains a recovery directory" test -n "$recovery"
+    if [[ -n "$recovery" ]]; then
+      check "$fault retains the recoverable manifest" same_bytes "$recovery/manifest.json" "$before_manifest"
+      check "$fault reports the recovery path" command grep -Fq "saved results retained under $recovery" "$LOG_BASE/phase.log"
+      # Simulate access repair and restore the retained publication.
+      command mv "$recovery/manifest.json" "$LOG_BASE/final/manifest.json"
+      rmdir "$recovery"
+    fi
+  else
+    check "$fault restores the saved manifest" same_bytes "$LOG_BASE/final/manifest.json" "$before_manifest"
+  fi
+  if [[ "$fault" == cleanup-directory ]]; then
+    check "$fault retains the blocking directory" test -d "$LOG_BASE/final/cross-link-actions.preserved.json"
+    rmdir "$LOG_BASE/final/cross-link-actions.preserved.json"
+  else
+    check "$fault retains the saved actions" same_bytes "$LOG_BASE/final/cross-link-actions.preserved.json" "$before_actions"
+  fi
+  check "$fault invokes no model" test ! -e "$LOG_BASE/unexpected-agent"
+  if [[ "$fault" == cleanup-partial-interrupted || "$fault" == cleanup-success-interrupted ]]; then
+    check "$fault returns the interrupt code" test "$rc" -eq 143
+  fi
+  check "$fault removes temporary recovery copies" test -z "$(command find "$LOG_BASE/final" -name '.synthesis-cleanup.*' -print)"
+  # A repaired retry must retire old output and publish the fresh result.
+  REPOLENS_FINAL_STATE=finished
+  fault=retry
+  rc=0
+  run_synthesizer probe > "$LOG_BASE/retry.log" 2>&1 || rc=$?
+  check 'cleanup retry succeeds' test "$rc" -eq 0
+  check 'cleanup retry publishes a fresh manifest' test "$(cat "$LOG_BASE/final/manifest.json")" = '[]'
+  check 'cleanup retry retires saved actions' test ! -e "$LOG_BASE/final/cross-link-actions.preserved.json"
+  check 'cleanup retry removes temporary recovery copies' test -z "$(command find "$LOG_BASE/final" -name '.synthesis-cleanup.*' -print)"
 done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 test "$FAIL" -eq 0
