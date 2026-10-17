@@ -33,7 +33,7 @@ initialize_counts() {
   # shellcheck source=/dev/null
   source <(awk '/^GLOBAL_ISSUES_CREATED=0$/ {copy=1} copy && /^if \[\[ "\$MODE" == branch-review/ {exit} copy {print}' "$REPO/repolens.sh")
 }
-for scenario in ${1:-cap ordinary partial publication admission reuse-below reuse-at reuse-above severity}; do
+for scenario in ${1:-cap ordinary partial publication admission reuse-below reuse-at reuse-above severity partial-overlap partial-overlap-link}; do
   (
     LOG_BASE="$FIXTURE/$scenario/run" OUTPUT_DIR="$FIXTURE/$scenario/output"
     PROJECT_PATH="$FIXTURE/project" SUMMARY_FILE="$LOG_BASE/summary.json"
@@ -125,13 +125,23 @@ for scenario in ${1:-cap ordinary partial publication admission reuse-below reus
         optional_local_finalization
         jq -se 'length == 1 and .[0].domain == "security"' "$LOG_BASE/final/findings.jsonl" >/dev/null
         ;;
-      partial)
+      partial|partial-overlap|partial-overlap-link)
         printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\n---\n' > "$raw"
+        if [[ "$scenario" == partial-overlap* ]]; then
+          OUTPUT_DIR="$LOG_BASE"
+          sed -i '/domain: generic/d' "$raw"
+          if [[ "$scenario" == partial-overlap-link ]]; then
+            OUTPUT_DIR="$FIXTURE/private-alias"
+            ln -s "$LOG_BASE" "$OUTPUT_DIR"
+          fi
+        fi
         initialize_counts
         test "$GLOBAL_ISSUES_CREATED" = 0
         before="$(sha256sum "$raw")"
-        if export_generic_local_findings "$OUTPUT_DIR"; then
-          echo 'Incomplete draft was published' >&2; exit 1
+        if [[ "$scenario" == partial ]]; then
+          if export_generic_local_findings "$OUTPUT_DIR"; then
+            echo 'Incomplete draft was published' >&2; exit 1
+          fi
         fi
         test "$(sha256sum "$raw")" = "$before"
         run_lens generic/probe || exit 1

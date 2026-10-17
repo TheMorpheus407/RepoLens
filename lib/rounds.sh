@@ -1993,7 +1993,7 @@ _round_digest_finding_segments() {
 # remains canonical for digest/verification; publication can be retried even
 # after all lens/round completion receipts have been written.
 _generic_local_findings() (
-  local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count=0 count total
+  local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count=0 count total physical_rounds physical_source ordinary_complete=0
   local stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
   local rounds_dir="${LOG_BASE:-}/rounds"
   mkdir -p "$LOG_BASE/final" || return 1
@@ -2004,12 +2004,27 @@ _generic_local_findings() (
   # Generic raw evidence and projections never reserve ordinary capacity.
   if [[ -d "$output_dir" ]]; then
     build_findings_jsonl_from_local "$output_dir" "$stage/ordinary.jsonl" || return 1
-    jq -r 'select(.domain != "generic") | .severity // ""' "$stage/ordinary.jsonl" > "$stage/severities" || return 1
-    while IFS= read -r severity; do
+    physical_rounds="$(realpath -m -- "$rounds_dir")" || return 1
+    jq -j 'select(.domain != "generic") | .markdown_path, "\u0000", (.severity // ""), "\u0000"' "$stage/ordinary.jsonl" > "$stage/ordinary-values" || return 1
+    printf '\0' >> "$stage/ordinary-values" || return 1
+    while IFS= read -r -d '' source; do
+      if [[ -z "$source" ]]; then ordinary_complete=1; break; fi
+      IFS= read -r -d '' severity || return 1
+      # Flat and dispatch-nested round sources belong to Generic even when a
+      # partial draft has not written its domain yet. Ordinary lens files have
+      # at least domain/lens/file nesting below lens-outputs. Resolve symlink
+      # roots too, since explicit delivery may overlap the private inventory.
+      physical_source="$(realpath -- "$source")" || return 1
+      relative="${physical_source#"$physical_rounds/"}"
+      if [[ "$physical_source" == "$physical_rounds/"* \
+          && "$relative" =~ ^round-[1-9][0-9]*/lens-outputs/([^/]+/)?[^/]+\.md$ ]]; then
+        continue
+      fi
       if [[ -z "${REPOLENS_MIN_SEVERITY:-}" ]] || severity_meets_min "$severity" "$REPOLENS_MIN_SEVERITY"; then
         ordinary_count=$((ordinary_count + 1))
       fi
-    done < "$stage/severities" || return 1
+    done < "$stage/ordinary-values" || return 1
+    (( ordinary_complete )) || return 1
   fi
   if [[ -n "${MAX_ISSUES:-}" ]]; then
     [[ "$MAX_ISSUES" =~ ^[1-9][0-9]*$ ]] || return 1
