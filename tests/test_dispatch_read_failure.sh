@@ -118,8 +118,10 @@ check bash -c '
 printf 'LENS: injection\nGENERIC: role=broader focus="trace retries"\n' > "$TMP/readers"
 for reader in lens generic has; do
   check bash -c '
-    set -eu
+    set -euo pipefail
     source "$1/lib/rounds.sh"
+    set +o pipefail # Sourcing core.sh enables it; exercise the caller without it.
+    [[ ! -o pipefail ]]
     LENSES_DIR="$1/prompts/lenses" MODE=audit
     cat() { builtin printf "LENS: injection\nGENERIC: role=broader\n"; return 42; }
     rc=0
@@ -128,8 +130,10 @@ for reader in lens generic has; do
   ' _ "$ROOT" "$TMP/readers" "$reader" "$TMP/custom-lenses"
 done
 check bash -c '
-  set -eu
+  set -euo pipefail
   source "$1/lib/rounds.sh"
+  set +o pipefail # Sourcing core.sh enables it; exercise the caller without it.
+  [[ ! -o pipefail ]]
   cat() { builtin printf "CUSTOM: retry-check\n  Draft prompt:\n  Inspect retries.\n"; return 42; }
   rc=0
   result="$(_rounds_meta_dispatch_custom_entries "$2" "$3")" || rc=$?
