@@ -363,7 +363,9 @@ branch_scope_filter_directory() {
       filter_rc=1
       break
     fi
-    reason_tmp="$(mktemp "$dir/.branch-scope-reason.XXXXXX")" || return 1
+    # Stage beside the finding so exact-path replacement stays on its
+    # filesystem even when a nested directory is a separate mount.
+    reason_tmp="$(mktemp "${file%/*}/.branch-scope-reason.XXXXXX")" || return 1
     if ! printf '%s\n' "$reason" > "$reason_tmp" ||
         ! _branch_scope_replace_reason "$reason_tmp" "$file.out-of-scope.reason"; then
       rm -f -- "$reason_tmp"

@@ -108,7 +108,7 @@ done
 # Exercise portable publication and failures after staging, rather than only
 # destinations rejected before mktemp. No native BSD host is needed to model
 # its mv option contract; all ordinary moves still use the real executable.
-for fault in bsd-mv stage-write publish; do
+for fault in bsd-mv cross-device stage-write publish; do
   base="$TMPROOT/publication-$fault"
   mkdir -p "$base/real/nested dir"
   rejected="$base/real/nested dir/rejected.md"
@@ -132,6 +132,25 @@ for fault in bsd-mv stage-write publish; do
     command mv "$@"
   }
   python3() {
+    # Model a mount boundary at the nested finding directory. Execute the real
+    # publication helper, but make rename across that boundary report EXDEV.
+    if [[ "$fault" == cross-device && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
+      : > "$base/publication-attempted"
+      command python3 -c '
+import errno
+import os
+import sys
+replace = os.replace
+def mounted_replace(source, destination):
+    if os.path.dirname(source) != os.path.dirname(destination):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+    return replace(source, destination)
+os.replace = mounted_replace
+code = sys.argv.pop(1)
+exec(code)
+' "$2" "$3" "$4"
+      return $?
+    fi
     if [[ "$fault" == publish && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
       : > "$base/publication-attempted"
       return 1
@@ -152,10 +171,13 @@ for fault in bsd-mv stage-write publish; do
   rc=0
   branch_scope_filter_directory "$base/real" || rc=$?
   unset -f mv python3 printf
-  if [[ "$fault" == bsd-mv ]]; then
-    check 'BSD mv permits rejection publication' test "$rc" -eq 0
-    check 'BSD mv quarantines source' test -f "$rejected.out-of-scope"
-    check 'BSD mv publishes full reason' grep -Fxq 'out-of-scope citation: untouched.sh' "$rejected.out-of-scope.reason"
+  if [[ "$fault" == bsd-mv || "$fault" == cross-device ]]; then
+    if [[ "$fault" == cross-device ]]; then
+      check "cross-device reaches real publication helper" test -f "$base/publication-attempted"
+    fi
+    check "$fault permits rejection publication" test "$rc" -eq 0
+    check "$fault quarantines source" test -f "$rejected.out-of-scope"
+    check "$fault publishes full reason" grep -Fxq 'out-of-scope citation: untouched.sh' "$rejected.out-of-scope.reason"
   else
     marker="$base/write-attempted"
     [[ "$fault" != publish ]] || marker="$base/publication-attempted"
