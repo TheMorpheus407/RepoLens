@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve ordinary and cross-link success receipts when their quarantine marker is a directory or symlink, retaining the completed-POST guard and allowing saved receipt reattestation on resume instead of restoring a container as a receipt (repolens-r13-p3-2).
+
 - Quarantine branch-scope rejections to exact file destinations, refusing existing directories, symlinks and same-inode hard links so rejected findings cannot be recursively re-ingested or moved outside the selected tree; preserve sources for a repaired retry (repolens-r13-p3-1/p4-1/p6-1).
 
 - Preserve separate nonlocal bugreport finding files for attributed investigations of the same lens, so completed dispatches cannot overwrite each other (repolens-r13-p2-1). Pass the actual run log root to verification and synthesis so separate project checkouts consume the preserved findings. JSON-escape that root in verifier and synthesizer schema examples so backslashes, quotes and control characters preserve the same paths.

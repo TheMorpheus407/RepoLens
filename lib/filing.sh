@@ -521,6 +521,11 @@ _filing_fail() {
       rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
       return 1
     fi
+    # A quarantine marker is an exact file, never a container for the receipt.
+    if [[ -d "$filed_dir/$cluster_id.unverified-url" || -L "$filed_dir/$cluster_id.unverified-url" ]]; then
+      rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+      return 1
+    fi
     mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url" || move_rc=$?
     # The returning parent handler may accept cancellation while mv waits.
     # Restore a completed rename before leaving this receipt for resume.
@@ -553,6 +558,9 @@ _filing_cross_link_fail() {
     # Reserve the already completed POST before any marker move, including crashes.
     : > "${done_file%.done}.attempted" || return 1
     _filing_cancelled && return 1
+    if [[ -d "${done_file%.done}.unverified-done" || -L "${done_file%.done}.unverified-done" ]]; then
+      return 1
+    fi
     mv "$done_file" "${done_file%.done}.unverified-done" || move_rc=$?
     # A returning handler may run while mv waits for its child. Even a failed
     # command can have completed the rename before reporting interruption.
