@@ -340,6 +340,8 @@ compose_prompt() {
   local round_context_section=""
   local round_index="${prompt_vars[ROUND_INDEX]:-1}"
   local round_total="${prompt_vars[ROUND_TOTAL]:-1}"
+  local run_log_base="${prompt_vars[RUN_LOG_BASE]:-logs/${prompt_vars[RUN_ID]:-<run-id>}}"
+  prompt="${prompt//\{\{RUN_LOG_BASE\}\}/$run_log_base}"
   local bugreport_findings_file="${prompt_vars[BUGREPORT_FINDINGS_FILE]:-logs/<run-id>/rounds/round-$round_index/lens-outputs/<lens_id>.md}"
   prompt="${prompt//\{\{BUGREPORT_FINDINGS_FILE\}\}/$bugreport_findings_file}"
 

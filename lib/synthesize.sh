@@ -1208,7 +1208,14 @@ run_synthesizer() {
   local cross_link_mode="${CROSS_LINK_MODE:-off}"
 
   local vars
-  vars="RUN_ID=$run_id"
+  # Agents run from PROJECT_PATH; point them at the dispatcher's actual inventory.
+  # Escape the pipe-delimited template transport without changing path bytes.
+  local prompt_log_base
+  prompt_log_base="$(cd "$run_log_base" && pwd)" || return 1
+  prompt_log_base="${prompt_log_base//\\/\\\\}"
+  prompt_log_base="${prompt_log_base//|/\\|}"
+  vars="RUN_LOG_BASE=$prompt_log_base"
+  vars+="|RUN_ID=$run_id"
   vars+="|PROJECT_PATH=$project_path"
   vars+="|REPO_OWNER=$repo_owner"
   vars+="|REPO_NAME=$repo_name"
