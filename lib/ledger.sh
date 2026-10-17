@@ -543,7 +543,26 @@ build_findings_jsonl_from_local() {
     [[ "$status" == duplicate ]] || status=new
     duplicate_of=""
     if [[ "$status" == duplicate ]]; then
-      duplicate_of="$(_ledger_frontmatter_value "$snapshot" duplicate_of)" || { ingest_failed=1; break; }
+      raw_value="$(_ledger_frontmatter_scalar "$snapshot" duplicate_of)" || { ingest_failed=1; break; }
+      # The deduper JSON-quotes paths that YAML plain scalars cannot preserve.
+      # Decode before matching; malformed links restore eligibility below.
+      if [[ "$raw_value" == \"* ]]; then
+        if duplicate_of="$(jq -ner --arg value "$raw_value" '$value | fromjson?
+            | select(type == "string") | select(contains("\u0000") | not)
+            | . + "."' 2>/dev/null)"; then
+          # Keep decoded trailing LF bytes through command substitution; only
+          # jq's output terminator may be trimmed. Remove the appended sentinel.
+          duplicate_of="${duplicate_of%.}"
+        else
+          frontmatter_rc=$?
+          # Exit 4 is malformed JSON or no selected string. Other statuses are
+          # decoder failures and must retain the previously published registry.
+          if (( frontmatter_rc != 4 )); then ingest_failed=1; break; fi
+          duplicate_of=""
+        fi
+      else
+        duplicate_of="$(_ledger_trim_yaml_value "$raw_value")"
+      fi
     fi
     # Complexity (#385): optional 1..5 routing tier from the finding frontmatter.
     # The normalizer trims/de-quotes and range-checks; absent or out-of-range

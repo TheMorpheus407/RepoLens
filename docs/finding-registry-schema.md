@@ -39,7 +39,11 @@ It is built from the existing finding outputs; it does not replace them.
   edits or threshold changes), self-links, chains and cycles restore records to
   `new` in the registry. Markdown evidence remains unchanged. Only validated
   links reconstruct `also_reported_by` contributors on canonical records;
-  referenced paths are never opened.
+  referenced paths are never opened. Simple `duplicate_of` paths stay plain;
+  paths with quotes, whitespace, backslashes or line breaks use JSON-compatible
+  YAML strings, decoded before matching so filename bytes are preserved.
+  Trailing line feeds remain part of the decoded path; an unindexed target
+  such as `"a.md\n"` cannot validate a link to `a.md`.
 
 For Generic investigators with `bugreport --local --output`, finalization converts
 private multi-finding evidence to one ordinary Markdown file per segment in the
