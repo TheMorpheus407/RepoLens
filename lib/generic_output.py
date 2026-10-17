@@ -66,7 +66,7 @@ def publish(plan, output, receipt, run_id):
         if relative in desired:
             raise ValueError("duplicate Generic delivery segment")
         # Header and source metadata share a root mapping at column zero.
-        # Preserve nested indentation relative to that root and keep body bytes.
+        # Preserve nested indentation relative to that root and the parsed body.
         fm = row["frontmatter"]
         indents = re.findall(r"^([ \t]*)[^#\s-][^:\n]*:", fm, flags=re.M)
         root_indent = min((len(prefix) for prefix in indents), default=0)

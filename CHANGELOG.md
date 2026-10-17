@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Normalize Generic source frontmatter root indentation before adding projection headers, preserving high severity, explicit type and complexity through registry/CSV/report publication and retry while retaining nested provenance and body bytes (repolens-r12-p4-1, repolens-r12-p6-1).
+- Normalize Generic source frontmatter root indentation before adding projection headers, preserving high severity, explicit type and complexity through registry/CSV/report publication and retry while retaining nested provenance and body content (the segment parser adds a missing final newline; source evidence stays unchanged) (repolens-r12-p4-1, repolens-r12-p6-1).
 
 - Read Generic delivery and round-digest metadata only from the root frontmatter mapping, so nested provenance cannot lower severity, override trusted lens identity, or remove an existing high-priority projection on resume. Nested ownership markers no longer block delivery retries (repolens-r12-p4-2).
 

@@ -69,8 +69,9 @@ requested output. Each projection records `source_finding_path`,
 and its title comes from a supplied title or the hypothesis. Projection headers
 and retained source metadata share a root mapping at column zero. Uniform source
 root indentation is removed while nested provenance keeps its relative indentation;
-the source evidence and projected body bytes remain unchanged. The registry uses
-that source/segment identity alongside title/domain/lens, preserving distinct
+the source evidence remains unchanged. Projected bodies retain their content, with
+a final newline added by the segment parser when the source lacks one. The registry
+uses that source/segment identity alongside title/domain/lens, preserving distinct
 records when titles match. Private evidence, digests and verifier IDs are unchanged.
 Only findings with valid severity meeting `--min-severity` and a round-dispatched
 Generic identity are delivered. Round layout metadata, saved dispatch and completion

@@ -27,7 +27,7 @@ PASS=0 FAIL=0
 # Accumulate assertion failures; return the final suite status at the end.
 check() { if "$@"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); printf 'FAIL: %s\n' "$*" >&2; fi; }
 MODE=bugreport LOCAL_MODE=true ROUNDS=1 RUN_ID=probe REPOLENS_MIN_SEVERITY=high
-for scenario in plain indent2 indent4 comment-indent2 spaced-owned; do
+for scenario in plain indent2 indent4 comment-indent2 spaced-owned no-final-newline; do
   indent=0 key='title:'
   case "$scenario" in indent2|comment-indent2) indent=2;; indent4) indent=4;; spaced-owned) indent=2; key='title :';; esac
   prefix="$(printf '%*s' "$indent" '')"
@@ -37,6 +37,13 @@ for scenario in plain indent2 indent4 comment-indent2 spaced-owned; do
   mkdir -p "$source_dir" "$OUTPUT_DIR"
   printf '%s\n' '{"lens_ids":["generic/probe"]}' > "$LOG_BASE/rounds/round-1/metadata.json"
   printf '## hypothesis\nImportant high finding\n## evidence\nsrc/a.sh:1\ntitle: literal body text\n' > "$case_dir/body"
+  if [[ "$scenario" == no-final-newline ]]; then
+    printf '## hypothesis\nImportant high finding\n## evidence\nsrc/a.sh:1\ntitle: literal body text' > "$case_dir/body"
+  fi
+  cp "$case_dir/body" "$case_dir/expected-body"
+  if [[ "$scenario" == no-final-newline ]]; then
+    printf '\n' >> "$case_dir/expected-body"
+  fi
   {
     printf -- '---\n'
     [[ "$scenario" != comment-indent2 ]] || printf '# Preserve this root-level comment: unchanged\n'
@@ -66,8 +73,13 @@ for scenario in plain indent2 indent4 comment-indent2 spaced-owned; do
   check test -f "$projection"
   if [[ -f "$projection" ]]; then
     projection_hash="$(cksum < "$projection")"
-    awk 'BEGIN {fences=0} /^---$/ {fences++; next} fences>=2 {print}' "$projection" > "$case_dir/projected-body"
-    check cmp "$case_dir/body" "$case_dir/projected-body"
+    # Compare actual bytes: line-oriented extraction would hide a missing LF.
+    python3 - "$projection" "$case_dir/projected-body" <<'PYBODY'
+from pathlib import Path
+import sys
+Path(sys.argv[2]).write_bytes(Path(sys.argv[1]).read_bytes().split(b"\n---\n", 1)[1])
+PYBODY
+    check cmp "$case_dir/expected-body" "$case_dir/projected-body"
     check test "$(grep -Ec '^[[:space:]]*title[[:space:]]*:' "$projection")" -eq 3
     # One canonical title, one nested title, and one literal body line remain.
     check grep -Fxq '  title: Earlier finding' "$projection"
