@@ -1832,6 +1832,9 @@ _round_digest_audit_domains() {
   ' "$domains_file"
 }
 
+# Print exact domain/lens trust keys from a registry JSON path ($1).
+# Supports string lens entries and objects with an id; returns nonzero when
+# the registry is missing or jq cannot read/parse it.
 _round_digest_registered_lenses() {
   local domains_file="$1"
 
@@ -2341,6 +2344,12 @@ _round_digest_rank_suspect_files() {
   done | LC_ALL=C sort -t "$(printf '\t')" -k1,1nr -k2,2 | head -n "$limit"
 }
 
+# Build <round_dir>/digest.md from finding Markdown under lens-outputs/.
+# Usage: build_round_digest <round_dir> [dispatched domain/lens[|attributes] ...]
+# Static findings require a registered domain/lens pair; Generic/Custom findings
+# require a matching dispatch argument. Malformed/untrusted findings are skipped.
+# Returns 2 for a missing round directory argument, 1 for publication failure,
+# and 0 on success (including an empty digest).
 build_round_digest() {
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
   local dispatched_entry
