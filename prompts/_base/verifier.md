@@ -76,7 +76,7 @@ Each entry has exactly this shape:
   "lens_id": "<lens that produced the finding>",
   "domain": "<domain>",
   "round": <integer>,
-  "source_finding_path": "{{RUN_LOG_BASE}}/rounds/round-N/lens-outputs/<lens>.md"
+  "source_finding_path": "{{RUN_LOG_BASE_JSON}}/rounds/round-N/lens-outputs/<lens>.md"
 }
 ```
 

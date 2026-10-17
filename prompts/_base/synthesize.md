@@ -106,13 +106,13 @@ Emit a single valid JSON array with entries shaped exactly like this. Do not wra
     "domain": "string - the lens domain that surfaced this finding",
     "lens": "string - the lens id that surfaced this finding",
     "root_cause_category": "string - taxonomy term (e.g. 'race-condition', 'missing-validation', 'config-drift')",
-    "source_finding_paths": ["{{RUN_LOG_BASE}}/rounds/round-1/lens-outputs/<lens>.md", "..."],
+    "source_finding_paths": ["{{RUN_LOG_BASE_JSON}}/rounds/round-1/lens-outputs/<lens>.md", "..."],
     "dedup_against_existing": [
       { "issue_number": 142, "reason": "same suspect_files and overlapping severity" }
     ],
     "proposed_labels": ["bug", "<lens-label>"],
     "cross_link_actions": [
-      { "type": "comment", "issue_number": 142, "body": "Round 3 of run <run-id> reproduces this; see {{RUN_LOG_BASE}}/rounds/round-3/lens-outputs/<lens>.md" },
+      { "type": "comment", "issue_number": 142, "body": "Round 3 of run <run-id> reproduces this; see {{RUN_LOG_BASE_JSON}}/rounds/round-3/lens-outputs/<lens>.md" },
       { "type": "reopen-suggestion", "issue_number": 99, "body": "Closed #99 may need reopening - finding in round 2 matches the same root cause." }
     ],
     "granularity": "independent | cluster",

@@ -33,7 +33,7 @@ done
 FIXTURE="$(mktemp -d)"
 JOB="$FIXTURE"
 trap 'rm -rf -- "$FIXTURE"' EXIT
-LOG_BASE="$FIXTURE/tool logs|pipe\backslash/probe" RUN_ID=probe MODE=bugreport ROUNDS=2
+LOG_BASE="$FIXTURE/tool logs|pipe\backslash\"quote"$'\t'"/probe" RUN_ID=probe MODE=bugreport ROUNDS=2
 PROJECT_PATH="$FIXTURE/project" LOCAL_MODE=false OUTPUT_DIR_SET=false PARALLEL=false AGENT=mock
 OUTPUT_DIR='' CURRENT_ROUND_OUTPUT_DIR='' CURRENT_ROUND_INDEX=2 CURRENT_ROUND_TOTAL=2
 SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
@@ -80,6 +80,19 @@ pattern = re.search(r"^- Walk `([^`]+)`", prompt, re.M).group(1)
 root = Path(pattern.split("/round-*/lens-outputs/")[0])
 files = sorted(root.glob("round-*/lens-outputs/**/*.md"))
 assert len(files) == 2, f"{phase}: advertised inventory {pattern} found {len(files)}, expected 2"
+# Decode the real schema examples, not paths independently serialized by this
+# mock. JSON examples must preserve the same root as the inventory instruction.
+schema = re.search(r"```json\n(.*?)\n```", prompt, re.S).group(1)
+if phase == "verifier":
+    example = json.loads(schema.replace("<integer>", "2"))
+    expected = str(root / "round-N/lens-outputs/<lens>.md")
+    assert example["source_finding_path"] == expected, repr(example["source_finding_path"])
+else:
+    example = json.loads(schema)[0]
+    expected = str(root / "round-1/lens-outputs/<lens>.md")
+    assert example["source_finding_paths"][0] == expected, repr(example["source_finding_paths"])
+    action_path = str(root / "round-3/lens-outputs/<lens>.md")
+    assert example["cross_link_actions"][0]["body"].endswith(action_path)
 roles = set()
 entries = []
 for path in files:
