@@ -1041,12 +1041,33 @@ _rounds_meta_lens_entry_for_id_unfiltered() {
   _rounds_meta_lens_entry_for_id "$@"
 }
 
+# Stream a saved dispatch through a parser, then publish only checked tuples.
+# Bash reads a pipe to EOF safely even when the source read fails; waiting for
+# cat distinguishes that failure from EOF without a source-sized shell buffer
+# or a here-string temporary file. Close the pipe before waiting on early exits.
+_rounds_meta_read_dispatch() {
+  local dispatch_file="$1" input_fd producer_pid parsed parse_rc=0
+  shift
+  [[ -f "$dispatch_file" ]] || return 0
+  exec {input_fd}< <(cat -- "$dispatch_file") || return 1
+  producer_pid=$!
+  parsed="$("$@" <&"$input_fd")" || parse_rc=1
+  exec {input_fd}<&-
+  wait "$producer_pid" || parse_rc=1
+  (( parse_rc == 0 )) || return 1
+  if [[ -n "$parsed" ]]; then printf '%s\n' "$parsed"; fi
+}
+
 _rounds_meta_dispatch_lens_entries() {
-  local dispatch_file="$1" lenses_dir="${2:-}" line trimmed lens_id lens_entry
+  _rounds_meta_read_dispatch "$1" _rounds_meta_dispatch_lens_entries_stream "$@"
+}
+
+# Internal stdin parser; _rounds_meta_read_dispatch verifies the producer.
+_rounds_meta_dispatch_lens_entries_stream() {
+  local lenses_dir="${2:-}" line trimmed lens_id lens_entry
   local lens_attrs stripped attr_body role focus anchor exclude missed_angle tuple dedup_key
   local -A seen_entries=()
 
-  [[ -f "$dispatch_file" ]] || return 0
   [[ -n "$lenses_dir" ]] || lenses_dir="$(_rounds_meta_lenses_dir)"
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -1077,7 +1098,8 @@ _rounds_meta_dispatch_lens_entries() {
         _rounds_meta_warn "Skipping invalid dispatched lens id: $lens_id"
       fi
     fi
-  done < "$dispatch_file"
+  done
+  return 0
 }
 
 # Reserve the finding's .md suffix as well as the artifact directory name.
@@ -1116,11 +1138,15 @@ _rounds_meta_generic_slug_limit() {
 }
 
 _rounds_meta_dispatch_generic_entries() {
+  _rounds_meta_read_dispatch "$1" _rounds_meta_dispatch_generic_entries_stream "$@"
+}
+
+# Internal stdin parser; _rounds_meta_read_dispatch verifies the producer.
+_rounds_meta_dispatch_generic_entries_stream() {
   local dispatch_file="$1" dispatch_dir line trimmed generic_attrs stripped attr_body
   local role focus anchor exclude missed_angle tuple slug entry dedup_key digest slug_limit="" index=0
   local -A seen_entries=()
 
-  [[ -f "$dispatch_file" ]] || return 0
   dispatch_dir="$(dirname -- "$dispatch_file")" || return 1
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -1166,7 +1192,8 @@ _rounds_meta_dispatch_generic_entries() {
       tuple="$(_rounds_meta_tuple_serialize "$entry" "$role" "$focus" "$anchor" "$exclude")"
       printf '%s\n' "$tuple"
     fi
-  done < "$dispatch_file"
+  done
+  return 0
 }
 
 _rounds_meta_custom_focus_body() {
@@ -1365,13 +1392,17 @@ _rounds_meta_custom_identity() {
 }
 
 _rounds_meta_dispatch_custom_entries() {
-  local dispatch_file="$1" custom_lenses_dir="$2"
+  _rounds_meta_read_dispatch "$1" _rounds_meta_dispatch_custom_entries_stream "$@"
+}
+
+# Internal stdin parser; _rounds_meta_read_dispatch verifies the producer.
+_rounds_meta_dispatch_custom_entries_stream() {
+  local custom_lenses_dir="$2"
   local line trimmed payload="" custom_entry index=0
   local role="" focus="" anchor="" exclude="" tuple
   local in_custom=0 in_fence=0
   local -A seen_entries=()
 
-  [[ -f "$dispatch_file" ]] || return 0
   [[ -n "$custom_lenses_dir" ]] || return 1
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -1410,7 +1441,7 @@ _rounds_meta_dispatch_custom_entries() {
     if (( in_custom )); then
       payload+=$'\n'"$line"
     fi
-  done < "$dispatch_file"
+  done
 
   if (( in_custom )); then
     if (( in_fence )); then
@@ -1431,18 +1462,15 @@ _rounds_meta_dispatch_custom_entries() {
   return 0
 }
 
+# Return 1 for no directives, 2 for an incomplete source read. Drain all input
+# even after finding a directive so a later read failure cannot be hidden.
 _rounds_meta_dispatch_has_entries() {
-  local dispatch_file="$1" line trimmed
-
-  [[ -f "$dispatch_file" ]] || return 1
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    trimmed="$(_rounds_meta_trim "$line")"
-    if [[ "$trimmed" =~ ^-?[[:space:]]*(LENS|CUSTOM|GENERIC):[[:space:]]* ]]; then
-      return 0
-    fi
-  done < "$dispatch_file"
-
-  return 1
+  local found
+  found="$(_rounds_meta_read_dispatch "$1" awk '
+    /^[[:space:]]*-?[[:space:]]*(LENS|CUSTOM|GENERIC):[[:space:]]*/ { found=1 }
+    END { if (found) print "found" }
+  ')" || return 2
+  [[ -n "$found" ]]
 }
 
 _rounds_meta_no_fresh_angles() {
@@ -2978,7 +3006,19 @@ run_rounds() {
         dispatch_path="$previous_round_dir/dispatch.md"
       fi
       if [[ -n "$dispatch_path" && -f "$dispatch_path" ]]; then
-        dispatched_lenses_output="$(_rounds_meta_dispatch_lens_entries "$dispatch_path")"
+        if dispatched_lenses_output="$(_rounds_meta_dispatch_lens_entries "$dispatch_path")"; then
+          :
+        else
+          round_rc=$?
+          ROUNDS_FAILURE_REASON="lens-dispatch-read-failed"
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          else
+            set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON"
+          fi
+          log_warn "[round $round/$rounds_total] Lens dispatch reading failed; round remains pending"
+          return "$round_rc"
+        fi
         round_custom_lenses_dir="${dispatch_path%/*}/custom-lenses"
         dispatched_custom_output="$(_rounds_meta_dispatch_custom_entries "$dispatch_path" "$round_custom_lenses_dir")"
         round_rc=$?
@@ -3007,6 +3047,15 @@ run_rounds() {
         fi
         if _rounds_meta_dispatch_has_entries "$dispatch_path"; then
           dispatch_has_entries=1
+        elif (( $? == 2 )); then
+          ROUNDS_FAILURE_REASON="lens-dispatch-read-failed"
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          else
+            set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON"
+          fi
+          log_warn "[round $round/$rounds_total] Dispatch presence reading failed; round remains pending"
+          return 1
         fi
         if [[ -n "$dispatched_lenses_output" || -n "$dispatched_custom_output" || -n "$dispatched_generic_output" || "$dispatch_has_entries" -eq 1 ]]; then
           active_lens_list=()
