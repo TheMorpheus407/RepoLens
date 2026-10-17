@@ -158,6 +158,8 @@ _reconcile_summary_filing_locked() {
       .lenses |= map(.findings_drafted = ((.findings_drafted // 0) + (.issues_created // 0)) | .issues_created = 0)
       | .totals.findings_drafted = ([.lenses[].findings_drafted] | add // 0)
       | .totals.issues_created = $count
+    elif .mode == "bugreport" and .output_mode == "local" then
+      .totals.issues_created = ([.lenses[] | select(.domain != "generic") | .issues_created // 0] | add // 0) + $count
     else
       .totals.issues_created = ([0, ((.totals.issues_created // 0) - (.totals.governed_issues_created // 0))] | max) + $count
     end

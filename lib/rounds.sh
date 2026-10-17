@@ -1992,10 +1992,20 @@ _round_digest_finding_segments() {
 # Deliver Generic raw segments as ordinary local findings. The private source
 # remains canonical for digest/verification; publication can be retried even
 # after all lens/round completion receipts have been written.
-export_generic_local_findings() (
-  local output_dir="$1" stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
+_generic_local_findings() (
+  local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count
+  local stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
   local rounds_dir="${LOG_BASE:-}/rounds"
-  [[ -d "$rounds_dir" ]] || return 0
+  if [[ ! -d "$rounds_dir" ]]; then
+    [[ "$action" != count ]] || printf '0\n'
+    return 0
+  fi
+  if [[ -n "${MAX_ISSUES:-}" ]]; then
+    ordinary_count="$(jq '[.lenses[] | select(.domain != "generic") | .issues_created // 0] | add // 0' "$SUMMARY_FILE")" || return 1
+    [[ "$MAX_ISSUES" =~ ^[1-9][0-9]*$ && "$ordinary_count" =~ ^[0-9]+$ ]] || return 1
+    limit=$((10#$MAX_ISSUES - 10#$ordinary_count))
+    (( limit >= 0 )) || limit=0
+  fi
   mkdir -p "$LOG_BASE/final" || return 1
   stage="$(mktemp -d "$LOG_BASE/final/.generic-plan.XXXXXX")" || return 1
   trap 'rm -rf -- "$stage"' EXIT
@@ -2075,8 +2085,24 @@ export_generic_local_findings() (
     done
   done < "$stage/files" || return 1
   (( list_complete )) || return 1
-  python3 "$(_round_digest_repo_root)/lib/generic_output.py" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}"
+  python3 "$(_round_digest_repo_root)/lib/generic_output.py" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}" "$action" "$limit" "$count_source"
 )
+
+# Count and publish the same complete, trusted, severity-filtered segment plan.
+# Counting writes private scratch data only; publication remains post-round.
+export_generic_local_findings() { _generic_local_findings "$1" publish; }
+count_generic_local_findings() {
+  local source="${1:-}"
+  source="${source#"${LOG_BASE:-}/rounds/"}"
+  _generic_local_findings "${OUTPUT_DIR:-}" count "$source"
+}
+reconcile_generic_local_counts() {
+  local count
+  count="$(count_generic_local_findings)" || return 1
+  reconcile_summary_filing "$SUMMARY_FILE" "$count" "${MAX_ISSUES:-}" || return 1
+  GLOBAL_ISSUES_CREATED="$(jq -r '.totals.issues_created' "$SUMMARY_FILE")" || return 1
+}
+
 
 _round_digest_trim_yaml_value() {
   local value="$*"

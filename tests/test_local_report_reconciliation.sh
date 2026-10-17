@@ -241,6 +241,7 @@ case_custom_output() (
   PROJECT_PATH="$FIXTURE" LENSES_DIR="$REPO/prompts/lenses"
   OUTPUT_DIR="$FIXTURE/custom findings"
   mkdir -p "$LOG_BASE" "$OUTPUT_DIR"
+  init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' '' local "$OUTPUT_DIR"
   completed_lenses_file="$LOG_BASE/.completed"
   LENSES=(security/injection)
   validate_rounds "$MODE" "$ROUNDS" --rounds

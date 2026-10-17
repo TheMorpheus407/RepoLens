@@ -4563,6 +4563,11 @@ _reconcile_initial_filing_counts() {
 }
 
 GLOBAL_ISSUES_CREATED=0
+# Saved Generic plans consume the same local budget on resume, even if the
+# previous attempt ended before its summary counter was persisted.
+if $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport ]]; then
+  reconcile_generic_local_counts || die "Unable to reconcile local Generic finding counts."
+fi
 
 if [[ "$MODE" == branch-review ]] && ! $LOCAL_MODE; then
   if ! _reconcile_initial_filing_counts "$RUN_ID"; then
@@ -4732,6 +4737,10 @@ run_lens() {
   vars+="|FORGE_ENHANCEMENT_LABEL_CREATE=$(forge_prompt_label_create "enhancement" "a2eeef" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   vars+="|FORGE_ISSUE_LIST_OPEN=$(forge_prompt_issue_list "open" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
   vars+="|FORGE_ISSUE_LIST_CLOSED=$(forge_prompt_issue_list "closed" "$FORGE_REPO_SLUG" "$PROJECT_PATH")"
+  local generic_local_budget=false generic_findings_file="" generic_baseline=0
+  if $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport && "$domain" == generic && -n "$MAX_ISSUES" ]]; then
+    generic_local_budget=true
+  fi
   if [[ "$domain" == generic ]]; then
     local generic_findings_dir="$LOG_BASE/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs"
     if [[ -n "$dispatch_path" ]]; then
@@ -4745,7 +4754,11 @@ run_lens() {
       return 1
     fi
     vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX:-1}|ROUND_TOTAL=${CURRENT_ROUND_TOTAL:-1}"
-    vars+="|GENERIC_FINDINGS_FILE=$(template_var_escape "$generic_findings_dir/$lens_id.md")"
+    generic_findings_file="$generic_findings_dir/$lens_id.md"
+    if $generic_local_budget; then
+      generic_baseline="$(count_generic_local_findings "$generic_findings_file")" || return 1
+    fi
+    vars+="|GENERIC_FINDINGS_FILE=$(template_var_escape "$generic_findings_file")"
   else
     [[ -n "${CURRENT_ROUND_INDEX:-}" ]] && vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX}"
     [[ -n "${CURRENT_ROUND_TOTAL:-}" ]] && vars+="|ROUND_TOTAL=${CURRENT_ROUND_TOTAL}"
@@ -4866,7 +4879,11 @@ run_lens() {
   # original bug: summary claimed 0 while the forge actually held N > 0.
   local issues_baseline=0
   if $LOCAL_MODE; then
-    issues_baseline="$(count_dry_run_issues "$lens_local_dir")"
+    if $generic_local_budget; then
+      issues_baseline="$generic_baseline"
+    else
+      issues_baseline="$(count_dry_run_issues "$lens_local_dir")"
+    fi
   else
     local _baseline_out=""
     if _baseline_out="$(forge_issue_list_count "$FORGE_REPO_SLUG" "$lens_label")"; then
@@ -5088,7 +5105,15 @@ run_lens() {
     # delta, not an authoritative forge total.
     local current_issue_count=""
     if $LOCAL_MODE; then
-      current_issue_count="$(count_dry_run_issues "$lens_local_dir")"
+      if $generic_local_budget; then
+        if ! current_issue_count="$(count_generic_local_findings "$generic_findings_file")"; then
+          log_error "[$domain/$lens_id] Unable to count Generic findings; leaving investigation pending."
+          exit_status="lens-execution-failed"
+          break
+        fi
+      else
+        current_issue_count="$(count_dry_run_issues "$lens_local_dir")"
+      fi
     else
       if ! current_issue_count="$(forge_issue_list_count "$FORGE_REPO_SLUG" "$lens_label")"; then
         local fallback_issue_count
@@ -5206,7 +5231,11 @@ run_lens() {
   record_lens "$SUMMARY_FILE" "$domain" "$lens_id" "$iteration" "$exit_status" "$lens_issues" "$rate_limit_sleep_seconds" \
     "$lens_start_iso" "$lens_end_iso" "$lens_duration_seconds" "$findings_drafted"
   local completion_rc=0
-  if [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
+  if $generic_local_budget && ! reconcile_generic_local_counts; then
+    log_error "[$domain/$lens_id] Unable to reconcile Generic finding counts; leaving investigation pending."
+    completion_rc=1
+  fi
+  if (( completion_rc == 0 )) && [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
       && "$exit_status" != "auth-expired" && "$exit_status" != "model-unavailable" \
       && "$exit_status" != "budget-exhausted" && "$exit_status" != "agent-refused" \
       && "$exit_status" != "max-tokens-truncation" && "$exit_status" != "agent-error" \
@@ -5552,7 +5581,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
   if [[ -d "$LOG_BASE/rounds" ]]; then
     _local_generic_raw_root="$(cd "$LOG_BASE/rounds" && pwd -P)"
   fi
-  if ! export_generic_local_findings "$OUTPUT_DIR"; then
+  if ! export_generic_local_findings "$OUTPUT_DIR" || ! reconcile_generic_local_counts; then
     _local_delivery_ready=false
     log_warn "Generic delivery incomplete; preserving previous registry/reports. Repair output access and resume to retry saved findings."
   fi
