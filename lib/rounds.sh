@@ -1839,31 +1839,10 @@ _round_digest_registered_lenses() {
     return 1
   fi
 
-  awk '
-    {
-      line = $0
-      if (!collecting) {
-        if (line !~ /"lenses"[[:space:]]*:/) {
-          next
-        }
-        collecting = 1
-        sub(/^.*"lenses"[[:space:]]*:[[:space:]]*/, "", line)
-      }
-
-      scan = line
-      while (match(scan, /"[^"]+"/)) {
-        value = substr(scan, RSTART + 1, RLENGTH - 2)
-        if (value != "") {
-          print value
-        }
-        scan = substr(scan, RSTART + RLENGTH)
-      }
-
-      if (line ~ /\]/) {
-        collecting = 0
-      }
-    }
-  ' "$domains_file"
+  jq -r '.domains[] | .id as $domain | .lenses[]
+    | (if type == "object" then .id else . end)
+    | select(type == "string" and length > 0)
+    | $domain + "/" + .' "$domains_file"
 }
 
 # Return 1 for readable malformed frontmatter, 2 for a failed source read.
@@ -2404,7 +2383,8 @@ build_round_digest() {
     [[ -n "$registered_lens" ]] || continue
     _round_digest_registered_lens_set["$registered_lens"]=1
   done < <(_round_digest_registered_lenses "$domains_file" || true)
-  # Generated investigators are absent from the static registry. Trust only
+  # Static trust binds the domain and lens together. Generated investigators
+  # are absent from the static registry. Trust only
   # Generic/Custom IDs supplied by this round's driver, never IDs claimed by a file.
   for dispatched_entry in "${@:2}"; do
     dispatched_entry="${dispatched_entry%%|*}"
@@ -2469,7 +2449,7 @@ build_round_digest() {
         _round_digest_warn "Skipping malformed lens output $(basename "$file"): required frontmatter keys severity, domain, and lens_id or lens are required"
         continue
       fi
-      if [[ -z "${_round_digest_registered_lens_set[$lens]:-}" \
+      if [[ -z "${_round_digest_registered_lens_set[$domain/$lens]:-}" \
           && -z "${_round_digest_dispatched_generated_set[$domain/$lens]:-}" ]]; then
         _round_digest_warn "Skipping untrusted lens output $(basename "$file"): lens id is not registered"
         continue
