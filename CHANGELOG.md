@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Normalize Generic source frontmatter root indentation before adding projection headers, preserving high severity, explicit type and complexity through registry/CSV/report publication and retry while retaining nested provenance and body content (the segment parser adds a missing final newline; source evidence stays unchanged) (repolens-r12-p4-1, repolens-r12-p6-1).
 
+- Preserve separate nonlocal bugreport finding files for attributed investigations of the same lens, so completed dispatches cannot overwrite each other (repolens-r13-p2-1). Pass the actual run log root to verification and synthesis so separate project checkouts consume the preserved findings. JSON-escape that root in verifier and synthesizer schema examples so backslashes, quotes and control characters preserve the same paths.
+
 - Read Generic delivery and round-digest metadata only from the root frontmatter mapping, so nested provenance cannot lower severity, override trusted lens identity, or remove an existing high-priority projection on resume. Nested ownership markers no longer block delivery retries (repolens-r12-p4-2).
 
 - Promote certified handoffs and private parser outputs to their exact paths, refusing directory races instead of silently placing dispatch files inside directories and falling back to old investigations (repolens-r12-p3-2).

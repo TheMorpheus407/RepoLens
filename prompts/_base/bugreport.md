@@ -61,7 +61,7 @@ When `{{ROUND_INDEX}}` is greater than 1:
 Write your findings to a single Markdown file at:
 
 ```
-logs/<run-id>/rounds/round-{{ROUND_INDEX}}/lens-outputs/<lens_id>.md
+{{BUGREPORT_FINDINGS_FILE}}
 ```
 
 Each finding consists of a YAML frontmatter block followed by required Markdown body sections. Multiple findings in the same file are separated by a `---` line, each with its own frontmatter block.
