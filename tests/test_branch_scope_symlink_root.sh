@@ -27,12 +27,14 @@ MODE=branch-review
 BRANCH_SCOPE_FILE="$TMPROOT/scope.json"
 printf '["allowed.sh"]\n' > "$BRANCH_SCOPE_FILE"
 PASS=0 FAIL=0
+# Record each assertion and continue so the summary includes every failure.
 check() {
   local label="$1"
   shift
   if "$@"; then PASS=$((PASS + 1)); printf 'PASS: %s\n' "$label"
   else FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$label"; fi
 }
+# Write a valid registry fixture with a caller-selected title and citation.
 write_finding() {
   printf -- '---\ntitle: %s\nseverity: high\n---\nEvidence: %s:1\n' "$2" "$3" > "$1"
 }
@@ -56,7 +58,7 @@ for variant in physical linked linked-slash; do
   check "$variant rejected finding is quarantined" test -f "$base/real/rejected.md.out-of-scope"
   check "$variant rejected finding leaves md consumers" test ! -e "$base/real/rejected.md"
   check "$variant records scope reason" grep -q 'out-of-scope citation: untouched.sh' "$base/real/rejected.md.out-of-scope.reason"
-  build_findings_jsonl_from_local "$dir" "$base/registry.jsonl"
+  check "$variant registry rebuild succeeds" build_findings_jsonl_from_local "$dir" "$base/registry.jsonl"
   check "$variant registry publishes no rejected finding" test ! -s "$base/registry.jsonl"
   check "$variant nested target stays byte-identical" test "$external_hash" = "$(cksum < "$base/external/untouched.md")"
   check "$variant nested target is never quarantined" test ! -e "$base/external/untouched.md.out-of-scope"
@@ -68,7 +70,7 @@ for variant in physical linked linked-slash; do
   write_finding "$base/real/accepted.md" 'Allowed finding' allowed.sh
   write_finding "$base/real/another.md" 'Another rejection' untouched.sh
   check "$variant mixed root filters successfully" branch_scope_filter_directory "$dir"
-  build_findings_jsonl_from_local "$dir" "$base/mixed.jsonl"
+  check "$variant mixed registry rebuild succeeds" build_findings_jsonl_from_local "$dir" "$base/mixed.jsonl"
   check "$variant registry retains only in-scope finding" jq -se 'length==1 and .[0].title=="Allowed finding" and .[0].status=="new"' "$base/mixed.jsonl"
   check "$variant accepts actual changed file" test -f "$base/real/accepted.md"
   check "$variant also quarantines later rejection" test -f "$base/real/another.md.out-of-scope"
