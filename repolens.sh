@@ -4770,6 +4770,12 @@ run_lens() {
     [[ -n "${CURRENT_ROUND_INDEX:-}" ]] && vars+="|ROUND_INDEX=${CURRENT_ROUND_INDEX}"
     [[ -n "${CURRENT_ROUND_TOTAL:-}" ]] && vars+="|ROUND_TOTAL=${CURRENT_ROUND_TOTAL}"
   fi
+  if [[ "$MODE" == bugreport && "$domain" != generic ]]; then
+    local findings_dir="$LOG_BASE/rounds/round-${CURRENT_ROUND_INDEX:-1}/lens-outputs"
+    [[ -z "$dispatch_path" ]] || findings_dir+="/$dispatch_key"
+    mkdir -p -- "$findings_dir" || return 1
+    vars+="|BUGREPORT_FINDINGS_FILE=$(template_var_escape "$findings_dir/$lens_id.md")"
+  fi
   vars+="|LENS_ROLE=$(template_var_escape "$lens_role")"
   vars+="|LENS_FOCUS=$(template_var_escape "$lens_focus")"
   vars+="|PRIOR_FINDING_ANCHOR=$(template_var_escape "$prior_finding_anchor")"

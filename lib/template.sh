@@ -340,6 +340,17 @@ compose_prompt() {
   local round_context_section=""
   local round_index="${prompt_vars[ROUND_INDEX]:-1}"
   local round_total="${prompt_vars[ROUND_TOTAL]:-1}"
+  local run_log_base="${prompt_vars[RUN_LOG_BASE]:-logs/${prompt_vars[RUN_ID]:-<run-id>}}"
+  prompt="${prompt//\{\{RUN_LOG_BASE\}\}/$run_log_base}"
+  # Schema examples embed the path inside JSON strings; prose keeps raw bytes.
+  if [[ "$prompt" == *'{{RUN_LOG_BASE_JSON}}'* ]]; then
+    local run_log_base_json
+    run_log_base_json="$(jq -rn --arg path "$run_log_base" '$path | tojson | .[1:-1]')" || return 1
+    prompt="${prompt//\{\{RUN_LOG_BASE_JSON\}\}/$run_log_base_json}"
+  fi
+  local bugreport_findings_file="${prompt_vars[BUGREPORT_FINDINGS_FILE]:-logs/<run-id>/rounds/round-$round_index/lens-outputs/<lens_id>.md}"
+  prompt="${prompt//\{\{BUGREPORT_FINDINGS_FILE\}\}/$bugreport_findings_file}"
+
   local prior_round_digest="${prompt_vars[PRIOR_ROUND_DIGEST]:-}"
   local hypotheses_to_verify="${prompt_vars[HYPOTHESES_TO_VERIFY]:-}"
 
