@@ -1042,14 +1042,17 @@ _rounds_meta_lens_entry_for_id_unfiltered() {
 }
 
 _rounds_meta_dispatch_lens_entries() {
-  local dispatch_file="$1" lenses_dir="${2:-}" line trimmed lens_id lens_entry
+  local dispatch_file="$1" lenses_dir="${2:-}" line trimmed lens_id lens_entry dispatch_text
   local lens_attrs stripped attr_body role focus anchor exclude missed_angle tuple dedup_key
   local -A seen_entries=()
 
   [[ -f "$dispatch_file" ]] || return 0
   [[ -n "$lenses_dir" ]] || lenses_dir="$(_rounds_meta_lenses_dir)"
 
-  while IFS= read -r line || [[ -n "$line" ]]; do
+  # A failed Bash read can retain the previous line indefinitely. Capture and
+  # check the complete source first; partial reads cannot authorize dispatch.
+  dispatch_text="$(cat -- "$dispatch_file")" || return 1
+  while IFS= read -r line; do
     trimmed="$(_rounds_meta_trim "$line")"
     if [[ "$trimmed" =~ ^-?[[:space:]]*LENS:[[:space:]]*([A-Za-z0-9_-]+)([[:space:]]+.*)?$ ]]; then
       lens_id="${BASH_REMATCH[1]}"
@@ -1077,7 +1080,7 @@ _rounds_meta_dispatch_lens_entries() {
         _rounds_meta_warn "Skipping invalid dispatched lens id: $lens_id"
       fi
     fi
-  done < "$dispatch_file"
+  done <<< "$dispatch_text"
 }
 
 # Reserve the finding's .md suffix as well as the artifact directory name.
@@ -2978,7 +2981,19 @@ run_rounds() {
         dispatch_path="$previous_round_dir/dispatch.md"
       fi
       if [[ -n "$dispatch_path" && -f "$dispatch_path" ]]; then
-        dispatched_lenses_output="$(_rounds_meta_dispatch_lens_entries "$dispatch_path")"
+        if dispatched_lenses_output="$(_rounds_meta_dispatch_lens_entries "$dispatch_path")"; then
+          :
+        else
+          round_rc=$?
+          ROUNDS_FAILURE_REASON="lens-dispatch-read-failed"
+          if abort_reason="$(_rounds_agent_abort_reason)"; then
+            set_stop_reason "$SUMMARY_FILE" "$abort_reason"
+          else
+            set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON"
+          fi
+          log_warn "[round $round/$rounds_total] Lens dispatch reading failed; round remains pending"
+          return "$round_rc"
+        fi
         round_custom_lenses_dir="${dispatch_path%/*}/custom-lenses"
         dispatched_custom_output="$(_rounds_meta_dispatch_custom_entries "$dispatch_path" "$round_custom_lenses_dir")"
         round_rc=$?
