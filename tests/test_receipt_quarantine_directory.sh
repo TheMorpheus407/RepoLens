@@ -22,7 +22,7 @@ source "$REPO/lib/filing.sh"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 for kind in ordinary cross-link; do
-  for destination in directory symlink-directory; do
+  for destination in directory symlink-directory symlink-file dangling-symlink; do
     (
       LOG_BASE="$FIXTURE/$kind-$destination"
       filed_dir="$LOG_BASE/final/filed"
@@ -35,11 +35,13 @@ for kind in ordinary cross-link; do
       fi
       printf 'https://example.invalid/acme/repo/issues/17\n' > "$receipt"
       cp "$receipt" "$LOG_BASE/original"
-      if [[ "$destination" == directory ]]; then
-        mkdir "$quarantine"
-      else
-        ln -s "$LOG_BASE/outside" "$quarantine"
-      fi
+      printf 'external target\n' > "$LOG_BASE/target"
+      case "$destination" in
+        directory) mkdir "$quarantine" ;;
+        symlink-directory) ln -s "$LOG_BASE/outside" "$quarantine" ;;
+        symlink-file) ln -s "$LOG_BASE/target" "$quarantine" ;;
+        dangling-symlink) ln -s "$LOG_BASE/missing" "$quarantine" ;;
+      esac
       REPOLENS_FINAL_STATE=finished
       trap 'REPOLENS_FINAL_STATE=interrupted' TERM
       mv() {
@@ -59,11 +61,17 @@ for kind in ordinary cross-link; do
       test "$rc" -ne 0
       test -f "$receipt"
       cmp "$receipt" "$LOG_BASE/original"
-      test -d "$quarantine"
+      case "$destination" in
+        directory) test -d "$quarantine" ;;
+        symlink-directory) test -L "$quarantine"; test -d "$quarantine" ;;
+        symlink-file) test -L "$quarantine"; test -f "$quarantine" ;;
+        dangling-symlink) test -L "$quarantine"; test ! -e "$quarantine" ;;
+      esac
+      cmp -s <(printf 'external target\n') "$LOG_BASE/target"
+      test ! -e "$LOG_BASE/missing"
       test ! -e "$quarantine/${receipt##*/}"
       test ! -e "$prefix.failed"
       test -f "$prefix.attempted"
-      if [[ "$destination" == symlink-directory ]]; then test -L "$quarantine"; fi
       test -z "$(find "$LOG_BASE/outside" -type f -print)"
       if [[ "$kind" == ordinary ]]; then
         test ! -e "$prefix.governor"

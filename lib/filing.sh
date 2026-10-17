@@ -705,7 +705,8 @@ _filing_action_reference_candidates() {
 #   budget reservation. Verified readback writes .done; failure writes .failed.
 #
 #   Ordinary action failures are best-effort and logged to stderr. Parent
-#   cancellation stops admission and makes the enclosing dispatch fail.
+#   cancellation stops admission and makes the enclosing dispatch fail. Storage
+#   failures that prevent recording an action's outcome also fail the dispatch.
 #
 #   Required globals: FORGE_REPO (or REPO_OWNER+REPO_NAME).
 #   Optional globals: REPOLENS_REOPEN_LABEL (defaults "repolens:reopen-candidate").
@@ -1136,7 +1137,8 @@ _filing_cross_link_enact() {
 #        markers and counted in the aggregate output).
 #     1  on parent cancellation or infrastructure failure: invalid manifest,
 #        failed process-scope initialization/launch/cleanup, or a missing
-#        callback outcome.
+#        callback outcome, or cross-link enactment that stops without recording
+#        an action's outcome.
 #
 #   Aggregate output on stdout:
 #     Filed: X, Verification-failed: Y, Skipped-existing: Z
@@ -1211,7 +1213,10 @@ dispatch_filing_batch() {
     if ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
       local cross_link_rc=0
       _filing_cross_link_enact "$run_id" || cross_link_rc=$?
-      (( cross_link_rc != 2 )) || return 1
+      if (( cross_link_rc != 0 )); then
+        echo "dispatch_filing_batch: cross-link enactment failed (rc=$cross_link_rc)" >&2
+        return 1
+      fi
     fi
     _filing_cancelled && return 1
     printf 'Filed: 0, Verification-failed: 0, Skipped-existing: 0\n'
@@ -1363,7 +1368,10 @@ dispatch_filing_batch() {
   if (( dispatch_rc == 0 )) && ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
     local cross_link_rc=0
     _filing_cross_link_enact "$run_id" || cross_link_rc=$?
-    (( cross_link_rc != 2 )) || dispatch_rc=1
+    if (( cross_link_rc != 0 )); then
+      echo "dispatch_filing_batch: cross-link enactment failed (rc=$cross_link_rc)" >&2
+      dispatch_rc=1
+    fi
   fi
   _filing_cancelled && dispatch_rc=1
 
