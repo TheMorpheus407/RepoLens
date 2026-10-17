@@ -143,23 +143,27 @@ _ensure_summary_issues_created_locked() {
 
 # Replace the governed publication snapshot, rather than adding it again on
 # resume. Remote branch lens files are drafts, including legacy saved counts.
+# Optional fourth arg is authoritative ordinary destination usage for local
+# bugreports; per-lens deltas remain execution history rather than inventory.
 reconcile_summary_filing() {
-  local file="$1" count="$2" max_issues="${3:-}"
+  local file="$1" count="$2" max_issues="${3:-}" ordinary_count="${4:-}"
   [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  [[ -z "$ordinary_count" || "$ordinary_count" =~ ^[0-9]+$ ]] || return 1
   with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
-    _reconcile_summary_filing_locked "$file" "$count" "$max_issues"
+    _reconcile_summary_filing_locked "$file" "$count" "$max_issues" "$ordinary_count"
 }
 
 _reconcile_summary_filing_locked() {
-  local file="$1" count="$2" max_issues="$3" tmp rc
+  local file="$1" count="$2" max_issues="$3" ordinary_count="${4:-}" tmp rc
   tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
-  jq --argjson count "$count" --argjson cap "${max_issues:-null}" '
+  jq --argjson count "$count" --argjson cap "${max_issues:-null}" --argjson ordinary "${ordinary_count:-null}" '
     if .mode == "branch-review" and .output_mode != "local" then
       .lenses |= map(.findings_drafted = ((.findings_drafted // 0) + (.issues_created // 0)) | .issues_created = 0)
       | .totals.findings_drafted = ([.lenses[].findings_drafted] | add // 0)
       | .totals.issues_created = $count
     elif .mode == "bugreport" and .output_mode == "local" then
-      .totals.issues_created = ([.lenses[] | select(.domain != "generic") | .issues_created // 0] | add // 0) + $count
+      .totals.ordinary_issues_created = ($ordinary // ([.lenses[] | select(.domain != "generic") | .issues_created // 0] | add // 0))
+      | .totals.issues_created = .totals.ordinary_issues_created + $count
     else
       .totals.issues_created = ([0, ((.totals.issues_created // 0) - (.totals.governed_issues_created // 0))] | max) + $count
     end

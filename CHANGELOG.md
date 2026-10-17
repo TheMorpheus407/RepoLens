@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Apply the shared local finding cap to Generic segments, stop additional investigators when it is spent, and reconcile global/summary counts idempotently from the same publication plan on resume (repolens-r11-p4-5).
+- Apply the shared local finding cap to Generic segments, stop additional investigators when it is spent, retain the cap on resume, and recover ordinary usage from the explicit destination. Keep incomplete drafts resumable and admit accounting from the delivery plan before publication (repolens-r11-p4-5).
 
 - Distinguish verifier IDs for multiple findings with identical metadata and citations in the same source, retaining existing first-block IDs and independent verdicts (repolens-r11-p4-3).
 

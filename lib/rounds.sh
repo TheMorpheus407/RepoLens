@@ -1993,24 +1993,35 @@ _round_digest_finding_segments() {
 # remains canonical for digest/verification; publication can be retried even
 # after all lens/round completion receipts have been written.
 _generic_local_findings() (
-  local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count
+  local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count=0 count total
   local stage source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
   local rounds_dir="${LOG_BASE:-}/rounds"
-  if [[ ! -d "$rounds_dir" ]]; then
-    [[ "$action" != count ]] || printf '0\n'
-    return 0
-  fi
-  if [[ -n "${MAX_ISSUES:-}" ]]; then
-    ordinary_count="$(jq '[.lenses[] | select(.domain != "generic") | .issues_created // 0] | add // 0' "$SUMMARY_FILE")" || return 1
-    [[ "$MAX_ISSUES" =~ ^[1-9][0-9]*$ && "$ordinary_count" =~ ^[0-9]+$ ]] || return 1
-    limit=$((10#$MAX_ISSUES - 10#$ordinary_count))
-    (( limit >= 0 )) || limit=0
-  fi
   mkdir -p "$LOG_BASE/final" || return 1
   stage="$(mktemp -d "$LOG_BASE/final/.generic-plan.XXXXXX")" || return 1
   trap 'rm -rf -- "$stage"' EXIT
-  if ! { (set -o pipefail; find -H "$rounds_dir" -type f -path '*/lens-outputs/*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$stage/files"; then
-    return 1
+  # Recover ordinary usage from the deliverable inventory, including writes
+  # interrupted before record_lens. Reuse registry ingestion and severity rules;
+  # Generic raw evidence and projections never reserve ordinary capacity.
+  if [[ -d "$output_dir" ]]; then
+    build_findings_jsonl_from_local "$output_dir" "$stage/ordinary.jsonl" || return 1
+    jq -r 'select(.domain != "generic") | .severity // ""' "$stage/ordinary.jsonl" > "$stage/severities" || return 1
+    while IFS= read -r severity; do
+      if [[ -z "${REPOLENS_MIN_SEVERITY:-}" ]] || severity_meets_min "$severity" "$REPOLENS_MIN_SEVERITY"; then
+        ordinary_count=$((ordinary_count + 1))
+      fi
+    done < "$stage/severities" || return 1
+  fi
+  if [[ -n "${MAX_ISSUES:-}" ]]; then
+    [[ "$MAX_ISSUES" =~ ^[1-9][0-9]*$ ]] || return 1
+    limit=$((10#$MAX_ISSUES - ordinary_count))
+    (( limit >= 0 )) || limit=0
+  fi
+  if [[ -d "$rounds_dir" ]]; then
+    if ! { (set -o pipefail; find -H "$rounds_dir" -type f -path '*/lens-outputs/*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$stage/files"; then
+      return 1
+    fi
+  else
+    printf '\0' > "$stage/files" || return 1
   fi
   : > "$stage/plan.jsonl" || return 1
   while IFS= read -r -d '' source; do
@@ -2070,7 +2081,14 @@ _generic_local_findings() (
       if [[ -z "$title" ]]; then
         title="$(printf '%s' "$body" | _round_digest_section_text_from_stream hypothesis | _round_digest_inline_text 200)"
       fi
-      [[ -n "$title" ]] || { echo "Generic delivery: missing title/hypothesis in $source" >&2; return 1; }
+      if [[ -z "$title" ]]; then
+        # Pending investigators may have been interrupted midway through a
+        # draft. Counting omits incomplete segments so resume can repair them;
+        # publication still requires a fully valid inventory.
+        [[ "$action" == publish ]] || continue
+        echo "Generic delivery: missing title/hypothesis in $source" >&2
+        return 1
+      fi
       # Evidence and metadata are unbounded; pass them via files rather than
       # exec arguments (Linux also limits each individual argument to ~128 KiB).
       printf '%s' "$frontmatter" > "$stage/frontmatter" || return 1
@@ -2085,22 +2103,41 @@ _generic_local_findings() (
     done
   done < "$stage/files" || return 1
   (( list_complete )) || return 1
-  python3 "$(_round_digest_repo_root)/lib/generic_output.py" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}" "$action" "$limit" "$count_source"
+  local publisher
+  publisher="$(_round_digest_repo_root)/lib/generic_output.py"
+  count="$(python3 "$publisher" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}" count "$limit" "$count_source")" || return 1
+  if [[ "$action" == count ]]; then
+    printf '%s\n' "$count"
+    return 0
+  fi
+  # Admit accounting before publication, from this exact staged plan. After
+  # committing files no inventory read or summary lock can suppress rebuilding
+  # the registry/reports for the committed delivery.
+  reconcile_summary_filing "$SUMMARY_FILE" "$count" "${MAX_ISSUES:-}" "$ordinary_count" || return 1
+  total=$((ordinary_count + count))
+  if [[ "$action" == publish ]]; then
+    python3 "$publisher" "$stage/plan.jsonl" "$output_dir" "$LOG_BASE/final/generic-delivery.json" "${RUN_ID:-}" publish "$limit" || return 1
+  fi
+  printf '%s\n' "$total"
 )
 
 # Count and publish the same complete, trusted, severity-filtered segment plan.
 # Counting writes private scratch data only; publication remains post-round.
-export_generic_local_findings() { _generic_local_findings "$1" publish; }
+# Update the caller only after the staged publication succeeds.
+export_generic_local_findings() {
+  local total
+  total="$(_generic_local_findings "$1" publish)" || return 1
+  GLOBAL_ISSUES_CREATED="$total"
+}
 count_generic_local_findings() {
   local source="${1:-}"
   source="${source#"${LOG_BASE:-}/rounds/"}"
   _generic_local_findings "${OUTPUT_DIR:-}" count "$source"
 }
 reconcile_generic_local_counts() {
-  local count
-  count="$(count_generic_local_findings)" || return 1
-  reconcile_summary_filing "$SUMMARY_FILE" "$count" "${MAX_ISSUES:-}" || return 1
-  GLOBAL_ISSUES_CREATED="$(jq -r '.totals.issues_created' "$SUMMARY_FILE")" || return 1
+  local total
+  total="$(_generic_local_findings "${OUTPUT_DIR:-}" reconcile)" || return 1
+  GLOBAL_ISSUES_CREATED="$total"
 }
 
 

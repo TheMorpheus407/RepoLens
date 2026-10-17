@@ -1116,8 +1116,11 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
     die "Persisted run summary must not be a symlink: $_resume_summary"
   fi
   # A resumed governed branch review keeps its creation cap unless the caller
-  # explicitly supplies a replacement. Drafts deferred by the cap remain usable.
-  if [[ "$MODE" == branch-review && "$LOCAL_MODE" == false && -z "$MAX_ISSUES" && -f "$_resume_summary" ]]; then
+  # explicitly supplies a replacement. Explicit-local bugreports retain their
+  # shared finding cap too, including saved segments withheld by that cap.
+  if [[ -z "$MAX_ISSUES" && -f "$_resume_summary" ]] \
+      && { [[ "$MODE" == branch-review && "$LOCAL_MODE" == false ]] \
+        || [[ "$MODE" == bugreport && "$LOCAL_MODE" == true && "$OUTPUT_DIR_SET" == true ]]; }; then
     require_cmd jq
     MAX_ISSUES="$(jq -r '.max_issues // empty' "$_resume_summary")" \
       || die "Unable to read persisted issue limit."
@@ -5231,8 +5234,9 @@ run_lens() {
   record_lens "$SUMMARY_FILE" "$domain" "$lens_id" "$iteration" "$exit_status" "$lens_issues" "$rate_limit_sleep_seconds" \
     "$lens_start_iso" "$lens_end_iso" "$lens_duration_seconds" "$findings_drafted"
   local completion_rc=0
-  if $generic_local_budget && ! reconcile_generic_local_counts; then
-    log_error "[$domain/$lens_id] Unable to reconcile Generic finding counts; leaving investigation pending."
+  if $LOCAL_MODE && ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport ]] \
+      && ! reconcile_generic_local_counts; then
+    log_error "[$domain/$lens_id] Unable to reconcile local finding counts; leaving investigation pending."
     completion_rc=1
   fi
   if (( completion_rc == 0 )) && [[ "$exit_status" != "rate-limited" && "$exit_status" != "agent-no-progress" \
@@ -5581,7 +5585,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
   if [[ -d "$LOG_BASE/rounds" ]]; then
     _local_generic_raw_root="$(cd "$LOG_BASE/rounds" && pwd -P)"
   fi
-  if ! export_generic_local_findings "$OUTPUT_DIR" || ! reconcile_generic_local_counts; then
+  if ! export_generic_local_findings "$OUTPUT_DIR"; then
     _local_delivery_ready=false
     log_warn "Generic delivery incomplete; preserving previous registry/reports. Repair output access and resume to retry saved findings."
   fi

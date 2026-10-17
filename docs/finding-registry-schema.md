@@ -45,6 +45,16 @@ It is built from the existing finding outputs; it does not replace them.
   Trailing line feeds remain part of the decoded path; an unindexed target
   such as `"a.md\n"` cannot validate a link to `a.md`.
 
+For explicit-local bugreports, eligible ordinary destination files reserve the
+shared `--max-issues` capacity, including files from earlier runs and files
+written before an interrupted lens saved its summary. Generic evidence and
+projections are excluded from ordinary usage. Summary
+`totals.ordinary_issues_created` stores this inventory snapshot;
+`totals.governed_issues_created` stores the admitted Generic segment count.
+Per-lens `issues_created` values remain execution deltas. The run total is the
+sum of the two snapshots, so replaying a lens or reconciliation does not add
+existing findings again. Existing ordinary files above the cap are preserved.
+
 For Generic investigators with `bugreport --local --output`, finalization converts
 private multi-finding evidence to one ordinary Markdown file per segment in the
 requested output. Each projection records `source_finding_path`,
