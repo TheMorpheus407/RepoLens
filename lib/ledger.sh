@@ -548,8 +548,11 @@ build_findings_jsonl_from_local() {
       # Decode before matching; malformed links restore eligibility below.
       if [[ "$raw_value" == \"* ]]; then
         if duplicate_of="$(jq -ner --arg value "$raw_value" '$value | fromjson?
-            | select(type == "string") | select(contains("\u0000") | not)' 2>/dev/null)"; then
-          :
+            | select(type == "string") | select(contains("\u0000") | not)
+            | . + "."' 2>/dev/null)"; then
+          # Keep decoded trailing LF bytes through command substitution; only
+          # jq's output terminator may be trimmed. Remove the appended sentinel.
+          duplicate_of="${duplicate_of%.}"
         else
           frontmatter_rc=$?
           # Exit 4 is malformed JSON or no selected string. Other statuses are

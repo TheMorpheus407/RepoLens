@@ -72,6 +72,22 @@ for variant in plain quote apostrophe newline carriage backslash whitespace unic
   before="$(git hash-object -- "$output/$canonical" "$output/z.md")"
   dedupe_local_markdown "$output///"
   check "$variant repeat is byte-identical" test "$(git hash-object -- "$output/$canonical" "$output/z.md")" = "$before"
+  if [[ "$variant" == plain ]]; then
+    # A link to an unindexed trailing-LF filename must not match a.md after
+    # command substitution. Both findings must remain visible without provenance.
+    for invalid in '"a.md\n"' '"a.md\n\n"'; do
+      _local_dedupe_mark_file "$output/z.md" "$(printf 'status: duplicate\nduplicate_of: %s' "$invalid")" ''
+      before="$(git hash-object -- "$output/$canonical" "$output/z.md")"
+      build_finding_registry trailing-lf-link "$output" false
+      check 'trailing LF link cannot suppress a different filename' jq -se \
+        'length == 2 and all(.[]; .status == "new")' "$registry"
+      check 'trailing LF link cannot invent contributor provenance' jq -se \
+        'all(.[]; has("also_reported_by") | not)' "$registry"
+      generate_todo_md "$registry" "$LOG_BASE/final/TODO.md"
+      check 'trailing LF link leaves both findings in TODO' test "$(awk '/Missing authorization permits unauthorized account deletion/ {n++} END {print n+0}' "$LOG_BASE/final/TODO.md")" -eq 2
+      check 'trailing LF recovery preserves Markdown evidence' test "$(git hash-object -- "$output/$canonical" "$output/z.md")" = "$before"
+    done
+  fi
   if [[ "$variant" == newline ]]; then
     # Two JSON strings must not be concatenated into a real newline filename;
     # embedded NUL is not a valid filename byte and must not be silently lost.
