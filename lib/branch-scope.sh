@@ -267,11 +267,11 @@ branch_scope_verify_body() {
   done <<< "$citations"
 }
 
-# Publish to the exact diagnostic path on GNU and BSD/macOS alike. Recheck
+# Replace an exact quarantine or diagnostic path on GNU and BSD/macOS. Recheck
 # unsafe destinations after staging. os.replace never follows a final symlink
 # or moves the staged file inside a destination directory; callers clean up
 # the staged file on failure.
-_branch_scope_replace_reason() {
+_branch_scope_replace_file() {
   python3 -c '
 import os
 import sys
@@ -280,7 +280,7 @@ try:
         sys.exit(1)
     os.replace(sys.argv[1], sys.argv[2])
 except OSError as exc:
-    print(f"branch_scope_filter_directory: cannot publish diagnostic: {exc}", file=sys.stderr)
+    print(f"branch_scope_filter_directory: cannot replace finding file: {exc}", file=sys.stderr)
     sys.exit(1)
 ' "$1" "$2"
 }
@@ -367,12 +367,12 @@ branch_scope_filter_directory() {
     # filesystem even when a nested directory is a separate mount.
     reason_tmp="$(mktemp "${file%/*}/.branch-scope-reason.XXXXXX")" || return 1
     if ! printf '%s\n' "$reason" > "$reason_tmp" ||
-        ! _branch_scope_replace_reason "$reason_tmp" "$file.out-of-scope.reason"; then
+        ! _branch_scope_replace_file "$reason_tmp" "$file.out-of-scope.reason"; then
       rm -f -- "$reason_tmp"
       filter_rc=1
       break
     fi
-    if ! mv -- "$file" "$file.out-of-scope"; then
+    if ! _branch_scope_replace_file "$file" "$file.out-of-scope"; then
       rm -f -- "$file.out-of-scope.reason"
       filter_rc=1
       break

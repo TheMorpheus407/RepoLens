@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Quarantine branch-scope rejections to exact file destinations, refusing existing directories and symlinks so rejected findings cannot be recursively re-ingested or moved outside the selected tree; preserve sources for a repaired retry (repolens-r13-p3-1/p4-1/p6-1).
+
 - Preserve separate nonlocal bugreport finding files for attributed investigations of the same lens, so completed dispatches cannot overwrite each other (repolens-r13-p2-1). Pass the actual run log root to verification and synthesis so separate project checkouts consume the preserved findings. JSON-escape that root in verifier and synthesizer schema examples so backslashes, quotes and control characters preserve the same paths.
 
 - Read Generic delivery and round-digest metadata only from the root frontmatter mapping, so nested provenance cannot lower severity, override trusted lens identity, or remove an existing high-priority projection on resume. Nested ownership markers no longer block delivery retries (repolens-r12-p4-2).
