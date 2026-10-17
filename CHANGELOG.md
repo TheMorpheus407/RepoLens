@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Distinguish verifier IDs for multiple findings with identical metadata and citations in the same source, retaining existing first-block IDs and independent verdicts (repolens-r11-p4-3).
+
 - Reject incomplete Branch-Scope manifest streams before filtering or publication, preserving the complete manifest, saved rejection report and cross-link actions through synthesis failures for retry (repolens-r11-p4-2).
 
 - Abort Generic delivery on failed or partial private snapshot reads, preserving delivered findings, receipts and local reports until a successful retry (repolens-r11-p4-1).
