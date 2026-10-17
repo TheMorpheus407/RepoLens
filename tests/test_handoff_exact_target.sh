@@ -57,7 +57,9 @@ for operation in restore parse; do
       check promote
       check test -f "$dir/dispatch.md"
       check test -f "$dir/hypotheses.md"
-      entries="$(_rounds_meta_dispatch_generic_entries "$dir/dispatch.md")"
+      rc=0
+      entries="$(_rounds_meta_dispatch_generic_entries "$dir/dispatch.md")" || rc=$?
+      check test "$rc" -eq 0
       check test "$entries" = 'generic/deeper-accepted-investigation|deeper|accepted investigation||'
       check test "$(command find "$dir" -maxdepth 1 -type d -name '.meta-*' | wc -l)" -eq 0
     done
