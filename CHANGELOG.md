@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject staged-source appends that report read errors when assembling the registry, including after partial output, preserving the last JSONL, CSV and triage reports for a successful retry (repolens-r10-p2-1).
+
 - Fail verification and synthesis on incomplete finding inventories, retaining saved results until successful enumeration and preserving legitimate empty-run behavior (repolens-r10-p4-1).
   Stop before synthesis when verifier preparation fails with saved decisions, check saved-result cleanup, and retain synthesis output on interruption during enumeration.
   Restore saved synthesis output when retiring either the manifest or cross-link actions fails.

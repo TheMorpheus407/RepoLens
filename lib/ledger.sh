@@ -945,7 +945,11 @@ build_finding_registry() {
   local manifest="$final_dir/manifest.json"
   if [[ "$include_manifest" == true && -f "$manifest" ]]; then
     if build_findings_jsonl_from_manifest "$manifest" "$m_tmp"; then
-      cat "$m_tmp" >> "$candidate"
+      if ! cat "$m_tmp" >> "$candidate"; then
+        echo "build_finding_registry: cannot read staged manifest records" >&2
+        rm -f "$candidate" "$m_tmp" "$l_tmp"
+        return 1
+      fi
     else
       echo "build_finding_registry: manifest ingest failed" >&2
       rm -f "$candidate" "$m_tmp" "$l_tmp"
@@ -958,7 +962,11 @@ build_finding_registry() {
   # provided-but-missing dir is treated as "no local source" (forgiving).
   if [[ -n "$local_dir" && -d "$local_dir" ]]; then
     if build_findings_jsonl_from_local "$local_dir" "$l_tmp" "$generic_raw_root"; then
-      cat "$l_tmp" >> "$candidate"
+      if ! cat "$l_tmp" >> "$candidate"; then
+        echo "build_finding_registry: cannot read staged local records" >&2
+        rm -f "$candidate" "$m_tmp" "$l_tmp"
+        return 1
+      fi
     else
       echo "build_finding_registry: local ingest failed" >&2
       rm -f "$candidate" "$m_tmp" "$l_tmp"
