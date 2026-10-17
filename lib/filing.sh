@@ -705,8 +705,8 @@ _filing_action_reference_candidates() {
 #   budget reservation. Verified readback writes .done; failure writes .failed.
 #
 #   Ordinary action failures are best-effort and logged to stderr. Parent
-#   cancellation stops admission and makes the enclosing dispatch fail. Storage
-#   failures that prevent recording an action's outcome also fail the dispatch.
+#   cancellation stops admission and makes the enclosing dispatch fail. A failed
+#   saved-receipt quarantine also fails the dispatch.
 #
 #   Required globals: FORGE_REPO (or REPO_OWNER+REPO_NAME).
 #   Optional globals: REPOLENS_REOPEN_LABEL (defaults "repolens:reopen-candidate").
@@ -1137,8 +1137,7 @@ _filing_cross_link_enact() {
 #        markers and counted in the aggregate output).
 #     1  on parent cancellation or infrastructure failure: invalid manifest,
 #        failed process-scope initialization/launch/cleanup, or a missing
-#        callback outcome, or cross-link enactment that stops without recording
-#        an action's outcome.
+#        callback outcome, or failed cross-link saved-receipt quarantine.
 #
 #   Aggregate output on stdout:
 #     Filed: X, Verification-failed: Y, Skipped-existing: Z

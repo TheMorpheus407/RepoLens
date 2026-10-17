@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve ordinary and cross-link success receipts when their quarantine marker is a directory or symlink, retaining the completed-POST guard and allowing saved receipt reattestation on resume instead of restoring a container as a receipt. Fail dispatch when a cross-link outcome cannot be recorded, so later actions left pending are not silently reported as completed (repolens-r13-p3-2).
+- Preserve ordinary and cross-link success receipts when their quarantine marker is a directory or symlink, retaining the completed-POST guard and allowing saved receipt reattestation on resume instead of restoring a container as a receipt. Fail dispatch when quarantining a saved cross-link receipt fails, so later actions left pending are not silently reported as completed (repolens-r13-p3-2).
 
 - Quarantine branch-scope rejections to exact file destinations, refusing existing directories, symlinks and same-inode hard links so rejected findings cannot be recursively re-ingested or moved outside the selected tree; preserve sources for a repaired retry (repolens-r13-p3-1/p4-1/p6-1).
 
