@@ -27,6 +27,24 @@ For each finding:
 1. Compute a stable `finding_id` from the finding metadata and its source layout. Use the lowercase hex SHA1 (first 16 chars) of the byte concatenation `lens_id\0domain\0round\0<sorted suspect_files joined by newline>`. Sort `suspect_files` with `LC_ALL=C sort` before hashing so the id is stable across reruns even when the lens emits citations in a different order.
    For a source nested below `lens-outputs/`, append a NUL byte and `source_relative_path` before hashing: `lens_id\0domain\0round\0<sorted suspect_files joined by newline>\0source_relative_path`. Here `source_relative_path` is the file path relative to that round's `lens-outputs/` directory, using `/` separators, including any dispatch directory (for example, `<dispatch-hash>/<lens-id>.md`). This distinguishes investigations sharing a canonical lens ID and citations. Flat files retain the original recipe. Exclude the run ID and absolute checkout path from the hash; keep `source_finding_path` pointing to the exact source file.
 
+
+   Number the actual finding blocks in each source file in reading order with a 1-based `segment_index` (reset for each file, not for each metadata tuple). A body separator alone is not a finding block. The first block keeps the recipe above; for every later block append a NUL byte and its decimal `segment_index` to that recipe before hashing. This keeps legacy single-finding IDs stable while distinguishing independent findings with identical metadata and citations in one source. The index depends only on the source layout, never on the verifier's verdict.
+
+   Use this reference function for the recipe (UTF-8 bytes, C byte ordering for citations):
+
+   ```python
+   import hashlib
+
+   def verifier_finding_id(lens_id, domain, round_number, suspect_files, source_relative_path, segment_index):
+       citations = "\n".join(sorted(suspect_files, key=lambda value: value.encode("utf-8")))
+       parts = [lens_id, domain, str(round_number), citations]
+       if "/" in source_relative_path:
+           parts.append(source_relative_path)
+       if segment_index > 1:
+           parts.append(str(segment_index))
+       return hashlib.sha1("\0".join(parts).encode("utf-8")).hexdigest()[:16]
+   ```
+
 2. For each `path/to/file.ext:LINE` citation in `suspect_files` and in the body:
    - Open the file at `{{PROJECT_PATH}}/<path>` and read the cited line plus ±10 lines of context.
    - Compare the actual code at the cited line against the lens's `## hypothesis` and the relevant `## evidence` bullet.
