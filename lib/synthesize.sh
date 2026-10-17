@@ -1096,8 +1096,9 @@ _synthesize_retire_saved_results() {
 #   captures the JSON manifest from stdout, validates it, and atomically
 #   promotes it to logs/<run-id>/final/manifest.json. If validation fails,
 #   the candidate is discarded and no consumable manifest.json remains.
-#   Scope outages instead retain published outputs and non-consumable pending
-#   evidence; retry regenerates from the current findings.
+#   Scope outages and incomplete scope-filter candidate reads instead retain
+#   published outputs and non-consumable pending evidence; retry regenerates
+#   from the current findings.
 #
 #   Required globals: AGENT, PROJECT_PATH.
 #   Optional globals: REPO_OWNER, REPO_NAME, FORGE_REPO, ROUNDS,
