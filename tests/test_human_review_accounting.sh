@@ -108,7 +108,7 @@ assert_not_contains() {
 assert_str_contains() {
   local desc="$1" hay="$2" needle="$3"
   TOTAL=$((TOTAL + 1))
-  if printf '%s' "$hay" | grep -qF -- "$needle"; then
+  if grep -qF -- "$needle" <<< "$hay"; then
     pass_with "$desc"
   else
     fail_with "$desc" "expected the summary to contain: $needle (got: $hay)"
@@ -334,9 +334,10 @@ if [[ -f "$REPOLENS_SH" ]]; then
   # The held-back line lives inside the HUMAN_REVIEW-gated, non-fatal hook block.
   TOTAL=$((TOTAL + 1))
   hook_block="$(awk '/Human review digest \(non-fatal\)/{c=1} c{print} /^# --- Human-triage artifacts/{if(c) exit}' "$REPOLENS_SH")"
-  if printf '%s' "$hook_block" | grep -q 'human_review_heldback_summary' \
-     && printf '%s' "$hook_block" | grep -q 'HUMAN_REVIEW:-false' \
-     && ! printf '%s' "$hook_block" | grep -qw 'die'; then
+  # A direct input avoids SIGPIPE from grep -q closing a long printf pipe.
+  if grep -q 'human_review_heldback_summary' <<< "$hook_block" \
+     && grep -q 'HUMAN_REVIEW:-false' <<< "$hook_block" \
+     && ! grep -qw 'die' <<< "$hook_block"; then
     pass_with "held-back line is inside the HUMAN_REVIEW-gated, non-fatal block"
   else
     fail_with "held-back line is inside the HUMAN_REVIEW-gated, non-fatal block" \
