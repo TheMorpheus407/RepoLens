@@ -105,6 +105,12 @@ generate_todo_md() {
        def rank: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
+       # Keep destinations exact; make labels literal and single-line.
+       def pathlink:
+         tostring as $p
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
+           + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
        def kept:
          (.status == "new")
          and ((.confidence | type) != "number" or .confidence >= 0.5);
@@ -120,8 +126,7 @@ generate_todo_md() {
              + "- **Location:** " + disp(.primary_location) + "\n"
              + (if (.markdown_path == null or .markdown_path == "")
                 then ""
-                else "- **Details:** [" + (.markdown_path | tostring)
-                       + "](" + (.markdown_path | tostring) + ")\n"
+                else "- **Details:** " + (.markdown_path | pathlink) + "\n"
                 end)
            )
        ) as $entries
@@ -213,6 +218,12 @@ generate_summary_md() {
        def rankt: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
+       # Keep destinations exact; make labels literal and single-line.
+       def pathlink:
+         tostring as $p
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
+           + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
 
        ( map(select(.status != "duplicate"))
          | map(. + {_risk: (rank0 * conf), _rankt: rankt, _conf: conf})
@@ -228,8 +239,7 @@ generate_summary_md() {
              + "- **Location:** " + disp(.value.primary_location) + "\n"
              + (if (.value.markdown_path == null or .value.markdown_path == "")
                 then ""
-                else "- **Details:** [" + (.value.markdown_path | tostring)
-                       + "](" + (.value.markdown_path | tostring) + ")\n"
+                else "- **Details:** " + (.value.markdown_path | pathlink) + "\n"
                 end)
            )
        ) as $entries
@@ -330,6 +340,12 @@ generate_needs_review_md() {
        def rank: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
+       # Keep destinations exact; make labels literal and single-line.
+       def pathlink:
+         tostring as $p
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
+           + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
        def vobj: (if (.validation | type) == "object" then .validation else {} end);
        # Collect every matched review reason (a finding may match several).
        # P3 mirrors generate_todo_md exactly: THRESHOLD 0.5, number-typed guard.
@@ -359,8 +375,7 @@ generate_needs_review_md() {
              + "- **Needs review:** " + (._reasons | join("; ")) + "\n"
              + (if (.markdown_path == null or .markdown_path == "")
                 then ""
-                else "- **Details:** [" + (.markdown_path | tostring)
-                       + "](" + (.markdown_path | tostring) + ")\n"
+                else "- **Details:** " + (.markdown_path | pathlink) + "\n"
                 end)
            )
        ) as $entries
@@ -454,6 +469,12 @@ generate_duplicates_md() {
        def rank: {critical:3, high:2, medium:1, low:0}[(.severity // "")] // -1;
        def conf: (if (.confidence | type) == "number" then .confidence else 0.5 end);
        def disp(v): (if (v == null or v == "") then $ph else (v | tostring) end);
+       # Keep destinations exact; make labels literal and single-line.
+       def pathlink:
+         tostring as $p
+         | "[" + ($p | gsub("[\r\n]"; " ")
+             | gsub("(?<c>[\\\\\\[\\]<>`*_!&])"; "\u005c" + .c))
+           + "](" + ($p | split("/") | map(@uri) | join("/")) + ")";
        # Reading A: a merged group is a record whose also_reported_by is a NON-EMPTY
        # array. A missing / null / non-array value degrades to [] (a singleton).
        def arb: (if (.also_reported_by | type) == "array" then .also_reported_by else [] end);
@@ -478,16 +499,14 @@ generate_duplicates_md() {
                      "  - " + disp(.domain) + "/" + disp(.lens)
                      + (if (.markdown_path == null or .markdown_path == "")
                         then ""
-                        else " ([" + (.markdown_path | tostring)
-                               + "](" + (.markdown_path | tostring) + "))"
+                        else " (" + (.markdown_path | pathlink) + ")"
                         end)
                    )
                  | join("\n")
                ) + "\n"
              + (if (.markdown_path == null or .markdown_path == "")
                 then ""
-                else "- **Details:** [" + (.markdown_path | tostring)
-                       + "](" + (.markdown_path | tostring) + ")\n"
+                else "- **Details:** " + (.markdown_path | pathlink) + "\n"
                 end)
            )
        ) as $entries
