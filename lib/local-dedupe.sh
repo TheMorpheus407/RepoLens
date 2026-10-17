@@ -240,7 +240,7 @@ dedupe_local_markdown() {
 
   # 4. Mark each duplicate group in place.
   local group canon_idx canon_md canon_rel contrib_idx_json m dup_md
-  local arb tsv clens cdomain cmd crel groups_marked=0
+  local arb groups_marked=0
   while IFS= read -r group; do
     if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
       rm -rf "$tmpdir"
@@ -276,20 +276,24 @@ dedupe_local_markdown() {
     fi
 
     # 4b. Build the sorted also_reported_by: YAML list + annotate the canonical.
-    arb='also_reported_by:'
-    tsv="$(jq -r --argjson idx "$contrib_idx_json" '
+    # Keep empty values and filename bytes in JSON throughout; @tsv plus
+    # whitespace-IFS read drops empty fields and leaves escaped paths behind.
+    # JSON-quoted scalars are also valid YAML. Ordinary safe relative paths keep
+    # their familiar plain representation; special filename bytes are quoted.
+    if ! arb="$(jq -r --argjson idx "$contrib_idx_json" --arg root "${output_dir%/}/" '
       [ $idx[] as $k
         | { lens: (.[$k].lens // ""), domain: (.[$k].domain // ""), md: (.[$k].markdown_path // "") } ]
       | sort_by(.domain, .lens, .md)
-      | .[] | [.lens, .domain, .md] | @tsv
-    ' "$manifest")" || tsv=""
-    while IFS=$'\t' read -r clens cdomain cmd; do
-      [[ -n "${clens}${cdomain}${cmd}" ]] || continue
-      crel="${cmd#"${output_dir%/}"/}"
-      arb+=$'\n'"  - lens: ${clens}"
-      arb+=$'\n'"    domain: ${cdomain}"
-      arb+=$'\n'"    markdown_path: ${crel}"
-    done <<< "$tsv"
+      | "also_reported_by:", (.[]
+          | "  - lens: " + (.lens | @json)
+            + "\n    domain: " + (.domain | @json)
+            + "\n    markdown_path: " + (.md | ltrimstr($root)
+                | if test("^[A-Za-z0-9_./-]+$") then . else @json end))
+    ' "$manifest")"; then
+      echo "dedupe_local_markdown: failed to serialize contributor provenance" >&2
+      rm -rf "$tmpdir"
+      return 1
+    fi
 
     if ! _local_dedupe_mark_file "$canon_md" "$arb" \
       "> Also reported by other lenses; see \`also_reported_by\` in the frontmatter above."; then
