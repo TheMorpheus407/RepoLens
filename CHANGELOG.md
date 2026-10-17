@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Promote certified handoffs and private parser outputs to their exact paths, refusing directory races instead of silently placing dispatch files inside directories and falling back to old investigations (repolens-r12-p3-2).
+
 - Reject incomplete saved dispatch reads across LENS, CUSTOM, GENERIC and directive-presence parsing before executing any entry, stopping rounds safely on EIO and retaining resumable handoffs without parent-side read loops or source-sized here-string temporary files (repolens-r12-p1-1).
 
 - Refuse symlinked scope-rejection diagnostic destinations and publish diagnostics atomically on GNU and BSD/macOS, staging beside each finding across nested mount boundaries and preserving external files and pending findings for retry (repolens-r12-p5-5).
