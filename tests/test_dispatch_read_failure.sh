@@ -24,7 +24,7 @@ PASS=0 FAIL=0
 check() { if "$@"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); printf 'FAIL: %s\n' "$*" >&2; fi; }
 log_info() { :; }
 log_warn() { :; }
-set_stop_reason() { :; }
+set_stop_reason() { printf '%s\n' "$2" > "$LOG_BASE/stop-reason"; }
 record_lens() { :; }
 compose_prompt() { printf 'mock prompt\n'; }
 run_agent() { printf 'LENS: injection\nLENS: xss-csrf\nHYPOTHESES_TO_VERIFY:\nInspect both.\n'; }
@@ -36,14 +36,27 @@ build_round_digest() { mkdir -p "$1"; printf 'digest\n' > "$1/digest.md"; }
 LOCAL_MODE=false PARALLEL=false RUN_ID=probe RESUME_RUN_ID='' MODE=audit AGENT=mock
 LENSES_DIR="$ROOT/prompts/lenses" PROJECT_PATH="$ROOT"
 LENSES=(security/injection)
-for fault in none empty partial; do
+for fault in none empty partial late-custom late-generic late-presence; do
   LOG_BASE="$TMP/$fault"
   SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
   mkdir -p "$LOG_BASE"
+  printf '0\n' > "$LOG_BASE/dispatch-reads"
+  fail_read=1
+  case "$fault" in
+    late-custom) fail_read=2 ;;
+    late-generic) fail_read=3 ;;
+    late-presence) fail_read=4 ;;
+  esac
   cat() {
     if [[ "${!#}" == "$LOG_BASE/rounds/round-1/dispatch.md" && "$fault" != none ]]; then
-      [[ "$fault" != partial ]] || printf 'LENS: injection\n'
-      return 42
+      local count
+      count="$(command cat "$LOG_BASE/dispatch-reads")"
+      count=$((count + 1))
+      printf '%s\n' "$count" > "$LOG_BASE/dispatch-reads"
+      if (( count == fail_read )); then
+        [[ "$fault" == empty ]] || printf 'LENS: injection\n'
+        return 42
+      fi
     fi
     command cat "$@"
   }
@@ -57,6 +70,13 @@ for fault in none empty partial; do
     check test -f "$LOG_BASE/rounds/round-2/.completed"
   else
     check test "$rc" -ne 0
+    case "$fault" in
+      late-custom) expected_reason="custom-lens-materialization-failed" ;;
+      late-generic) expected_reason="generic-dispatch-failed" ;;
+      *) expected_reason="lens-dispatch-read-failed" ;;
+    esac
+    check test "$ROUNDS_FAILURE_REASON" = "$expected_reason"
+    check grep -Fxq "$expected_reason" "$LOG_BASE/stop-reason"
     check test "$(wc -l < "$LOG_BASE/executed")" -eq 1
     check test ! -e "$LOG_BASE/rounds/round-2/.completed"
     check test -s "$LOG_BASE/rounds/round-1/meta-orchestrator-output.txt"
@@ -71,7 +91,60 @@ for fault in none empty partial; do
 done
 # A successful read without a final linefeed retains the final accepted lens.
 printf 'LENS: injection\nLENS: xss-csrf' > "$TMP/unterminated"
-entries="$(_rounds_meta_dispatch_lens_entries "$TMP/unterminated")"
-check test "$(printf '%s\n' "$entries" | wc -l)" -eq 2
+if entries="$(_rounds_meta_dispatch_lens_entries "$TMP/unterminated")"; then
+  check test "$entries" = $'security/injection\nsecurity/xss-csrf'
+else
+  check false
+fi
+# Large, readable dispatches must not need a here-string temporary file.
+# All generated tuples stay small, so this isolates source buffering.
+python3 - "$TMP/large" <<'DATA'
+import sys
+with open(sys.argv[1], 'w') as output:
+    output.write(('# ' + 'x' * 1024 + '\n') * 64)
+    output.write('LENS: injection\nLENS: xss-csrf')
+DATA
+check bash -c '
+  set -euo pipefail
+  source "$1/lib/rounds.sh"
+  LENSES_DIR="$1/prompts/lenses" MODE=audit
+  trap "" XFSZ
+  ulimit -f 0
+  entries="$(_rounds_meta_dispatch_lens_entries "$2")"
+  [[ "$entries" == $'"'"'security/injection\nsecurity/xss-csrf'"'"' ]]
+' _ "$ROOT" "$TMP/large"
+# Every public dispatch parser rejects a failed prefix, even without pipefail.
+printf 'LENS: injection\nGENERIC: role=broader focus="trace retries"\n' > "$TMP/readers"
+for reader in lens generic has; do
+  check bash -c '
+    set -eu
+    source "$1/lib/rounds.sh"
+    LENSES_DIR="$1/prompts/lenses" MODE=audit
+    cat() { builtin printf "LENS: injection\nGENERIC: role=broader\n"; return 42; }
+    rc=0
+    result="$(_rounds_meta_dispatch_"$3"_entries "$2")" || rc=$?
+    [[ "$rc" -ne 0 && -z "$result" ]]
+  ' _ "$ROOT" "$TMP/readers" "$reader" "$TMP/custom-lenses"
+done
+check bash -c '
+  set -eu
+  source "$1/lib/rounds.sh"
+  cat() { builtin printf "CUSTOM: retry-check\n  Draft prompt:\n  Inspect retries.\n"; return 42; }
+  rc=0
+  result="$(_rounds_meta_dispatch_custom_entries "$2" "$3")" || rc=$?
+  [[ "$rc" -ne 0 && -z "$result" ]]
+' _ "$ROOT" "$TMP/readers" "$TMP/custom-lenses"
+# A real read(2) EIO at offset zero is available even under root on Linux.
+if [[ -f /proc/self/mem ]]; then
+  for reader in lens custom generic has; do
+    check bash -c '
+      set -euo pipefail
+      source "$1/lib/rounds.sh"
+      rc=0
+      result="$(_rounds_meta_dispatch_"$2"_entries /proc/self/mem "$3")" || rc=$?
+      [[ "$rc" -ne 0 && -z "$result" ]]
+    ' _ "$ROOT" "$reader" "$TMP/custom-lenses"
+  done
+fi
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
