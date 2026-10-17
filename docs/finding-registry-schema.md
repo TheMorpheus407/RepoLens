@@ -89,14 +89,14 @@ is an **empty `findings.jsonl`** (zero lines) plus a **header-only `findings.csv
 After a successful empty local rebuild, finalization removes stale `TODO.md`,
 `SUMMARY.md`, `NEEDS_REVIEW.md` and `DUPLICATES.md`. Failed or interrupted rebuilds
 retain existing reports. Failed traversal or an unreadable local finding also
-preserves the prior registry, CSV and reports. Registry assembly also rejects
-failed reads of staged manifest or local records, including reads that return
-partial records; it discards the candidate before replacing JSONL or CSV.
-This also applies when enumeration
+preserves the prior registry, CSV and reports. This also applies when enumeration
 succeeds but the staged file list disappears, becomes unreadable or is truncated
-before ingestion finishes. A repaired retry rebuilds the artifacts from the current
-findings. Branch-review scope filtering
-aborts on a failed read without quarantining that source. Readable malformed
+before ingestion finishes. Registry assembly checks the exit status of `cat` when
+appending staged manifest or local records. A nonzero status, including after
+partial output, discards the candidate before replacing JSONL or CSV. Concurrent
+truncation that leaves valid JSONL and a successful `cat` exit is not detected.
+A repaired retry rebuilds the artifacts from the current findings. Branch-review
+scope filtering aborts on a failed read without quarantining that source. Readable malformed
 frontmatter still produces a warning and is skipped. Each local finding is
 parsed from one complete temporary snapshot created with owner-only permissions;
 normal success and failure paths remove the snapshot. Raw Markdown evidence is
