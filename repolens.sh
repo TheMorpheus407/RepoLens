@@ -5399,6 +5399,17 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "${NO_VERIFIER:-true}" != "true" && "${REPOLENS_
       log_warn "Verifier: failed — synthesizer will proceed without verification filtering"
     fi
   fi
+elif [[ "$RUN_ROUNDS_RC" -eq 0 && "${NO_VERIFIER:-true}" == "true" && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+  # A disabled verifier must not leave decisions from a previous attempt active
+  # in either the synthesis prompt or its manifest validation.
+  if ! rm -f "$LOG_BASE/final/verification.json"; then
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]]; then
+      log_warn "Verifier: cannot retire disabled verification results — stopping before synthesis"
+      REPOLENS_FINAL_STATE="failed"
+      set_stop_reason "$SUMMARY_FILE" "verifier-preparation-failed"
+      RUN_ROUNDS_RC=1
+    fi
+  fi
 fi
 
 # --- Synthesizer (post-rounds, post-verifier) ---
