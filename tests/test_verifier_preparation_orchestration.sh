@@ -92,5 +92,56 @@ for fault in inventory cleanup setup ordinary; do
     check 'ordinary failure permits filing the fresh manifest' test -e "$LOG_BASE/filing-called"
   fi
 done
+# A repaired retry may explicitly disable verification. Saved decisions from
+# the preparation failure must no longer filter the otherwise identical source.
+LOCAL_MODE=true
+LOG_BASE="$PROJECT_PATH/logs/probe"
+SUMMARY_FILE="$LOG_BASE/summary.json"
+source_path='logs/probe/rounds/round-1/lens-outputs/security/injection/001-mock-finding-injection-r1.md'
+mkdir -p "$(dirname "$PROJECT_PATH/$source_path")" "$LOG_BASE/final"
+printf 'Current finding with evidence README.md:1\n' > "$PROJECT_PATH/$source_path"
+printf 'Fixture source\n' > "$PROJECT_PATH/README.md"
+compose_prompt() { printf 'RepoLens Synthesizer run `probe`\n'; }
+run_agent() { : > "$LOG_BASE/model-called"; bash "$REPO/tests/mock-agent.sh" "$2"; }
+for retry in repaired cleanup interrupted failed-round; do
+  jq -n --arg path "$source_path" \
+    '[{finding_id:"saved",status:"WRONG",notes:"prior attempt",source_finding_path:$path}]' \
+    > "$LOG_BASE/final/verification.json"
+  printf '[{"cluster_id":"saved","title":"Saved publication"}]\n' > "$LOG_BASE/final/manifest.json"
+  printf '[{"type":"comment","issue_number":1,"body":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+  command rm -f "$LOG_BASE/model-called" "$LOG_BASE/stop-reason"
+  before_verification="$(sha256sum < "$LOG_BASE/final/verification.json")"
+  before_manifest="$(sha256sum < "$LOG_BASE/final/manifest.json")"
+  before_actions="$(sha256sum < "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  fault=inventory NO_VERIFIER=false RUN_ROUNDS_RC=0 REPOLENS_FINAL_STATE=finished
+  source "$FIXTURE/phases.sh" > "$LOG_BASE/phase.log" 2>&1
+  check "$retry setup retains decisions after inventory failure" same_bytes "$LOG_BASE/final/verification.json" "$before_verification"
+  check "$retry setup stops before synthesis" test ! -e "$LOG_BASE/model-called"
+  fault=none NO_VERIFIER=true RUN_ROUNDS_RC=0 REPOLENS_FINAL_STATE=finished
+  case "$retry" in
+    cleanup) fault=cleanup ;;
+    interrupted) REPOLENS_FINAL_STATE=interrupted; RUN_ROUNDS_RC=130 ;;
+    failed-round) REPOLENS_FINAL_STATE=failed; RUN_ROUNDS_RC=1 ;;
+  esac
+  source "$FIXTURE/phases.sh" >> "$LOG_BASE/phase.log" 2>&1
+  if [[ "$retry" == repaired ]]; then
+    check 'disabled retry succeeds with the previously WRONG source' test "$RUN_ROUNDS_RC" -eq 0
+    check 'disabled retry retires saved decisions' test ! -e "$LOG_BASE/final/verification.json"
+    check 'disabled retry publishes the valid synthesis' jq -e 'length == 1' "$LOG_BASE/final/manifest.json"
+    check 'disabled retry invokes synthesis' test -e "$LOG_BASE/model-called"
+  else
+    check "$retry leaves this attempt unsuccessful" test "$RUN_ROUNDS_RC" -ne 0
+    check "$retry preserves decisions" same_bytes "$LOG_BASE/final/verification.json" "$before_verification"
+    check "$retry preserves manifest" same_bytes "$LOG_BASE/final/manifest.json" "$before_manifest"
+    check "$retry preserves cross-link actions" same_bytes "$LOG_BASE/final/cross-link-actions.preserved.json" "$before_actions"
+    check "$retry admits no synthesis" test ! -e "$LOG_BASE/model-called"
+    if [[ "$retry" == cleanup ]]; then
+      check 'disabled cleanup failure uses preparation stop reason' test "$(cat "$LOG_BASE/stop-reason")" = verifier-preparation-failed
+      check 'disabled cleanup failure marks attempt failed' test "$REPOLENS_FINAL_STATE" = failed
+    elif [[ "$retry" == interrupted ]]; then
+      check 'disabled retirement preserves interruption' test "$REPOLENS_FINAL_STATE" = interrupted
+    fi
+  fi
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 test "$FAIL" -eq 0
