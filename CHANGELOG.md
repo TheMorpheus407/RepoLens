@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Apply branch-scope filtering through an explicit symlink finding root, matching registry ingestion without following nested symlinks (repolens-r9-p3-3).
+
 - Preserve empty contributor fields and literal filename bytes in canonical local-dedupe provenance, including relative paths under backslash-containing output roots and YAML-safe escapes for Unicode controls and line breaks (repolens-r9-p3-2).
 
 - Encode finding and contributor paths in all Markdown report links so spaces and special filename characters resolve to their original files; keep label markup literal and flatten label line breaks without changing destinations (repolens-r9-p2-3).

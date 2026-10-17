@@ -286,7 +286,9 @@ branch_scope_filter_directory() {
   files="$(mktemp "$dir/.branch-scope-files.XXXXXX")" || return 1
   # An empty record cannot be a filename. It proves the reader consumed the
   # successful producer's entire list, rather than stopping on an I/O error.
-  if ! { find "$dir" -type f -name '*.md' -print0 && printf '\0'; } > "$files"; then
+  # Match registry ingestion: follow an explicitly supplied symlink root while
+  # leaving nested directory/file symlinks unvisited.
+  if ! { find -H "$dir" -type f -name '*.md' -print0 && printf '\0'; } > "$files"; then
     printf 'branch_scope_filter_directory: cannot enumerate findings: %s\n' "$dir" >&2
     rm -f -- "$files"
     return 1
