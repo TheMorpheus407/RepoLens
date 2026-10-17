@@ -65,10 +65,15 @@ def publish(plan, output, receipt, run_id):
         relative = f"generic/{source_key}/{row['segment']:03d}.md"
         if relative in desired:
             raise ValueError("duplicate Generic delivery segment")
-        # Scalar replacements precede the retained original metadata. The body
-        # and every remaining metadata line retain the raw segment's bytes.
-        fm = re.sub(r"^(?:title|lens|generic_source_id|source_finding_path|source_finding_segment):[^\n]*\n?",
-                    "", row["frontmatter"], flags=re.M)
+        # Header and source metadata share a root mapping at column zero.
+        # Preserve nested indentation relative to that root and keep body bytes.
+        fm = row["frontmatter"]
+        indents = re.findall(r"^([ \t]*)[^#\s-][^:\n]*:", fm, flags=re.M)
+        root_indent = min((len(prefix) for prefix in indents), default=0)
+        if root_indent:
+            fm = re.sub(rf"^[ \t]{{{root_indent}}}", "", fm, flags=re.M)
+        fm = re.sub(r"^(?:title|lens|generic_source_id|source_finding_path|source_finding_segment)[ \t]*:[^\n]*\n?",
+                    "", fm, flags=re.M)
         header = (
             f"title: {json.dumps(row['title'], ensure_ascii=False)}\n"
             f"lens: {json.dumps(row['lens'], ensure_ascii=False)}\n"
