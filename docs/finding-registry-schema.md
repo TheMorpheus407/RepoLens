@@ -75,8 +75,13 @@ After process termination, resume restores that interrupted transaction before
 retrying saved evidence. Recovery refuses changed content or nested symlinks,
 preserving the pending record and backups for repair. This covers process crashes;
 power-loss durability is not guaranteed.
-Failed delivery keeps the previous registry and reports; resume retries it from
-saved evidence without rerunning completed investigations.
+Failed requested Generic delivery keeps the previous registry and reports and
+fails the invocation with a nonzero exit and `generic-delivery-failed` reason.
+The terminal status, attempt history and completion event reflect that failure;
+accepted interruption signals keep precedence. Repair the destination and use
+the printed resume hint to retry saved evidence without rerunning completed
+investigations. Successful delivery clears its saved failure reason. Optional
+report rendering remains non-fatal.
 
 An explicit `--output` uses a user-selected shared Markdown directory, which may
 overlap the round-only verifier/synthesizer inventory. It retains direct Markdown

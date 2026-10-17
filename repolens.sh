@@ -1963,6 +1963,10 @@ resolve_why_stopped() {
     esac
     return 0
   fi
+  if [[ "${ROUNDS_FAILURE_REASON:-}" == generic-delivery-failed ]]; then
+    printf '%s' "$ROUNDS_FAILURE_REASON"
+    return 0
+  fi
   reason="$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null || printf '')"
   if [[ -n "$reason" ]]; then
     printf '%s' "$reason"
@@ -5588,6 +5592,16 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
   if ! export_generic_local_findings "$OUTPUT_DIR"; then
     _local_delivery_ready=false
     log_warn "Generic delivery incomplete; preserving previous registry/reports. Repair output access and resume to retry saved findings."
+    # Requested Markdown delivery is required even though optional report
+    # rendering below is non-fatal. Retain an earlier failure or parent signal.
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted && "${RUN_ROUNDS_RC:-0}" -eq 0 ]]; then
+      REPOLENS_FINAL_STATE=failed
+      RUN_ROUNDS_RC=1
+      ROUNDS_FAILURE_REASON=generic-delivery-failed
+    fi
+  elif [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
+      && "$(jq -r '.stopped_reason // empty' "$SUMMARY_FILE" 2>/dev/null)" == generic-delivery-failed ]]; then
+    clear_stop_reason "$SUMMARY_FILE" || log_warn "Unable to clear recovered Generic delivery failure reason"
   fi
 fi
 
@@ -5711,6 +5725,15 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
 fi
 
 unset _local_registry_ready _duplicate_report_ready _local_generic_raw_root _local_delivery_ready _local_registry_manifest _local_registry_source
+
+# Persist required delivery failure after the artifact-preservation boundary.
+# Failed accounting admission leaves the summary inventory snapshot intact;
+# recording the invocation outcome is a separate, best-effort terminal write.
+if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
+    && "${ROUNDS_FAILURE_REASON:-}" == generic-delivery-failed ]]; then
+  set_stop_reason "$SUMMARY_FILE" "$ROUNDS_FAILURE_REASON" \
+    || log_warn "Unable to persist Generic delivery failure reason"
+fi
 
 apply_rate_limit_abort_final_state || true
 set_summary_health "$SUMMARY_FILE" "$REPOLENS_DEGENERATE_THRESHOLD"
@@ -5873,6 +5896,9 @@ if [[ -f "$LOG_BASE/.agent-no-progress-abort" || -f "$LOG_BASE/.systemic-failure
 fi
 
 if [[ "$RUN_ROUNDS_RC" -ne 0 ]]; then
+  if [[ "${ROUNDS_FAILURE_REASON:-}" == generic-delivery-failed ]]; then
+    print_resume_hint
+  fi
   exit "$RUN_EXIT_CODE"
 fi
 
