@@ -5540,10 +5540,10 @@ finalize_summary "$SUMMARY_FILE"
 _local_delivery_ready=true
 _local_generic_raw_root=""
 # Default multi-round output is raw evidence until synthesis accepts it. A
-# missing required manifest must preserve prior reports, never re-ingest raw
-# findings that verification may already have rejected.
+# failed attempt or missing required manifest must preserve prior reports,
+# never consume saved synthesis or raw findings verification may have rejected.
 if $LOCAL_MODE && ! ${OUTPUT_DIR_SET:-false} && [[ "$MODE" == bugreport && "${ROUNDS:-1}" -gt 1 ]] \
-    && [[ ! -f "$LOG_BASE/final/manifest.json" ]]; then
+    && { [[ "${RUN_ROUNDS_RC:-0}" -ne 0 ]] || [[ ! -f "$LOG_BASE/final/manifest.json" ]]; }; then
   _local_delivery_ready=false
   log_warn "Local reports: required synthesis unavailable; preserving previous registry/reports"
 fi

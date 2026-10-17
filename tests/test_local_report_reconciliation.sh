@@ -142,6 +142,73 @@ case_failed_synthesis() (
   done
 )
 
+# Failed preparation may retain a valid old manifest. Neither an empty nor a
+# nonempty saved manifest authorizes replacing reports during a failed retry.
+case_retained_manifest_failure() (
+  local failure saved artifact before
+  for failure in synthesis-inventory verifier-preparation rounds; do
+    for saved in empty nonempty; do
+      (
+        LOG_BASE="$FIXTURE/retained-$failure-$saved"
+        SUMMARY_FILE="$LOG_BASE/summary.json"
+        RUN_ID=probe MODE=bugreport ROUNDS=2 AGENT=mock LOCAL_MODE=true OUTPUT_DIR_SET=false
+        HUMAN_REVIEW=true NO_VERIFIER=false REPOLENS_FINAL_STATE=finished RUN_ROUNDS_RC=0
+        PROJECT_PATH="$FIXTURE"
+        OUTPUT_DIR="$LOG_BASE/rounds/round-1/lens-outputs"
+        mkdir -p "$OUTPUT_DIR/security/injection" "$LOG_BASE/final"
+        printf '{}\n' > "$SUMMARY_FILE"
+        printf -- '---\ntitle: Current raw evidence\nseverity: high\ndomain: security\nlens: injection\n---\nEvidence: src/probe.sh:1\n' \
+          > "$OUTPUT_DIR/security/injection/001-finding.md"
+        jq -n --arg source "$OUTPUT_DIR/security/injection/001-finding.md" \
+          '[{cluster_id:"saved",title:"Saved publication",severity:"high",domain:"security",lens:"injection",root_cause_category:"validation",source_finding_paths:[$source],cross_link_actions:[],granularity:"independent",verification_status:"verified",body:"Evidence: src/probe.sh:1",proposed_labels:[],dedup_against_existing:[]}]' \
+          > "$LOG_BASE/final/manifest.json"
+        optional_local_finalization
+        # An empty synthesis may have been saved before an earlier registry
+        # write failed, leaving the last successful reports in place.
+        if [[ "$saved" == empty ]]; then printf '[]\n' > "$LOG_BASE/final/manifest.json"; fi
+        if [[ "$failure" == verifier-preparation ]]; then printf '[]\n' > "$LOG_BASE/final/verification.json"; fi
+        for artifact in findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md HUMAN_REVIEW.md; do
+          test -f "$LOG_BASE/final/$artifact"
+        done
+        before="$(sha256sum "$LOG_BASE/final/"*.json "$LOG_BASE/final/"*.md "$LOG_BASE/final/findings."*)"
+        compose_prompt() { printf 'mock model prompt'; }
+        run_agent() { touch "$LOG_BASE/unexpected-model-call"; return 99; }
+        verifier_response() { printf '[]\n'; }
+        _VERIFIER_AGENT_CALLBACK=verifier_response
+        case "$failure" in
+          synthesis-inventory)
+            NO_VERIFIER=true
+            find() {
+              if [[ "${1:-}" == "$LOG_BASE/rounds" ]]; then
+                printf 'Injected synthesis inventory failure\n' >&2
+                return 42
+              fi
+              command find "$@"
+            }
+            ;;
+          verifier-preparation) AGENT='' ;;
+          rounds) RUN_ROUNDS_RC=1 REPOLENS_FINAL_STATE=failed ;;
+        esac
+        # shellcheck source=/dev/null
+        source <(sed -n '/^# --- Verifier (post-rounds/,/^# --- Finalize ---/p' "$REPO/repolens.sh")
+        test "$RUN_ROUNDS_RC" -ne 0
+        test "$REPOLENS_FINAL_STATE" = failed
+        test ! -e "$LOG_BASE/unexpected-model-call"
+        if [[ "$failure" == verifier-preparation ]]; then
+          test "$(jq -r .stopped_reason "$SUMMARY_FILE")" = verifier-preparation-failed
+        fi
+        test -f "$LOG_BASE/final/manifest.json"
+        optional_local_finalization
+        if [[ "$(sha256sum "$LOG_BASE/final/"*.json "$LOG_BASE/final/"*.md "$LOG_BASE/final/findings."*)" != "$before" ]]; then
+          printf 'FAIL: %s retry with retained %s manifest changed previous reports\n' "$failure" "$saved" >&2
+          exit 1
+        fi
+        printf 'Retained %s manifest and reports after %s\n' "$saved" "$failure"
+      )
+    done
+  done
+)
+
 case_empty_resume() (
   LOG_BASE="$FIXTURE/empty-resume"
   OUTPUT_DIR="$LOG_BASE/output"
@@ -302,6 +369,7 @@ case_empty_preservation() (
 )
 
 case "${1:-all}" in
+  retained-manifest-failure) case_retained_manifest_failure ;;
   failed-synthesis) case_failed_synthesis ;;
   verification) case_local_verification ;;
   empty-resume) case_empty_resume ;;
@@ -313,6 +381,7 @@ case "${1:-all}" in
   manifest-links-project) case_manifest_metadata links-project ;;
   manifest-duplicates) case_manifest_metadata duplicates ;;
   all)
+    case_retained_manifest_failure
     case_failed_synthesis
     case_local_verification
     case_empty_resume

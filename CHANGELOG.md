@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve local registry and action reports when required multi-round synthesis fails, preventing rejected raw findings from becoming new tasks (repolens-r11-p2-1).
+- Preserve local registry and action reports when required multi-round synthesis fails, including retries that retain an older manifest, preventing rejected raw findings from becoming new tasks (repolens-r11-p2-1).
 
 - Preserve canonical duplicate paths with quotes, whitespace and line breaks through YAML-safe serialization and JSON-string decoding, retaining one actionable finding and contributor provenance. Preserve decoded trailing line feeds so unindexed targets cannot suppress a different finding (repolens-r10-p3-2, repolens-r10-p5-1).
 
