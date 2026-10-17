@@ -110,8 +110,9 @@ check bash -c '
   LENSES_DIR="$1/prompts/lenses" MODE=audit
   trap "" XFSZ
   ulimit -f 0
-  entries="$(_rounds_meta_dispatch_lens_entries "$2")"
-  [[ "$entries" == $'"'"'security/injection\nsecurity/xss-csrf'"'"' ]]
+  rc=0
+  entries="$(_rounds_meta_dispatch_lens_entries "$2")" || rc=$?
+  [[ "$rc" -eq 0 && "$entries" == $'"'"'security/injection\nsecurity/xss-csrf'"'"' ]]
 ' _ "$ROOT" "$TMP/large"
 # Every public dispatch parser rejects a failed prefix, even without pipefail.
 printf 'LENS: injection\nGENERIC: role=broader focus="trace retries"\n' > "$TMP/readers"
