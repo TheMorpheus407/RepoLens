@@ -115,22 +115,29 @@ for fault in bsd-mv cross-device stage-write publish; do
   write_finding "$rejected" 'Rejected finding' untouched.sh
   cp -- "$rejected" "$base/original"
   printf 'previous diagnostic\n' > "$rejected.out-of-scope.reason"
-  mv() {
-    local arg
-    if [[ "$fault" == bsd-mv ]]; then
-      for arg in "$@"; do
-        if [[ "$arg" == -T ]]; then
-          printf 'mv: illegal option -- T\n' >&2
-          return 64
-        fi
-      done
-    fi
-    if [[ "$fault" == publish && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
-      : > "$base/publication-attempted"
-      return 1
-    fi
-    command mv "$@"
-  }
+  filter_path="$PATH"
+  if [[ "$fault" == bsd-mv ]]; then
+    # Use an executable mock so this contract stays active even when the
+    # filter has no mv call for ShellCheck to follow through sourced code.
+    mkdir "$base/bin"
+    ln -s "$(command -v mv)" "$base/bin/real-mv"
+    cat > "$base/bin/mv" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  if [[ "$arg" == -T ]]; then
+    printf 'mv: illegal option -- T\n' >&2
+    exit 64
+  fi
+done
+exec "${0%/*}/real-mv" "$@"
+MOCK
+    chmod +x "$base/bin/mv"
+    filter_path="$base/bin:$PATH"
+    rc=0
+    PATH="$filter_path" mv -T "$rejected" "$rejected.out-of-scope" 2>/dev/null || rc=$?
+    check "BSD mv mock rejects unsupported option" test "$rc" -eq 64
+  fi
   python3() {
     # Model a mount boundary at the nested finding directory. Execute the real
     # publication helper, but make rename across that boundary report EXDEV.
@@ -169,8 +176,8 @@ exec(code)
     builtin printf "$@"
   }
   rc=0
-  branch_scope_filter_directory "$base/real" || rc=$?
-  unset -f mv python3 printf
+  PATH="$filter_path" branch_scope_filter_directory "$base/real" || rc=$?
+  unset -f python3 printf
   if [[ "$fault" == bsd-mv || "$fault" == cross-device ]]; then
     if [[ "$fault" == cross-device ]]; then
       check "cross-device reaches real publication helper" test -f "$base/publication-attempted"
