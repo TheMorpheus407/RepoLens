@@ -386,17 +386,17 @@ _ledger_trim_yaml_value() {
 }
 
 # _ledger_has_frontmatter <file>
-#   Returns 0 iff the file's first line is exactly `---` AND a closing `---`
-#   line exists below it. This is the validity gate used to skip malformed /
-#   frontmatter-less files. The closing-delimiter flag guards the END exit so a
-#   well-formed block reports success even though the rule already returned.
+#   Returns 0 for a complete leading frontmatter block, 1 for readable malformed
+#   input, and 2 for a reader failure. Read through EOF and report syntax as data:
+#   an END exit for invalid syntax would mask awk's own IO-error status.
 _ledger_has_frontmatter() {
-  awk '
-    NR==1 && $0!="---" { exit 1 }
-    NR==1 { next }
-    $0=="---" { found=1; exit 0 }
-    END { if (!found) exit 1 }
-  ' "$1"
+  local validity
+  validity="$(awk '
+    NR==1 { leading=($0=="---"); next }
+    leading && $0=="---" { found=1 }
+    END { print (leading && found) ? "valid" : "invalid" }
+  ' "$1")" || return 2
+  [[ "$validity" == valid ]]
 }
 
 # _ledger_frontmatter_scalar <file> <key>
@@ -418,6 +418,15 @@ _ledger_frontmatter_scalar() {
       exit 0
     }
   ' "$file"
+}
+
+# _ledger_frontmatter_value <file> <key>
+#   Propagate the reader status before trimming/de-quoting a scalar. Nested
+#   command substitutions otherwise hide an IO failure behind the trim helper.
+_ledger_frontmatter_value() {
+  local raw
+  raw="$(_ledger_frontmatter_scalar "$1" "$2")" || return 2
+  _ledger_trim_yaml_value "$raw"
 }
 
 # build_findings_jsonl_from_local <output_dir> <out_jsonl_path> [generic_raw_root]
@@ -494,7 +503,7 @@ build_findings_jsonl_from_local() {
   fi
   # Unlike the projected metadata, this file holds the complete private body.
   # mktemp creates it exclusively with owner-only permissions, regardless of umask.
-  local ingest_failed=0 list_complete=0 snapshot
+  local ingest_failed=0 list_complete=0 snapshot frontmatter_rc raw_value
   if ! snapshot="$(mktemp "$tmp.source.XXXXXX")"; then
     rm -f "$tmp" "$tmp.files"
     return 1
@@ -512,26 +521,35 @@ build_findings_jsonl_from_local() {
       break
     fi
     # Skip + warn (not fatal) when there is no valid leading frontmatter block.
-    if ! _ledger_has_frontmatter "$snapshot"; then
+    if _ledger_has_frontmatter "$snapshot"; then
+      :
+    else
+      frontmatter_rc=$?
+      if (( frontmatter_rc != 1 )); then
+        echo "build_findings_jsonl_from_local: cannot read snapshot: $file" >&2
+        ingest_failed=1
+        break
+      fi
       echo "build_findings_jsonl_from_local: no valid frontmatter, skipping: $file" >&2
       continue
     fi
 
-    title="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" title)")"
-    severity="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" severity)")"
-    domain="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" domain)")"
-    lens="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" lens)")"
-    type_raw="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" type)")"
-    status="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" status)")"
+    title="$(_ledger_frontmatter_value "$snapshot" title)" || { ingest_failed=1; break; }
+    severity="$(_ledger_frontmatter_value "$snapshot" severity)" || { ingest_failed=1; break; }
+    domain="$(_ledger_frontmatter_value "$snapshot" domain)" || { ingest_failed=1; break; }
+    lens="$(_ledger_frontmatter_value "$snapshot" lens)" || { ingest_failed=1; break; }
+    type_raw="$(_ledger_frontmatter_value "$snapshot" type)" || { ingest_failed=1; break; }
+    status="$(_ledger_frontmatter_value "$snapshot" status)" || { ingest_failed=1; break; }
     [[ "$status" == duplicate ]] || status=new
     duplicate_of=""
     if [[ "$status" == duplicate ]]; then
-      duplicate_of="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" duplicate_of)")"
+      duplicate_of="$(_ledger_frontmatter_value "$snapshot" duplicate_of)" || { ingest_failed=1; break; }
     fi
     # Complexity (#385): optional 1..5 routing tier from the finding frontmatter.
     # The normalizer trims/de-quotes and range-checks; absent or out-of-range
     # yields "" -> stored as null (parity with the nullable confidence slot).
-    cx="$(_ledger_complexity_normalize "$(_ledger_frontmatter_scalar "$snapshot" complexity)")"
+    raw_value="$(_ledger_frontmatter_scalar "$snapshot" complexity)" || { ingest_failed=1; break; }
+    cx="$(_ledger_complexity_normalize "$raw_value")"
 
     # Directory fallback only when the <domain>/<lens> nesting actually exists.
     # Findings may be nested further in a dispatch-specific directory.
@@ -544,7 +562,7 @@ build_findings_jsonl_from_local() {
       [[ -z "$domain" ]] && domain="${rel%%/*}"
     fi
 
-    generic_source_id="$(_ledger_trim_yaml_value "$(_ledger_frontmatter_scalar "$snapshot" generic_source_id)")"
+    generic_source_id="$(_ledger_frontmatter_value "$snapshot" generic_source_id)" || { ingest_failed=1; break; }
     # Explicit Generic delivery indexes projections once, even when the user
     # chose a destination containing the private multi-segment inventory.
     if [[ -n "$generic_raw_root" && "$domain" == generic && -z "$generic_source_id" ]] \
@@ -553,7 +571,8 @@ build_findings_jsonl_from_local() {
     fi
     if [[ "$domain" == generic && "$generic_source_id" =~ ^[a-f0-9]{64}$ ]]; then
       # Projected blocks may share title/lens while owning separate evidence.
-      title="$(jq -r . <<< "$(_ledger_frontmatter_scalar "$snapshot" title)")" || { ingest_failed=1; break; }
+      raw_value="$(_ledger_frontmatter_scalar "$snapshot" title)" || { ingest_failed=1; break; }
+      title="$(jq -r . <<< "$raw_value")" || { ingest_failed=1; break; }
       id="$(finding_id "$domain" "$lens" "$title" "generic:$generic_source_id")"
     else
       id="$(finding_id "$domain" "$lens" "$title")"
