@@ -1107,13 +1107,18 @@ run_synthesizer() {
     branch_scope_filter_directory "$scope_output_dir" || return 1
   done
 
-  if [[ "${MODE:-${REPOLENS_MODE:-}}" != branch-review ]]; then
-    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
-  fi
-
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
-    total_findings=$(find "$rounds_dir" -path '*/lens-outputs/*' -type f -name '*.md' 2>/dev/null | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}')
+    if ! total_findings=$(set -o pipefail; find "$rounds_dir" -path '*/lens-outputs/*' -type f -name '*.md' | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}'); then
+      echo "run_synthesizer: cannot enumerate complete finding inventory" >&2
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 1
+    fi
+  fi
+
+  # An unreadable/partial inventory cannot invalidate the saved publication.
+  if [[ "${MODE:-${REPOLENS_MODE:-}}" != branch-review ]]; then
+    rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json"
   fi
 
   # Zero findings require no model work. Write the canonical empty manifest so
