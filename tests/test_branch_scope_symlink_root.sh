@@ -78,5 +78,120 @@ for variant in physical linked linked-slash; do
   check "$variant repeat filtering succeeds" branch_scope_filter_directory "$dir"
   check "$variant repeat preserves accepted finding" test "$accepted_hash" = "$(cksum < "$base/real/accepted.md")"
 done
+# repolens-r12-p5-5: derived diagnostic paths must not follow file symlinks.
+for variant in physical linked dangling; do
+  base="$TMPROOT/reason-$variant"
+  mkdir -p "$base/real"
+  printf 'unrelated original contents\n' > "$base/external.txt"
+  write_finding "$base/real/rejected.md" 'Rejected finding' untouched.sh
+  source_hash="$(cksum < "$base/real/rejected.md")"
+  target="$base/external.txt"
+  [[ "$variant" != dangling ]] || target="$base/missing.txt"
+  ln -s "$target" "$base/real/rejected.md.out-of-scope.reason"
+  dir="$base/real"
+  if [[ "$variant" == linked ]]; then
+    ln -s "$base/real" "$base/root-link"
+    dir="$base/root-link"
+  fi
+  rc=0
+  branch_scope_filter_directory "$dir" || rc=$?
+  check "$variant diagnostic link fails filtering" test "$rc" -ne 0
+  check "$variant external contents unchanged" grep -Fxq 'unrelated original contents' "$base/external.txt"
+  check "$variant diagnostic remains a symlink" test -L "$base/real/rejected.md.out-of-scope.reason"
+  check "$variant pending finding unchanged" test "$source_hash" = "$(cksum < "$base/real/rejected.md")"
+  check "$variant no quarantine published" test ! -e "$base/real/rejected.md.out-of-scope"
+  check "$variant dangling target not created" test ! -e "$base/missing.txt"
+  rm -- "$base/real/rejected.md.out-of-scope.reason"
+  check "$variant repaired diagnostic retries successfully" branch_scope_filter_directory "$dir"
+  check "$variant retry quarantines finding" test -f "$base/real/rejected.md.out-of-scope"
+done
+# Exercise portable publication and failures after staging, rather than only
+# destinations rejected before mktemp. No native BSD host is needed to model
+# its mv option contract; all ordinary moves still use the real executable.
+for fault in bsd-mv cross-device stage-write publish; do
+  base="$TMPROOT/publication-$fault"
+  mkdir -p "$base/real/nested dir"
+  rejected="$base/real/nested dir/rejected.md"
+  write_finding "$rejected" 'Rejected finding' untouched.sh
+  cp -- "$rejected" "$base/original"
+  printf 'previous diagnostic\n' > "$rejected.out-of-scope.reason"
+  mv() {
+    local arg
+    if [[ "$fault" == bsd-mv ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == -T ]]; then
+          printf 'mv: illegal option -- T\n' >&2
+          return 64
+        fi
+      done
+    fi
+    if [[ "$fault" == publish && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
+      : > "$base/publication-attempted"
+      return 1
+    fi
+    command mv "$@"
+  }
+  python3() {
+    # Model a mount boundary at the nested finding directory. Execute the real
+    # publication helper, but make rename across that boundary report EXDEV.
+    if [[ "$fault" == cross-device && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
+      : > "$base/publication-attempted"
+      command python3 -c '
+import errno
+import os
+import sys
+replace = os.replace
+def mounted_replace(source, destination):
+    if os.path.dirname(source) != os.path.dirname(destination):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+    return replace(source, destination)
+os.replace = mounted_replace
+code = sys.argv.pop(1)
+exec(code)
+' "$2" "$3" "$4"
+      return $?
+    fi
+    if [[ "$fault" == publish && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
+      : > "$base/publication-attempted"
+      return 1
+    fi
+    command python3 "$@"
+  }
+  # shellcheck disable=SC2329 # Invoked by the sourced scope filter.
+  printf() {
+    if [[ "$fault" == stage-write && "${1:-}" == '%s\n' &&
+        "${2:-}" == 'out-of-scope citation: untouched.sh' ]]; then
+      : > "$base/write-attempted"
+      builtin printf 'partial reason'
+      return 1
+    fi
+    # shellcheck disable=SC2059 # Forward the caller's original format and args.
+    builtin printf "$@"
+  }
+  rc=0
+  branch_scope_filter_directory "$base/real" || rc=$?
+  unset -f mv python3 printf
+  if [[ "$fault" == bsd-mv || "$fault" == cross-device ]]; then
+    if [[ "$fault" == cross-device ]]; then
+      check "cross-device reaches real publication helper" test -f "$base/publication-attempted"
+    fi
+    check "$fault permits rejection publication" test "$rc" -eq 0
+    check "$fault quarantines source" test -f "$rejected.out-of-scope"
+    check "$fault publishes full reason" grep -Fxq 'out-of-scope citation: untouched.sh' "$rejected.out-of-scope.reason"
+  else
+    marker="$base/write-attempted"
+    [[ "$fault" != publish ]] || marker="$base/publication-attempted"
+    check "$fault reaches staged failure" test -f "$marker"
+    check "$fault reports failure" test "$rc" -ne 0
+    check "$fault preserves source bytes" cmp -s "$base/original" "$rejected"
+    check "$fault publishes no quarantine" test ! -e "$rejected.out-of-scope"
+    check "$fault preserves previous diagnostic" grep -Fxq 'previous diagnostic' "$rejected.out-of-scope.reason"
+    check "$fault cleans failed staging before retry" test -z "$(find "$base/real" -name '.branch-scope-*' -print)"
+    check "$fault retry succeeds" branch_scope_filter_directory "$base/real"
+    check "$fault retry quarantines exact source" cmp -s "$base/original" "$rejected.out-of-scope"
+    check "$fault retry publishes full reason" grep -Fxq 'out-of-scope citation: untouched.sh' "$rejected.out-of-scope.reason"
+  fi
+  check "$fault removes staged scratch files" test -z "$(find "$base/real" -name '.branch-scope-*' -print)"
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

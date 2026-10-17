@@ -267,6 +267,24 @@ branch_scope_verify_body() {
   done <<< "$citations"
 }
 
+# Publish to the exact diagnostic path on GNU and BSD/macOS alike. Recheck
+# unsafe destinations after staging. os.replace never follows a final symlink
+# or moves the staged file inside a destination directory; callers clean up
+# the staged file on failure.
+_branch_scope_replace_reason() {
+  python3 -c '
+import os
+import sys
+try:
+    if os.path.islink(sys.argv[2]) or os.path.isdir(sys.argv[2]):
+        sys.exit(1)
+    os.replace(sys.argv[1], sys.argv[2])
+except OSError as exc:
+    print(f"branch_scope_filter_directory: cannot publish diagnostic: {exc}", file=sys.stderr)
+    sys.exit(1)
+' "$1" "$2"
+}
+
 # Side effect: preserve rejected findings as <name>.md.out-of-scope with a
 # companion reason, so all downstream *.md consumers exclude them, including
 # local registries, round digests, verifier, and synthesizer. Read failures
@@ -335,12 +353,22 @@ branch_scope_filter_directory() {
   (( filter_rc == 0 )) || return "$filter_rc"
   # A later scope/read failure must not quarantine an earlier finding.
   # Finish verification before committing any rejections.
-  local rejection_index
+  local rejection_index reason_tmp
   for rejection_index in "${!rejected_files[@]}"; do
     file="${rejected_files[$rejection_index]}"
     reason="${rejection_reasons[$rejection_index]}"
     # Keep the source eligible for retry until its diagnostic is saved.
-    if ! printf '%s\n' "$reason" > "$file.out-of-scope.reason"; then
+    if [[ -L "$file.out-of-scope.reason" || -d "$file.out-of-scope.reason" ]]; then
+      printf 'branch_scope_filter_directory: unsafe diagnostic destination: %s\n' "$file.out-of-scope.reason" >&2
+      filter_rc=1
+      break
+    fi
+    # Stage beside the finding so exact-path replacement stays on its
+    # filesystem even when a nested directory is a separate mount.
+    reason_tmp="$(mktemp "${file%/*}/.branch-scope-reason.XXXXXX")" || return 1
+    if ! printf '%s\n' "$reason" > "$reason_tmp" ||
+        ! _branch_scope_replace_reason "$reason_tmp" "$file.out-of-scope.reason"; then
+      rm -f -- "$reason_tmp"
       filter_rc=1
       break
     fi
