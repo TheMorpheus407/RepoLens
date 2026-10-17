@@ -74,11 +74,20 @@ done
 forge_filing_capable() { return 0; }
 forge_issue_list_json() { printf '[]\n'; }
 forge_issue_create_once() { printf 'POST\n' >> "$FIXTURE/posts"; return 99; }
+# Valid evidence isolates the read failure from the line-length rejection above.
+entry="$(jq -c '.body = "src/source.sh:1"' <<< "$entry")"
+read_failure=none
+rc=0
+filing_verify_cluster_citations "$PROJECT_PATH" "$entry" > "$FIXTURE/control" || rc=$?
+check 'governor evidence verifies with successful reads' test "$rc" -eq 0
 read_failure=tail partial=false
 printf '[%s]\n' "$entry" > "$LOG_BASE/final/manifest.json"
 rc=0
 _filing_real_agent probe c1 > "$FIXTURE/governor" 2>&1 || rc=$?
 check 'governor rejects failed final-byte read' test "$rc" -ne 0
+check 'governor records the final-byte read failure' grep -Fxq \
+  'VERIFICATION_FAILED: src/source.sh:1 could not read source final byte' \
+  "$LOG_BASE/final/filed/c1.failed"
 check 'governor sends no POST' test ! -e "$FIXTURE/posts"
 check 'governor writes no success receipt' test ! -e "$LOG_BASE/final/filed/c1.url"
 # Preserve final-line bytes, including spaces that character dumps can erase.
