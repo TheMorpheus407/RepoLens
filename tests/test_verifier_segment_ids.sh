@@ -20,16 +20,20 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$REPO/lib/verify.sh"
+# shellcheck source=/dev/null
+source "$REPO/lib/template.sh"
 set -euo pipefail
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
-compose_prompt() { cat "$1"; }
 run_agent() { return 99; }
 verify_fixture() {
-  python3 - "$2" "$raw" "$relative" <<'PYVERIFY'
+  python3 - "$2" "$LOG_BASE" "$1" "$PROJECT_PATH" <<'PYVERIFY'
 import hashlib, json, re, sys, textwrap
 from pathlib import Path
-prompt, raw, relative = sys.argv[1:]
+prompt, log_base, run_id, project_path = sys.argv[1:]
+assert f"run `{run_id}`" in prompt
+assert f"located at `{project_path}`" in prompt
+assert "{{RUN_ID}}" not in prompt and "{{PROJECT_PATH}}" not in prompt
 recipes = [textwrap.dedent(code) for code in re.findall(r"```python\n(.*?)```", prompt, re.S)
            if "def verifier_finding_id(" in code]
 if recipes:
@@ -45,7 +49,11 @@ else:
         if "/" in source_relative_path:
             parts.append(source_relative_path)
         return hashlib.sha1("\0".join(parts).encode()).hexdigest()[:16]
-blocks = re.findall(r"^---\n(.*?)^---\n(.*?)(?=^---\n|\Z)", Path(raw).read_text(), re.S | re.M)
+sources = list(Path(log_base).glob("rounds/round-*/lens-outputs/**/*.md"))
+assert len(sources) == 1
+raw = sources[0]
+relative = raw.relative_to(Path(log_base) / "rounds/round-1/lens-outputs").as_posix()
+blocks = re.findall(r"^---\n(.*?)^---\n(.*?)(?=^---\n|\Z)", raw.read_text(), re.S | re.M)
 assert len(blocks) == 2
 rows = []
 for index, (frontmatter, body) in enumerate(blocks, 1):
@@ -61,7 +69,7 @@ for index, (frontmatter, body) in enumerate(blocks, 1):
         assert finding_id == hashlib.sha1("\0".join(legacy).encode()).hexdigest()[:16]
     rows.append(dict(finding_id=finding_id, status="VERIFIED" if index == 1 else "WRONG",
                      notes=body.strip(), lens_id=args[0], domain=args[1], round=args[2],
-                     source_finding_path=raw))
+                     source_finding_path=str(raw)))
 print(json.dumps(rows))
 PYVERIFY
 }
@@ -72,7 +80,8 @@ case "${1:-all}" in
   *) exit 2 ;;
 esac
 for layout in "${layouts[@]}"; do
-  LOG_BASE="$FIXTURE/$layout" PROJECT_PATH="$FIXTURE" AGENT=mock MODE=bugreport ROUNDS=1
+  PROJECT_PATH="$FIXTURE/$layout/checkout-one" AGENT=mock MODE=bugreport ROUNDS=1
+  LOG_BASE="$PROJECT_PATH/logs/probe"
   relative=probe.md
   [[ "$layout" != nested ]] || relative=0123456789abcdef0123456789abcdef/probe.md
   raw="$LOG_BASE/rounds/round-1/lens-outputs/$relative"
@@ -89,5 +98,25 @@ for layout in "${layouts[@]}"; do
   before="$(sha256sum < "$LOG_BASE/final/verification.json")"
   run_verifier another-run-id
   test "$(sha256sum < "$LOG_BASE/final/verification.json")" = "$before"
-  printf 'PASS: distinct stable per-segment IDs, retained first ID: %s\n' "$layout"
+  original_manifest="$LOG_BASE/final/verification.json"
+  # Recreate the source in another checkout and run directory. Compare IDs
+  # separately: source_finding_path must change to point at the new inventory.
+  PROJECT_PATH="$FIXTURE/$layout/checkout-two"
+  LOG_BASE="$PROJECT_PATH/logs/relocated-run"
+  relocated_raw="$LOG_BASE/rounds/round-1/lens-outputs/$relative"
+  mkdir -p "$(dirname "$relocated_raw")"
+  cp "$raw" "$relocated_raw"
+  run_verifier relocated-run
+  python3 - "$original_manifest" "$LOG_BASE/final/verification.json" "$relocated_raw" <<'PYRELOCATE'
+import json, sys
+from pathlib import Path
+before, after = (json.loads(Path(path).read_text()) for path in sys.argv[1:3])
+assert {row["source_finding_path"] for row in before}.isdisjoint(
+    row["source_finding_path"] for row in after)
+assert all(row["source_finding_path"] == sys.argv[3] and Path(row["source_finding_path"]).is_file()
+           for row in after)
+assert [{k: v for k, v in row.items() if k != "source_finding_path"} for row in before] == [
+    {k: v for k, v in row.items() if k != "source_finding_path"} for row in after]
+PYRELOCATE
+  printf 'PASS: distinct stable per-segment IDs, retained first ID, relocated checkout/run: %s\n' "$layout"
 done
