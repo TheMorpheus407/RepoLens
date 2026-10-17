@@ -201,7 +201,40 @@ case_cross_link() (
   else check test "$(wc -l < "$LOG_BASE/posts")" -eq 1; fi
   printf 'PASS: %s cross-link retries %s scope outage without repeated POST\n' "$saved" "$boundary"
 )
+# repolens-r11-p4-2: a reported stream failure cannot publish a prefix.
+case_manifest_stream() (
+  local stream_fault="$1" manifest before saved_before rc
+  fresh "stream-$stream_fault"
+  manifest="$LOG_BASE/final/manifest.json"
+  jq '[.[0], (.[0] | .cluster_id="c2" | .title="Second finding")]' "$manifest" > "$LOG_BASE/two.json"
+  mv "$LOG_BASE/two.json" "$manifest"
+  printf '[{"retained":true}]\n' > "${manifest}.out-of-scope.json"
+  before="$(sha256sum < "$manifest")"
+  saved_before="$(sha256sum < "${manifest}.out-of-scope.json")"
+  jq() {
+    if [[ "$#" == 3 && "$1" == -c && "$2" == '.[]' && "$3" == "$manifest" ]]; then
+      [[ "$stream_fault" != partial ]] || command jq -c '.[0]' "$manifest"
+      printf 'injected manifest stream read error\n' >&2
+      return 74
+    fi
+    command jq "$@"
+  }
+  rc=0
+  branch_scope_filter_manifest "$manifest" || rc=$?
+  printf 'stream=%s filter_rc=%s rows=%s\n' "$stream_fault" "$rc" "$(command jq length "$manifest")"
+  check test "$rc" -ne 0
+  check test "$(sha256sum < "$manifest")" = "$before"
+  check test "$(sha256sum < "${manifest}.out-of-scope.json")" = "$saved_before"
+  check test -z "$(find "$LOG_BASE/final" -name 'manifest.json.scope.*' -print)"
+  unset -f jq
+  check branch_scope_filter_manifest "$manifest"
+  check jq -e 'length == 2 and all(.title | startswith("[REGRESSION][HIGH]"))' "$manifest"
+  check jq -e 'length == 0' "${manifest}.out-of-scope.json"
+  check test -z "$(find "$LOG_BASE/final" -name 'manifest.json.scope.*' -print)"
+  printf 'PASS: %s manifest stream failure preserves publication and retries\n' "$stream_fault"
+)
 case "${1:-all}" in
+  stream-*) case_manifest_stream "${1#stream-}" ;;
   directory) case_directory ;;
   synthesis) for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done ;;
   synthesis-*) case_synthesis "${1#synthesis-}" ;;
@@ -209,5 +242,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac

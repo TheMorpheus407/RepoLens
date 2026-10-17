@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject incomplete Branch-Scope manifest streams before filtering or publication, preserving the complete manifest and saved rejection report for retry (repolens-r11-p4-2).
+
 - Abort Generic delivery on failed or partial private snapshot reads, preserving delivered findings, receipts and local reports until a successful retry (repolens-r11-p4-1).
 
 - Preserve local registry and action reports when required multi-round synthesis fails, including retries that retain an older manifest, preventing rejected raw findings from becoming new tasks (repolens-r11-p2-1).

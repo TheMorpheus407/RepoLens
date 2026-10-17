@@ -358,13 +358,16 @@ branch_scope_filter_directory() {
 # Returns 2 on unavailable scope evidence, 1 on other filtering failures.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local manifest="$1" entry reason kept rejected verification_rc
+  local manifest="$1" entry reason kept rejected verification_rc entries
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
   _branch_scope_read_paths >/dev/null || return 2
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
   rejected="${kept}.rejected"
+  # Capture and check the whole stream before filtering or publishing a prefix.
+  entries="$(jq -c '.[]' "$manifest")" || { rm -f "$kept"; return 1; }
   : > "$rejected"
   while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
     if reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$entry")")"; then
       jq -c '
         .title = ("[REGRESSION][" + (.severity | ascii_upcase) + "] " +
@@ -379,7 +382,7 @@ branch_scope_filter_manifest() {
       fi
       jq -cn --argjson finding "$entry" --arg reason "$reason" '{finding:$finding,reason:$reason}' >> "$rejected"
     fi
-  done < <(jq -c '.[]' "$manifest")
+  done <<< "$entries"
   jq -s '.' "$rejected" > "${manifest%.tmp.*}.out-of-scope.json" || return 1
   jq -s '.' "$kept" > "$manifest" || return 1
   rm -f "$kept" "$rejected"
