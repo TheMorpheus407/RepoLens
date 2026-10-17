@@ -335,12 +335,20 @@ branch_scope_filter_directory() {
   (( filter_rc == 0 )) || return "$filter_rc"
   # A later scope/read failure must not quarantine an earlier finding.
   # Finish verification before committing any rejections.
-  local rejection_index
+  local rejection_index reason_tmp
   for rejection_index in "${!rejected_files[@]}"; do
     file="${rejected_files[$rejection_index]}"
     reason="${rejection_reasons[$rejection_index]}"
     # Keep the source eligible for retry until its diagnostic is saved.
-    if ! printf '%s\n' "$reason" > "$file.out-of-scope.reason"; then
+    if [[ -L "$file.out-of-scope.reason" || -d "$file.out-of-scope.reason" ]]; then
+      printf 'branch_scope_filter_directory: unsafe diagnostic destination: %s\n' "$file.out-of-scope.reason" >&2
+      filter_rc=1
+      break
+    fi
+    reason_tmp="$(mktemp "$dir/.branch-scope-reason.XXXXXX")" || return 1
+    if ! printf '%s\n' "$reason" > "$reason_tmp" ||
+        ! mv -T -- "$reason_tmp" "$file.out-of-scope.reason"; then
+      rm -f -- "$reason_tmp"
       filter_rc=1
       break
     fi

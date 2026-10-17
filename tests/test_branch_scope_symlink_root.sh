@@ -78,5 +78,32 @@ for variant in physical linked linked-slash; do
   check "$variant repeat filtering succeeds" branch_scope_filter_directory "$dir"
   check "$variant repeat preserves accepted finding" test "$accepted_hash" = "$(cksum < "$base/real/accepted.md")"
 done
+# repolens-r12-p5-5: derived diagnostic paths must not follow file symlinks.
+for variant in physical linked dangling; do
+  base="$TMPROOT/reason-$variant"
+  mkdir -p "$base/real"
+  printf 'unrelated original contents\n' > "$base/external.txt"
+  write_finding "$base/real/rejected.md" 'Rejected finding' untouched.sh
+  source_hash="$(cksum < "$base/real/rejected.md")"
+  target="$base/external.txt"
+  [[ "$variant" != dangling ]] || target="$base/missing.txt"
+  ln -s "$target" "$base/real/rejected.md.out-of-scope.reason"
+  dir="$base/real"
+  if [[ "$variant" == linked ]]; then
+    ln -s "$base/real" "$base/root-link"
+    dir="$base/root-link"
+  fi
+  rc=0
+  branch_scope_filter_directory "$dir" || rc=$?
+  check "$variant diagnostic link fails filtering" test "$rc" -ne 0
+  check "$variant external contents unchanged" grep -Fxq 'unrelated original contents' "$base/external.txt"
+  check "$variant diagnostic remains a symlink" test -L "$base/real/rejected.md.out-of-scope.reason"
+  check "$variant pending finding unchanged" test "$source_hash" = "$(cksum < "$base/real/rejected.md")"
+  check "$variant no quarantine published" test ! -e "$base/real/rejected.md.out-of-scope"
+  check "$variant dangling target not created" test ! -e "$base/missing.txt"
+  rm -- "$base/real/rejected.md.out-of-scope.reason"
+  check "$variant repaired diagnostic retries successfully" branch_scope_filter_directory "$dir"
+  check "$variant retry quarantines finding" test -f "$base/real/rejected.md.out-of-scope"
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
