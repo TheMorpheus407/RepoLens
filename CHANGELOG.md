@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject directory and symlink obstructions for saved Cross-Link payloads, and use portable exact-path replacement for promotion and rollback so candidates and recovery bytes cannot be nested outside their artifact paths (repolens-r15-p3-1).
+
 - Exclusively allocate Polish URL receipt stages to avoid pre-existing predictable symlink collisions and reject staged sources observed to be non-regular or symlinks; keep uncertain POST reservations on staging failure. Run directories must remain trusted against concurrent stage replacement (repolens-r15-p8-4).
 
 - Treat quoted empty domain/lens attribution with YAML comments as missing metadata, preserving directory fallback and preventing incomplete drafts from exhausting the local issue budget (repolens-r15-p8-2).
