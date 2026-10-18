@@ -63,10 +63,18 @@
 # is two investigations. Round barrier markers are not lens receipts.
 # Absent/unreadable files contribute 0; always prints a non-negative integer.
 _attempts_completed_count() {
-  local log_base="$1" completed_file count total=0
+  local log_base="$1" completed_file count receipt_fd total=0
   for completed_file in "$log_base/.completed" "$log_base"/.rounds/round-*.lenses.completed; do
     [[ -f "$completed_file" ]] || continue
-    count="$(grep -c '' "$completed_file" 2>/dev/null)" || count=0
+    # Count only terminated receipts, under the writer's inode lock. A repaired
+    # tail is new completed work, not part of a resumed attempt's baseline.
+    count="$(
+      exec {receipt_fd}<"$completed_file" || exit 1
+      flock -s "$receipt_fd" || exit 1
+      wc -l < "$completed_file"
+    )" 2>/dev/null || count=0
+    # BSD/macOS wc pads counts with whitespace even when reading stdin.
+    count="${count//[[:space:]]/}"
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
     total=$(( total + count ))
   done

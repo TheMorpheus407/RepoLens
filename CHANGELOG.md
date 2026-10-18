@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Ignore unterminated lens-completion receipts in resume, status and attempt counts; lock readers during tail repair, support long dispatch identities, normalize padded platform line counts, and roll back partial appends before retry (repolens-r15-p2-1).
+
 - Retain Generic delivery journals through terminal cleanup, so process death after commit or successful rollback cannot orphan owned backup stages; resume cleans only the recorded stages without changing public files (repolens-r14-p4-2).
 
 - Fail Polish issue emission on a missing or incomplete staged group inventory, retaining completed receipts for retry while preserving deliberate budget stops and interruption status (repolens-r14-p4-1).
