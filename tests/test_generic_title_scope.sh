@@ -76,5 +76,15 @@ REPOLENS_MIN_SEVERITY=high
 write_finding generic probe low '"bad\q"'
 check build_round_digest "$round_dir" generic/probe
 check grep -Fq 'No findings this round.' "$round_dir/digest.md"
+# An unrelated malformed domain must not block a valid Generic delivery.
+write_finding generic probe high 'Independent Generic finding'
+ordinary="$round_dir/lens-outputs/security/injection/ordinary.md"
+mkdir -p "${ordinary%/*}"
+printf -- '---\ndomain: "security\\q"\nlens_id: injection\nseverity: high\ntitle: Ordinary draft\n---\nDraft evidence\n' > "$ordinary"
+ordinary_hash="$(sha256sum < "$ordinary")"
+check export_generic_local_findings "$OUTPUT_DIR"
+check build_findings_jsonl_from_local "$OUTPUT_DIR" "$FIXTURE/registry.jsonl"
+check jq -se 'length == 1 and .[0].title == "Independent Generic finding"' "$FIXTURE/registry.jsonl"
+check test "$(sha256sum < "$ordinary")" = "$ordinary_hash"
 printf 'Generic title scope assertions: %s failures\n' "$failures"
 (( failures == 0 ))
