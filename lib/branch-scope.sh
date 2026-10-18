@@ -413,7 +413,12 @@ branch_scope_filter_manifest() {
         rm -f "$kept" "$rejected"
         return 2
       fi
-      jq -cn --argjson finding "$entry" --arg reason "$reason" '{finding:$finding,reason:$reason}' >> "$rejected"
+      # Findings can exceed exec argument limits. Stream the entry and check
+      # serialization before publishing either the manifest or rejection report.
+      jq -c --arg reason "$reason" '{finding:.,reason:$reason}' <<< "$entry" >> "$rejected" || {
+        rm -f "$kept" "$rejected"
+        return 2
+      }
     fi
   done <<< "$entries"
   jq -s '.' "$rejected" > "${manifest%.tmp.*}.out-of-scope.json" || return 1
