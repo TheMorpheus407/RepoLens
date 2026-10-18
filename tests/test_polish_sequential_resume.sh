@@ -212,6 +212,7 @@ eval "$(declare -f original_polish_render_issue_body | sed '1s/original_polish_r
 unset -f original_polish_render_issue_body
 # A failed write may leave nonempty bytes; a failed rename must not publish
 # a receipt either. Both outcomes stay reserved until independent reconciliation.
+eval "$(declare -f _polish_publish_receipt | sed '1s/_polish_publish_receipt/original_publish_receipt/')"
 for receipt_failure in partial-write short-write promote; do
   LOG_BASE="$FIXTURE/$receipt_failure" SUMMARY_FILE="$FIXTURE/$receipt_failure/summary.json"
   MAX_ISSUES='' GLOBAL_ISSUES_CREATED=0 REPOLENS_FINAL_STATE=finished
@@ -228,13 +229,14 @@ for receipt_failure in partial-write short-write promote; do
     # shellcheck disable=SC2059 # Transparent wrapper forwards caller format and arguments.
     builtin printf "$@"
   }
-  mv() {
-    if [[ "$receipt_failure" == promote && "${*: -1}" == *.url ]]; then return 1; fi
-    command mv "$@"
+  _polish_publish_receipt() {
+    if [[ "$receipt_failure" == promote ]]; then return 1; fi
+    original_publish_receipt "$@"
   }
   rc=0
   run_polish_issue_emission probe 3 || rc=$?
-  unset -f printf mv
+  unset -f printf
+  eval "$(declare -f original_publish_receipt | sed '1s/original_publish_receipt/_polish_publish_receipt/')"
   check test "$rc" -ne 0
   check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
   check test ! -s "$LOG_BASE/polish/filed/fluency-spacing-consistency.url"

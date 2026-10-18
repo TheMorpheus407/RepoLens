@@ -444,6 +444,29 @@ _polish_issue_budget_available() {
   return 0
 }
 
+# _polish_publish_receipt <staged_file> <receipt>
+# Recheck object type after the in-flight create and replace the exact path.
+# os.replace never moves a receipt into a raced directory or follows a final
+# symlink; it is available on GNU and BSD/macOS. Callers clean stages on failure.
+_polish_publish_receipt() {
+  python3 -c '
+import os
+import stat
+import sys
+try:
+    try:
+        mode = os.lstat(sys.argv[2]).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(mode):
+            sys.exit(1)
+    os.replace(sys.argv[1], sys.argv[2])
+except OSError:
+    sys.exit(1)
+' "$1" "$2"
+}
+
 # run_polish_issue_emission [run_id] [top_n]
 #   Reads logs/<run-id>/polish/ranked-suggestions.json and emits one grouped
 #   polish issue per lens, containing that lens's ranked top-N suggestions.
@@ -494,6 +517,12 @@ run_polish_issue_emission() {
   # consume this run's budget, even if the shortlist order has changed.
   local saved_issues=0 saved_receipt current_issues="${GLOBAL_ISSUES_CREATED:-0}"
   for saved_receipt in "$filed_dir"/*.url; do
+    [[ -e "$saved_receipt" || -L "$saved_receipt" ]] || continue
+    if [[ ! -f "$saved_receipt" || -L "$saved_receipt" ]]; then
+      _polish_log_warn "Polish issue emission: URL receipt is not a regular file: $saved_receipt; reconcile before retrying"
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 1
+    fi
     [[ -s "$saved_receipt" ]] || continue
     saved_issues=$((saved_issues + 1))
   done
@@ -517,7 +546,7 @@ run_polish_issue_emission() {
   local saved_attempt
   for saved_attempt in "$filed_dir"/*.attempted; do
     [[ -e "$saved_attempt" || -L "$saved_attempt" ]] || continue
-    if [[ ! -s "${saved_attempt%.attempted}.url" ]]; then
+    if [[ ! -f "${saved_attempt%.attempted}.url" || -L "${saved_attempt%.attempted}.url" || ! -s "${saved_attempt%.attempted}.url" ]]; then
       _polish_log_warn "Polish issue emission: unresolved remote attempt $saved_attempt; reconcile with the forge before retrying"
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1
@@ -555,7 +584,13 @@ run_polish_issue_emission() {
     title="[POLISH] $domain/$lens_id polishing shortlist"
     label="polish:$domain/$lens_id"
 
-    if [[ -s "$sentinel" ]]; then
+    # Recheck the selected path as well in case it changed after inventory.
+    if [[ -e "$sentinel" || -L "$sentinel" ]] && [[ ! -f "$sentinel" || -L "$sentinel" ]]; then
+      _polish_log_warn "Polish issue emission: URL receipt is not a regular file: $sentinel; reconcile before retrying"
+      emission_rc=1
+      break
+    fi
+    if [[ -f "$sentinel" && ! -L "$sentinel" && -s "$sentinel" ]]; then
       _polish_log_info "Polish issue emission: reusing existing filed marker for $domain/$lens_id"
       continue
     fi
@@ -629,7 +664,7 @@ run_polish_issue_emission() {
         && printf '%s\n' "$issue_url" > "$tmp_receipt" \
         && saved_url="$(cat "$tmp_receipt")" \
         && [[ "$saved_url" == "$issue_url" ]] \
-        && mv "$tmp_receipt" "$sentinel"; }; then
+        && _polish_publish_receipt "$tmp_receipt" "$sentinel"; }; then
       rm -f -- "$tmp_receipt"
       _polish_log_warn "Polish issue emission: failed to save complete URL receipt for $domain/$lens_id"
       emission_rc=1
