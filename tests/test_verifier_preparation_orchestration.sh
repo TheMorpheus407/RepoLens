@@ -42,7 +42,9 @@ dispatch_filing_batch() { : > "$LOG_BASE/filing-called"; }
 _verifier_bad_output() { printf 'No verifier JSON available\n'; }
 find() {
   # Only the verifier enumeration fails; synthesis would succeed on retry.
-  if [[ "$fault" == inventory && "${3:-}" == '*/lens-outputs/*.md' ]]; then
+  local inventory_pattern="${3:-}"
+  [[ "${1:-}" != -H ]] || inventory_pattern="${4:-}"
+  if [[ "$fault" == inventory && "$inventory_pattern" == '*/lens-outputs/*.md' ]]; then
     printf 'transient verifier inventory failure\n' >&2
     return 42
   fi

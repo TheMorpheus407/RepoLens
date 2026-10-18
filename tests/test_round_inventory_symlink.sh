@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Copyright 2025-2026 Bootstrap Academy
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# repolens-r14-p5-4: an explicit rounds-directory symlink is a real inventory.
+# shellcheck disable=SC2034,SC2317,SC2329
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=/dev/null
+source "$ROOT/lib/verify.sh"
+# shellcheck source=/dev/null
+source "$ROOT/lib/synthesize.sh"
+set -euo pipefail
+fixture="$(mktemp -d)"
+trap 'rm -rf -- "$fixture"' EXIT
+AGENT=mock MODE=bugreport ROUNDS=1 PROJECT_PATH="$fixture/project"
+LOG_BASE="$fixture/run"
+mkdir -p "$PROJECT_PATH/src" "$fixture/stored-rounds/round-1/lens-outputs/security/injection" "$LOG_BASE/final"
+ln -s "$fixture/stored-rounds" "$LOG_BASE/rounds"
+finding="$LOG_BASE/rounds/round-1/lens-outputs/security/injection/001.md"
+printf 'query fixture\n' > "$PROJECT_PATH/src/query.sh"
+printf -- '---\ntitle: SQL injection in query construction\nseverity: high\ndomain: security\nlens: injection\n---\nEvidence: src/query.sh:1\n' > "$finding"
+printf '[{"finding_id":"saved","status":"VERIFIED","notes":"Saved verification"}]\n' > "$LOG_BASE/final/verification.json"
+printf '[{"cluster_id":"saved","title":"Saved result"}]\n' > "$LOG_BASE/final/manifest.json"
+jq -n --arg source "$finding" '[{cluster_id:"fresh",title:"Fresh symlink finding",severity:"high",domain:"security",lens:"injection",root_cause_category:"injection",source_finding_paths:[$source],cross_link_actions:[],granularity:"independent",verification_status:"verified",body:"Evidence: src/query.sh:1",proposed_labels:[],dedup_against_existing:[]}]' > "$fixture/proposal.json"
+: > "$fixture/calls"
+compose_prompt() { printf 'mock prompt\n'; }
+verify_callback() {
+  printf v >> "$fixture/calls"
+  printf '[{"finding_id":"fresh-finding","status":"VERIFIED","notes":"Fresh verification"}]\n'
+}
+_VERIFIER_AGENT_CALLBACK=verify_callback
+run_agent() { printf s >> "$fixture/calls"; cat "$fixture/proposal.json"; }
+FAIL=0
+check() {
+  if "$@"; then printf 'PASS: %s\n' "$*"; else printf 'FAIL: %s\n' "$*"; FAIL=$((FAIL + 1)); fi
+}
+check run_verifier fixture
+check jq -e 'length == 1 and .[0].notes == "Fresh verification"' "$LOG_BASE/final/verification.json"
+check run_synthesizer fixture
+check jq -e 'length == 1 and .[0].title == "Fresh symlink finding"' "$LOG_BASE/final/manifest.json"
+check test "$(cat "$fixture/calls")" = vs
+# Empty symlink roots still publish canonical empties without admitting agents.
+mkdir "$fixture/empty-rounds"
+rm "$LOG_BASE/rounds"
+ln -s "$fixture/empty-rounds" "$LOG_BASE/rounds"
+check run_verifier fixture
+check jq -e 'length == 0' "$LOG_BASE/final/verification.json"
+check run_synthesizer fixture
+check jq -e 'length == 0' "$LOG_BASE/final/manifest.json"
+check test "$(cat "$fixture/calls")" = vs
+printf 'Results: %s failed\n' "$FAIL"
+(( FAIL == 0 ))
