@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Fail dispatch and meta-handoff parsing on unreadable or failed lens-registry enumeration instead of silently dropping requested lenses; preserve accepted work for a repaired resume (repolens-r15-p6-4).
+
 - Propagate failed root-frontmatter scalar reads through Generic delivery and round digests, preserving delivered findings, ownership receipts and the last complete digest on empty or partial parser failures (repolens-r15-p6-3).
   Round digests also reject failed category and suspect-file list reads before replacing the saved digest.
 
