@@ -445,7 +445,10 @@ _polish_issue_budget_available() {
 }
 
 # _polish_publish_receipt <staged_file> <receipt>
-# Recheck object type after the in-flight create and replace the exact path.
+# Recheck source and destination types after the in-flight create, rejecting
+# objects observed to be non-regular or symlinks, then replace the exact path.
+# The run directory and its parents must remain trusted: these path checks do
+# not prevent a concurrent writer replacing the source before os.replace.
 # os.replace never moves a receipt into a raced directory or follows a final
 # symlink; it is available on GNU and BSD/macOS. Callers clean stages on failure.
 _polish_publish_receipt() {
@@ -454,6 +457,8 @@ import os
 import stat
 import sys
 try:
+    if not stat.S_ISREG(os.lstat(sys.argv[1]).st_mode):
+        sys.exit(1)
     try:
         mode = os.lstat(sys.argv[2]).st_mode
     except FileNotFoundError:
@@ -668,8 +673,11 @@ run_polish_issue_emission() {
 
     # A short write must never expose a nonempty success marker to resume.
     # Check the complete saved URL before atomically publishing the receipt.
-    tmp_receipt="$sentinel.tmp.$$"
+    # Exclusively allocate an unpredictable stage; a planted old predictable
+    # path must neither receive URL bytes nor be published as a symlink.
+    tmp_receipt=""
     if ! { [[ -n "$issue_url" ]] \
+        && tmp_receipt="$(mktemp "$sentinel.tmp.XXXXXX")" \
         && printf '%s\n' "$issue_url" > "$tmp_receipt" \
         && saved_url="$(cat "$tmp_receipt")" \
         && [[ "$saved_url" == "$issue_url" ]] \
