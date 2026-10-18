@@ -1910,7 +1910,7 @@ _round_digest_frontmatter_block() {
 }
 
 _round_digest_finding_segments() (
-  local file="$1" content_mode=0 snapshot
+  local file="$1" content_mode=0 snapshot parsed
   # Read the entire source before parsing. A failed read is an IO error (2),
   # distinct from readable malformed frontmatter (1), and must not be skipped.
   snapshot="$(mktemp)" || return 2
@@ -1921,7 +1921,7 @@ _round_digest_finding_segments() (
     content_mode=1
   fi
 
-  awk -v content_mode="$content_mode" '
+  if ! parsed="$(awk -v content_mode="$content_mode" '
     BEGIN {
       segment_sep = sprintf("%c", 30)
       field_sep = sprintf("%c", 31)
@@ -1961,9 +1961,8 @@ _round_digest_finding_segments() (
       }
       return (has_severity || has_content_priority_title || has_content_audit_title) && has_domain && has_lens
     }
-    NR == 1 && $0 != "---" {
-      exit 1
-    }
+    NR == 1 && $0 != "---" { invalid = 1 }
+    invalid { next }
     state == "start" {
       if ($0 == "---") {
         state = "frontmatter"
@@ -2005,18 +2004,20 @@ _round_digest_finding_segments() (
       next
     }
     END {
-      if (state == "frontmatter") {
-        exit 1
-      }
-      if (pending_frontmatter) {
-        body = body "---\n" candidate_frontmatter
-      }
-      emit_segment()
-      if (!emitted) {
-        exit 1
+      # Do not override an awk IO failure with a format-error exit status.
+      # Readable malformed input emits nothing and is identified by the shell.
+      if (!invalid && state != "frontmatter") {
+        if (pending_frontmatter) {
+          body = body "---\n" candidate_frontmatter
+        }
+        emit_segment()
       }
     }
-  ' "$snapshot"
+  ' "$snapshot")"; then
+    return 2
+  fi
+  [[ -n "$parsed" ]] || return 1
+  printf '%s' "$parsed"
 )
 
 # Deliver Generic raw segments as ordinary local findings. The private source

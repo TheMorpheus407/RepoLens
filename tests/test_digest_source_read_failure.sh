@@ -39,13 +39,14 @@ cat() {
   if [[ "$fault" == partial-read && "${!#}" == "$finding" ]]; then return 74; fi
 }
 awk() {
-  if [[ "$fault" == parser-io && "${1:-}" == -v && "${2:-}" == content_mode=* ]]; then
+  if [[ "$fault" == parser-io* && "${1:-}" == -v && "${2:-}" == content_mode=* ]]; then
     command awk "$@" || return $?
+    [[ "$fault" != parser-io-one ]] || return 1
     return 74
   fi
   command awk "$@"
 }
-for fault in permission partial-read parser-io; do
+for fault in permission partial-read parser-io parser-io-one; do
   if [[ "$fault" == permission ]]; then
     chmod 000 "$finding"
     if [[ -r "$finding" ]]; then
