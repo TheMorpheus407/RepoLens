@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Treat failed branch-scope body extraction as retryable IO instead of rejecting or silently accepting a finding from partial output; preserve saved publications and the complete pending proposal (repolens-r15-p6-2).
+
 - Preserve saved synthesis manifest, actions and rejection report on accepted-scope staging, serialization, aggregation, candidate replacement and stream cleanup failures; restore the previous report if candidate replacement fails, and keep the complete candidate pending for retry (repolens-r15-p6-1, repolens-r15-p8-3).
 
 - Exclusively allocate Human Review report stages so pre-existing predictable symlinks cannot redirect report output or become the published report (repolens-r15-p5-1).

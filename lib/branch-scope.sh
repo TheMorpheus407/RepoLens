@@ -392,7 +392,7 @@ branch_scope_filter_directory() {
 # the synthesis caller; 1 on an invalid candidate.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local manifest="$1" entry reason kept rejected verification_rc entries report_tmp accepted
+  local manifest="$1" entry reason kept rejected verification_rc entries report_tmp accepted entry_body
   local report report_backup=""
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
   _branch_scope_read_paths >/dev/null || return 2
@@ -403,7 +403,11 @@ branch_scope_filter_manifest() {
   rejected="$(mktemp "${kept}.rejected.XXXXXX")" || { rm -f "$kept"; return 2; }
   while IFS= read -r entry; do
     [[ -n "$entry" ]] || continue
-    if reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$entry")")"; then
+    entry_body="$(jq -r '.body' <<< "$entry")" || {
+      rm -f -- "$kept" "$rejected"
+      return 2
+    }
+    if reason="$(branch_scope_verify_body "$entry_body")"; then
       jq -c '
         .title = ("[REGRESSION][" + (.severity | ascii_upcase) + "] " +
           (.title | sub("^\\[REGRESSION\\][[:space:]]*"; "")
