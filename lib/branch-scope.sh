@@ -388,14 +388,14 @@ branch_scope_filter_directory() {
 # Side effects: filter a synthesized candidate before promotion, preserve
 # rejected proposals, and retain the branch title convention mechanically.
 # Returns 2 on unavailable scope evidence, an incomplete candidate read, or
-# rejection serialization/publication failure, preserving publications through
-# the synthesis caller; 1 on other failures.
+# staging/serialization/publication failure, preserving publications through
+# the synthesis caller; 1 on an invalid candidate.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local manifest="$1" entry reason kept rejected verification_rc entries report_tmp
+  local manifest="$1" entry reason kept rejected verification_rc entries report_tmp accepted
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
   _branch_scope_read_paths >/dev/null || return 2
-  kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
+  kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 2
   # Capture and check the whole stream before filtering or publishing a prefix.
   entries="$(jq -c '.[]' "$manifest")" || { rm -f "$kept"; return 2; }
   # Exclusively create derived stages rather than opening predictable siblings.
@@ -407,7 +407,7 @@ branch_scope_filter_manifest() {
         .title = ("[REGRESSION][" + (.severity | ascii_upcase) + "] " +
           (.title | sub("^\\[REGRESSION\\][[:space:]]*"; "")
             | sub("^\\[(?i:critical|high|medium|low)\\][[:space:]]*"; "")))
-      ' <<< "$entry" >> "$kept" || { rm -f "$kept" "$rejected"; return 1; }
+      ' <<< "$entry" >> "$kept" || { rm -f "$kept" "$rejected"; return 2; }
     else
       verification_rc=$?
       if (( verification_rc != 1 )); then
@@ -422,16 +422,25 @@ branch_scope_filter_manifest() {
       }
     fi
   done <<< "$entries"
-  # Keep the previous report until the complete aggregation can be published.
-  report_tmp="$(mktemp "${kept}.report.XXXXXX")" || {
+  # Aggregate both streams before publishing either result. Accepted-entry
+  # IO must preserve the candidate and the previous report for the caller.
+  accepted="$(mktemp "${kept}.accepted.XXXXXX")" || {
     rm -f -- "$kept" "$rejected"
     return 2
   }
-  if ! jq -s '.' "$rejected" > "$report_tmp" ||
-      ! _branch_scope_replace_file "$report_tmp" "${manifest%.tmp.*}.out-of-scope.json"; then
-    rm -f -- "$kept" "$rejected" "$report_tmp"
+  if ! jq -s '.' "$kept" > "$accepted"; then
+    rm -f -- "$kept" "$rejected" "$accepted"
     return 2
   fi
-  jq -s '.' "$kept" > "$manifest" || return 1
-  rm -f "$kept" "$rejected"
+  report_tmp="$(mktemp "${kept}.report.XXXXXX")" || {
+    rm -f -- "$kept" "$rejected" "$accepted"
+    return 2
+  }
+  if ! jq -s '.' "$rejected" > "$report_tmp" ||
+      ! _branch_scope_replace_file "$report_tmp" "${manifest%.tmp.*}.out-of-scope.json" ||
+      ! _branch_scope_replace_file "$accepted" "$manifest"; then
+    rm -f -- "$kept" "$rejected" "$report_tmp" "$accepted"
+    return 2
+  fi
+  rm -f -- "$kept" "$rejected" || return 2
 }

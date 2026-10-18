@@ -275,7 +275,52 @@ case_synthesis_stream() (
   check test -z "$(find "$LOG_BASE/final" -name 'manifest.json.tmp.*' -print)"
   printf 'PASS: synthesis preserves all publications on %s stream failure and retries\n' "$stream_fault"
 )
+# repolens-r15-p6-1 / repolens-r15-p8-3: accepted-stage IO is retryable.
+case_synthesis_kept_io() (
+  local failure="$1" fault=repaired before rc
+  fresh "kept-$failure"
+  mkdir -p "$LOG_BASE/rounds/round-1/lens-outputs/security"
+  printf 'src/probe.sh:1\n' > "$LOG_BASE/rounds/round-1/lens-outputs/security/finding.md"
+  jq '. + [(.[0] | .cluster_id="rejected" | .title="Unrelated stale endpoint" | .body="src/unchanged.sh:1")]' "$LOG_BASE/final/manifest.json" > "$LOG_BASE/agent.json"
+  printf '[{"retained":true}]\n' > "$LOG_BASE/final/manifest.json.out-of-scope.json"
+  printf '[{"cluster_id":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+  before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  jq() {
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest ]]; then
+      if [[ "$failure" == serialize && "$#" == 2 && "$1" == -c && "$2" == *ascii_upcase* ]] ||
+          [[ "$failure" == aggregate && "$#" == 3 && "$1" == -s && "$2" == . && "$3" == *.scope.?????? ]]; then
+        printf 'fault\n' >> "$LOG_BASE/fault-hit"
+        printf '{"partial":'
+        return 74
+      fi
+    fi
+    command jq "$@"
+  }
+  mktemp() {
+    if [[ "$failure" == allocate && "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "${1:-}" == *.scope.XXXXXX ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      return 74
+    fi
+    command mktemp "$@"
+  }
+  rc=0
+  run_synthesizer probe || rc=$?
+  check test "$rc" -ne 0
+  check test -s "$LOG_BASE/fault-hit"
+  printf "Reached accepted-stage fault: %s\n" "$failure"
+  check test "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$before"
+  check jq -e 'length == 2 and .[0].cluster_id == "c1" and .[1].cluster_id == "rejected"' "$LOG_BASE/final/manifest.scope-pending.json"
+  check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
+  unset -f jq mktemp
+  check run_synthesizer probe
+  check jq -e 'length == 1 and .[0].title == "[REGRESSION][HIGH] Finding"' "$LOG_BASE/final/manifest.json"
+  check jq -e 'length == 1 and .[0].finding.cluster_id == "rejected"' "$LOG_BASE/final/manifest.json.out-of-scope.json"
+  check test ! -e "$LOG_BASE/final/manifest.scope-pending.json"
+  check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
+  printf 'PASS: accepted-stage %s failure preserves publications and retries\n' "$failure"
+)
 case "${1:-all}" in
+  kept-*) case_synthesis_kept_io "${1#kept-}" ;;
   synthesis-stream-*) case_synthesis_stream "${1#synthesis-stream-}" ;;
   stream-*) case_manifest_stream "${1#stream-}" ;;
   directory) case_directory ;;
@@ -285,5 +330,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) for failure in allocate serialize aggregate; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac
