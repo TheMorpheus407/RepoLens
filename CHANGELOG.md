@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve verification, synthesis manifests and actions when an existing rounds root is a dangling or looping symlink or resolves to a non-directory; only absent or readable empty roots publish empty results (repolens-r15-p8-1).
+
 - Replace synthesis manifests at their exact path on both empty and model-result publication, rejecting directory obstructions while retaining the previous publication in recovery until a repaired retry succeeds (repolens-r15-p7-4).
 
 - Fail dispatch and meta-handoff parsing on unreadable or failed lens-registry enumeration or prompt lookup errors (including empty registry input and denied directory traversal) instead of silently dropping requested lenses; preserve accepted work for a repaired resume (repolens-r15-p6-4).

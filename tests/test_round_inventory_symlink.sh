@@ -60,5 +60,50 @@ check jq -e 'length == 0' "$LOG_BASE/final/verification.json"
 check run_synthesizer fixture
 check jq -e 'length == 0' "$LOG_BASE/final/manifest.json"
 check test "$(cat "$fixture/calls")" = vs
+# Existing invalid roots are unavailable inventories, not legitimate empties.
+# No model callback or retirement may run until the source is repaired.
+for kind in dangling loop file-target regular-file; do
+  rm "$LOG_BASE/rounds"
+  case "$kind" in
+    dangling) ln -s "$fixture/unavailable-rounds" "$LOG_BASE/rounds" ;;
+    loop) ln -s rounds "$LOG_BASE/rounds" ;;
+    file-target)
+      printf 'not an inventory\n' > "$fixture/not-directory"
+      ln -s "$fixture/not-directory" "$LOG_BASE/rounds"
+      ;;
+    regular-file) printf 'not an inventory\n' > "$LOG_BASE/rounds" ;;
+  esac
+  printf '[{"finding_id":"saved","status":"VERIFIED","notes":"Saved verification"}]\n' > "$LOG_BASE/final/verification.json"
+  printf '[{"cluster_id":"saved","title":"Saved result"}]\n' > "$LOG_BASE/final/manifest.json"
+  printf '[{"body":"Saved action"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+  verification_hash="$(sha256sum < "$LOG_BASE/final/verification.json")"
+  manifest_hash="$(sha256sum < "$LOG_BASE/final/manifest.json")"
+  actions_hash="$(sha256sum < "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  vrc=0; run_verifier fixture || vrc=$?
+  src=0; run_synthesizer fixture || src=$?
+  printf '%s: verification=%s synthesis=%s\n' "$kind" "$vrc" "$src"
+  check test "$vrc" -eq 7
+  check test "$src" -ne 0
+  check test "$(sha256sum < "$LOG_BASE/final/verification.json")" = "$verification_hash"
+  check test "$(sha256sum < "$LOG_BASE/final/manifest.json")" = "$manifest_hash"
+  check test "$(sha256sum < "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$actions_hash"
+  check test "$(cat "$fixture/calls")" = vs
+  check test -z "$(find "$LOG_BASE/final" -name '.synthesis-cleanup.*' -print)"
+  # Repair to a readable empty directory; successful retries publish empties.
+  rm "$LOG_BASE/rounds"
+  ln -s "$fixture/empty-rounds" "$LOG_BASE/rounds"
+  check run_verifier fixture
+  check run_synthesizer fixture
+  check jq -e 'length == 0' "$LOG_BASE/final/verification.json"
+  check jq -e 'length == 0' "$LOG_BASE/final/manifest.json"
+  check test ! -e "$LOG_BASE/final/cross-link-actions.preserved.json"
+done
+# A genuinely absent root remains a valid empty inventory.
+rm "$LOG_BASE/rounds"
+check run_verifier fixture
+check run_synthesizer fixture
+check jq -e 'length == 0' "$LOG_BASE/final/verification.json"
+check jq -e 'length == 0' "$LOG_BASE/final/manifest.json"
+check test "$(cat "$fixture/calls")" = vs
 printf 'Results: %s failed\n' "$FAIL"
 (( FAIL == 0 ))

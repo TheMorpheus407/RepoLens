@@ -236,6 +236,14 @@ run_verifier() {
     return 1
   }
 
+  # A present root that cannot resolve to a directory is unavailable, not empty.
+  # In particular, -d alone would silently discard a dangling symlink inventory.
+  if [[ ( -e "$rounds_dir" || -L "$rounds_dir" ) && ! -d "$rounds_dir" ]]; then
+    echo "run_verifier: cannot read rounds directory: $rounds_dir" >&2
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return 7
+  fi
+
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
     if ! total_findings=$(set -o pipefail; find -H "$rounds_dir" -path '*/lens-outputs/*.md' -type f | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}'); then

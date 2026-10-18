@@ -1162,6 +1162,14 @@ _synthesize_generate() {
     return 1
   }
 
+  # A present root that cannot resolve to a directory is unavailable, not empty.
+  # In particular, -d alone would silently discard a dangling symlink inventory.
+  if [[ ( -e "$rounds_dir" || -L "$rounds_dir" ) && ! -d "$rounds_dir" ]]; then
+    echo "run_synthesizer: cannot read rounds directory: $rounds_dir" >&2
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return 1
+  fi
+
   # Scope outages preserve the previous publication, even for an empty tree.
   if [[ "${MODE:-${REPOLENS_MODE:-}}" == branch-review ]]; then
     _branch_scope_read_paths >/dev/null || return 1
