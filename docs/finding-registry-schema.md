@@ -54,8 +54,10 @@ It is built from the existing finding outputs; it does not replace them.
 
 For explicit-local bugreports, eligible ordinary destination files reserve the
 shared `--max-issues` capacity, including files from earlier runs and files
-written before an interrupted lens saved its summary. Generic evidence and
-projections are excluded from ordinary usage. Summary
+written before an interrupted lens saved its summary. Ordinary capacity requires
+a normalized severity and nonempty domain/lens attribution after directory
+fallback; documentation and incomplete drafts do not reserve capacity. Generic
+evidence and projections are excluded from ordinary usage. Summary
 `totals.ordinary_issues_created` stores this inventory snapshot;
 `totals.governed_issues_created` stores the admitted Generic segment count.
 Per-lens `issues_created` values remain execution deltas. The run total is the
@@ -210,7 +212,9 @@ One JSON object per line in `findings.jsonl`, with these 13 fields:
   findings are nested further in dispatch directories. Trailing slashes on
   that root do not change the metadata or finding IDs. A symlinked output root
   is traversed; symlinks inside the tree are not followed. Flat findings without
-  these frontmatter fields retain empty values.
+  these frontmatter fields retain empty values. Unquoted YAML null scalars
+  (`null`, `Null`, `NULL`, `~`) in domain/lens fields are treated as missing;
+  quoted strings remain literal values.
 - `status` — `new` \| `duplicate` \| `needs-validation` \|
   `likely-false-positive`; defaults to `new`.
 - `primary_location` — `"file:line"` or empty string; derived by the builder.

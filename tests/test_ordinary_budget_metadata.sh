@@ -39,8 +39,18 @@ printf -- '---\ndomain: security\nlens: injection\n---\nIncomplete draft.\n' > "
 printf -- '---\nseverity: high\nlens: injection\n---\nIncomplete draft.\n' > "$OUTPUT_DIR/no-domain.md"
 printf -- '---\nseverity: high\ndomain: security\n---\nIncomplete draft.\n' > "$OUTPUT_DIR/no-lens.md"
 printf -- '---\nseverity: urgent\ndomain: security\nlens: injection\n---\nInvalid draft.\n' > "$OUTPUT_DIR/invalid-severity.md"
+# YAML null is absent attribution, including when only one field is null.
+for null_value in null Null NULL '~'; do
+  for null_field in domain lens; do
+    domain=security lens=injection
+    printf -v "$null_field" '%s' "$null_value"
+    printf -- '---\nseverity: high\ndomain: %s\nlens: %s\n---\nIncomplete draft.\n' \
+      "$domain" "$lens" > "$OUTPUT_DIR/null-$null_field-$null_value.md"
+  done
+done
 init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' 1 local "$OUTPUT_DIR"
 FAIL=0
+# Record every assertion failure and return the aggregate result at the end.
 check() {
   if "$@"; then printf 'PASS: %s\n' "$*"; else printf 'FAIL: %s\n' "$*"; FAIL=$((FAIL + 1)); fi
 }
@@ -65,5 +75,16 @@ check test "$(jq '.totals.ordinary_issues_created' "$SUMMARY_FILE")" -eq 1
 REPOLENS_MIN_SEVERITY=critical
 check reconcile_generic_local_counts
 check test "$(jq '.totals.ordinary_issues_created' "$SUMMARY_FILE")" -eq 0
+# Null attribution also uses the existing directory fallback. Quoted scalars
+# remain literal strings; the registry must not erase their identity.
+REPOLENS_MIN_SEVERITY=''
+printf -- '---\nseverity: high\ndomain: null\nlens: ~\n---\nDirectory-attributed finding.\n' > "$OUTPUT_DIR/security/injection/001.md"
+check reconcile_generic_local_counts
+check test "$GLOBAL_ISSUES_CREATED" -eq 1
+check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
+check jq -se 'any(.[]; (.markdown_path | endswith("/security/injection/001.md")) and .domain == "security" and .lens == "injection")' "$LOG_BASE/registry.jsonl"
+printf -- '---\nseverity: high\ndomain: "null"\nlens: '\''~'\''\ntitle: null\n---\nLiteral metadata.\n' > "$OUTPUT_DIR/quoted.md"
+check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
+check jq -se 'any(.[]; (.markdown_path | endswith("/quoted.md")) and .domain == "null" and .lens == "~" and .title == "null")' "$LOG_BASE/registry.jsonl"
 printf 'Results: %s failed\n' "$FAIL"
 (( FAIL == 0 ))
