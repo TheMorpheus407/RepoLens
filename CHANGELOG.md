@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject non-regular or symlink Polish URL markers before recovering budget or resolving uncertain POST attempts; preserve saved state until the receipt is reconciled (repolens-r14-p2-2).
+
 - Publish complete branch-scope rejection reports atomically using uniquely created rejection/report stages and retain the retryable candidate, saved manifest and actions on report staging/aggregation/publication failure, cleaning stages for a repaired retry (repolens-r14-p7-2).
 
 - Ignore documentation and incomplete ordinary finding metadata, including YAML-null or empty attribution with comments, when reconciling the local issue budget, preserving directory fallback, quoted values and severity filtering so investigations are not skipped by a README or draft (repolens-r14-p6-1).
