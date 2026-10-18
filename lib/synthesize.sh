@@ -1162,6 +1162,18 @@ _synthesize_generate() {
     return 1
   }
 
+  # Remember an observed root: losing it before enumeration is an outage,
+  # even if a later -d check would skip find or find accepts a dangling link.
+  local rounds_present=false
+  if [[ -e "$rounds_dir" || -L "$rounds_dir" ]]; then
+    rounds_present=true
+    if [[ ! -d "$rounds_dir" ]]; then
+      echo "run_synthesizer: cannot read rounds directory: $rounds_dir" >&2
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 1
+    fi
+  fi
+
   # Scope outages preserve the previous publication, even for an empty tree.
   if [[ "${MODE:-${REPOLENS_MODE:-}}" == branch-review ]]; then
     _branch_scope_read_paths >/dev/null || return 1
@@ -1173,9 +1185,15 @@ _synthesize_generate() {
   done
 
   local total_findings=0
-  if [[ -d "$rounds_dir" ]]; then
+  if [[ "$rounds_present" == true || -e "$rounds_dir" || -L "$rounds_dir" ]]; then
     if ! total_findings=$(set -o pipefail; find -H "$rounds_dir" -path '*/lens-outputs/*' -type f -name '*.md' | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}'); then
       echo "run_synthesizer: cannot enumerate complete finding inventory" >&2
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      return 1
+    fi
+    # Successful find alone cannot prove a command-line symlink stayed usable.
+    if [[ ! -d "$rounds_dir" ]]; then
+      echo "run_synthesizer: rounds directory became unavailable: $rounds_dir" >&2
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1
     fi
