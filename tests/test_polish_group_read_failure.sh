@@ -26,12 +26,14 @@ eval "$(declare -f _polish_build_issue_groups | sed '1s/_polish_build_issue_grou
 fixture="$(mktemp -d)"
 trap 'rm -rf -- "$fixture"' EXIT
 failures=0
+# Accumulate failed assertions so every read fault and retry is checked.
 check() {
   if ! "$@" >/dev/null; then
     printf 'FAIL: %s\n' "$*" >&2
     failures=$((failures + 1))
   fi
 }
+# Create an independent run with two eligible lenses and fresh counters.
 reset_run() {
   RUN_ID=probe LOG_BASE="$fixture/$1" SUMMARY_FILE="$fixture/$1/summary.json"
   MODE=polish LOCAL_MODE=false GLOBAL_ISSUES_CREATED=0 MAX_ISSUES=''
@@ -42,10 +44,12 @@ reset_run() {
   init_summary "$SUMMARY_FILE" probe "$fixture" polish mock '' '' github ''
   jq -n '["spacing-consistency","typographic-rhythm"] | map({domain:"fluency",lens_id:.,title:.,body:"Concrete suggestion",voice_fit:"strong",polish_rank_x1000:1500})' > "$LOG_BASE/polish/ranked-suggestions.json"
 }
+# Remove the staged path after generation to exercise the consumer open error.
 _polish_build_issue_groups() {
   real_build_groups "$@" || return $?
   if [[ "$fault" == missing ]]; then command rm -- "$groups_file"; fi
 }
+# Inject an empty inventory or interruption at the first consumer read only.
 read() {
   if [[ "${!#}" == group_json && "$consumed_fault" == 0 ]]; then
     if [[ "$fault" == empty-read ]]; then
@@ -60,6 +64,7 @@ read() {
   fi
   builtin read -r "$@"
 }
+# Record a mock POST and optionally truncate the already-open inventory.
 forge_issue_create() {
   printf 'POST\n' >> "$LOG_BASE/posts"
   # A genuine early EOF on the already-open inventory, after the first complete
