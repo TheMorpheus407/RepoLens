@@ -983,13 +983,39 @@ _rounds_meta_domains_file() {
   printf '%s\n' "${DOMAINS_FILE:-$repo_root/config/domains.json}"
 }
 
+# Check prompt lookups in one process, buffering IDs until every stat succeeds.
+# Bash file predicates hide EACCES/ELOOP as absence. Only ENOENT and non-files
+# are skippable; other lookup errors leave dispatch pending.
+_rounds_meta_filter_prompt_files() {
+  python3 -c '
+import os, stat, sys
+available = []
+for line in sys.stdin:
+    entry = line.rstrip("\n")
+    if not entry:
+        continue
+    try:
+        mode = os.stat(os.path.join(sys.argv[1], entry + ".md")).st_mode
+    except FileNotFoundError:
+        continue
+    except OSError as error:
+        print("Lens prompt lookup failed: " + str(error), file=sys.stderr)
+        sys.exit(2)
+    if stat.S_ISREG(mode):
+        available.append(entry)
+if available:
+    print("\n".join(available))
+' "$1"
+}
+
+# Registry enumerators return 2 on unavailable/incomplete input, without a prefix.
 _rounds_meta_active_lens_entries() {
-  local lenses_dir="${1:-}" domains_file="${2:-}" mode deploy_domain entry
+  local lenses_dir="${1:-}" domains_file="${2:-}" mode deploy_domain entry entries
 
   [[ -n "$lenses_dir" ]] || lenses_dir="$(_rounds_meta_lenses_dir)"
   [[ -n "$domains_file" ]] || domains_file="$(_rounds_meta_domains_file)"
-  [[ -d "$lenses_dir" && -f "$domains_file" ]] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
+  [[ -d "$lenses_dir" && -f "$domains_file" ]] || return 2
+  command -v jq >/dev/null 2>&1 || return 2
 
   mode="${MODE:-audit}"
   deploy_domain="deployment"
@@ -997,7 +1023,16 @@ _rounds_meta_active_lens_entries() {
     deploy_domain="android"
   fi
 
-  while IFS= read -r entry; do
+  # Check the complete registry before classifying dispatched IDs. Consume
+  # captured lines in memory; large registries need no here-string temp files.
+  entries="$(
+    jq -sr --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
+      'if length != 1 then error("Expected one lens registry document") else .[0] end | .domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") elif $mode == "spec-change" then select(.mode == "spec-change") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish" and .mode != "spec-change") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
+  )" || return 2
+  local -a selected=()
+  while [[ -n "$entries" ]]; do
+    entry="${entries%%$'\n'*}"
+    if [[ "$entries" == *$'\n'* ]]; then entries="${entries#*$'\n'}"; else entries=""; fi
     [[ -n "$entry" ]] || continue
     if [[ -n "${FOCUS:-}" && "${entry#*/}" != "$FOCUS" ]]; then
       continue
@@ -1005,25 +1040,24 @@ _rounds_meta_active_lens_entries() {
     if [[ -n "${DOMAIN_FILTER:-}" && "${entry%%/*}" != "$DOMAIN_FILTER" ]]; then
       continue
     fi
-    if [[ -f "$lenses_dir/$entry.md" ]]; then
-      printf '%s\n' "$entry"
-    fi
-  done < <(
-    jq -r --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
-      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") elif $mode == "spec-change" then select(.mode == "spec-change") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish" and .mode != "spec-change") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
-  )
+    selected+=("$entry")
+  done
+  # Explicit pipefail also covers callers that disabled it after sourcing us.
+  entries="$(set -o pipefail; printf '%s\n' "${selected[@]}" | _rounds_meta_filter_prompt_files "$lenses_dir")" || return 2
+  if [[ -n "$entries" ]]; then printf '%s\n' "$entries" || return 2; fi
+  return 0
 }
 
 # Mode-aware lens registry without --focus/--domain user filters.
 # Used to validate meta-orchestrator round 2+ dispatch ids: those are
 # adjacency picks across the full registry, not the user's round-1 selection.
 _rounds_meta_all_lens_entries() {
-  local lenses_dir="${1:-}" domains_file="${2:-}" mode deploy_domain entry
+  local lenses_dir="${1:-}" domains_file="${2:-}" mode deploy_domain entries
 
   [[ -n "$lenses_dir" ]] || lenses_dir="$(_rounds_meta_lenses_dir)"
   [[ -n "$domains_file" ]] || domains_file="$(_rounds_meta_domains_file)"
-  [[ -d "$lenses_dir" && -f "$domains_file" ]] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
+  [[ -d "$lenses_dir" && -f "$domains_file" ]] || return 2
+  command -v jq >/dev/null 2>&1 || return 2
 
   mode="${MODE:-audit}"
   deploy_domain="deployment"
@@ -1031,15 +1065,15 @@ _rounds_meta_all_lens_entries() {
     deploy_domain="android"
   fi
 
-  while IFS= read -r entry; do
-    [[ -n "$entry" ]] || continue
-    if [[ -f "$lenses_dir/$entry.md" ]]; then
-      printf '%s\n' "$entry"
-    fi
-  done < <(
-    jq -r --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
-      '.domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") elif $mode == "spec-change" then select(.mode == "spec-change") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish" and .mode != "spec-change") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
-  )
+  # Check the complete registry before classifying dispatched IDs. Consume
+  # captured lines in memory; large registries need no here-string temp files.
+  entries="$(
+    jq -sr --arg mode "$mode" --arg deploy_domain "$deploy_domain" \
+      'if length != 1 then error("Expected one lens registry document") else .[0] end | .domains | sort_by(.order)[] | (if $mode == "discover" then select(.mode == "discover") elif $mode == "deploy" then select(.mode == "deploy" and .id == $deploy_domain) elif $mode == "opensource" then select(.mode == "opensource") elif $mode == "content" then select(.mode == "content") elif $mode == "greenfield" then select(.mode == "greenfield") elif $mode == "polish" then select(.mode == "polish") elif $mode == "spec-change" then select(.mode == "spec-change") else select(.mode != "discover" and .mode != "deploy" and .mode != "opensource" and .mode != "content" and .mode != "greenfield" and .mode != "polish" and .mode != "spec-change") end) | .id as $d | .lenses[] | (if type == "string" then {id: ., skip_modes: []} else . end) | select(((.skip_modes // []) | index($mode)) | not) | $d + "/" + .id' "$domains_file"
+  )" || return 2
+  entries="$(set -o pipefail; printf '%s\n' "$entries" | _rounds_meta_filter_prompt_files "$lenses_dir")" || return 2
+  if [[ -n "$entries" ]]; then printf '%s\n' "$entries" || return 2; fi
+  return 0
 }
 
 _rounds_meta_validate_lens_id() {
@@ -1049,18 +1083,21 @@ _rounds_meta_validate_lens_id() {
   _rounds_meta_lens_entry_for_id_unfiltered "$lens_id" "$lenses_dir" >/dev/null
 }
 
+# Return 1 for an unknown ID, 2 when the registry cannot be read completely.
 _rounds_meta_lens_entry_for_id() {
-  local lens_id="$1" lenses_dir="${2:-}" entry
+  local lens_id="$1" lenses_dir="${2:-}" entry entries
 
   [[ -n "$lenses_dir" ]] || lenses_dir="$(_rounds_meta_lenses_dir)"
-  [[ "$lens_id" =~ ^[A-Za-z0-9_-]+$ && -d "$lenses_dir" ]] || return 1
-
-  while IFS= read -r entry; do
+  [[ "$lens_id" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+  [[ -d "$lenses_dir" ]] || return 2
+  entries="$(_rounds_meta_all_lens_entries "$lenses_dir")" || return 2
+  while [[ -n "$entries" ]]; do
+    entry="${entries%%$'\n'*}"
+    if [[ "$entries" == *$'\n'* ]]; then entries="${entries#*$'\n'}"; else entries=""; fi
     [[ "${entry#*/}" == "$lens_id" ]] || continue
-    printf '%s\n' "$entry"
+    printf '%s\n' "$entry" || return 2
     return 0
-  done < <(_rounds_meta_all_lens_entries "$lenses_dir" || true)
-
+  done
   return 1
 }
 
@@ -1091,7 +1128,7 @@ _rounds_meta_dispatch_lens_entries() {
 
 # Internal stdin parser; _rounds_meta_read_dispatch verifies the producer.
 _rounds_meta_dispatch_lens_entries_stream() {
-  local lenses_dir="${2:-}" line trimmed lens_id lens_entry
+  local lenses_dir="${2:-}" line trimmed lens_id lens_entry registry_rc
   local lens_attrs stripped attr_body role focus anchor exclude missed_angle tuple dedup_key
   local -A seen_entries=()
 
@@ -1122,6 +1159,8 @@ _rounds_meta_dispatch_lens_entries_stream() {
           printf '%s\n' "$tuple"
         fi
       else
+        registry_rc=$?
+        (( registry_rc == 1 )) || return 2
         _rounds_meta_warn "Skipping invalid dispatched lens id: $lens_id"
       fi
     fi
@@ -1597,7 +1636,7 @@ _rounds_meta_parse_output_stream() {
   local output_file="$1" dispatch_file="$2" hypotheses_file="$3" lenses_dir="${4:-}"
   local dispatch_dir hypotheses_dir tmp_dispatch line trimmed lens_id custom_payload custom_identity
   local lens_attrs lens_dispatch_line generic_attrs generic_dispatch_line stripped attr_body
-  local role focus anchor exclude missed_angle dedup_key
+  local role focus anchor exclude missed_angle dedup_key registry_rc
   local in_custom=0 in_fence=0
   local -a lens_dispatch_lines=() custom_payloads=() generic_dispatch_lines=()
   local -A seen_lens_keys=() seen_custom=() seen_generic_keys=()
@@ -1661,6 +1700,8 @@ _rounds_meta_parse_output_stream() {
           lens_dispatch_lines+=("$lens_dispatch_line")
         fi
       else
+        registry_rc=$?
+        (( registry_rc == 1 )) || return 2
         _rounds_meta_warn "Dropping unregistered meta-orchestrator lens id: $lens_id"
       fi
       continue
