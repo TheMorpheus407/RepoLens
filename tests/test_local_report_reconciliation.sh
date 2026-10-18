@@ -181,7 +181,9 @@ case_retained_manifest_failure() (
           synthesis-inventory)
             NO_VERIFIER=true
             find() {
-              if [[ "${1:-}" == "$LOG_BASE/rounds" ]]; then
+              local inventory_root="${1:-}"
+              [[ "$inventory_root" != -H ]] || inventory_root="${2:-}"
+              if [[ "$inventory_root" == "$LOG_BASE/rounds" ]]; then
                 printf 'Injected synthesis inventory failure\n' >&2
                 return 42
               fi

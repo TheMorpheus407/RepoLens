@@ -160,7 +160,9 @@ mv() {
 }
 find() {
   command find "$@" || return $?
-  if [[ "$row" == verifier-empty && "$1" == "$LOG_BASE/rounds" ]]; then interrupt_parent; fi
+  local inventory_root="${1:-}"
+  [[ "$inventory_root" != -H ]] || inventory_root="${2:-}"
+  if [[ "$row" == verifier-empty && "$inventory_root" == "$LOG_BASE/rounds" ]]; then interrupt_parent; fi
 }
 for SIGNAL in INT TERM; do
   for row in empty-groups empty-groups-fail render-fail local-promote-ok local-promote-fail remote-promote-ok post-ok-last post-fail count-fail verifier-empty empty-promote-ok empty-promote-fail verifier-compose-fail verifier-agent-ok verifier-agent-fail verifier-agent-direct-ok verifier-agent-direct-fail normal-empty-groups normal-verifier-empty normal-local normal-compose-fail normal-agent-fail normal-agent-direct-fail; do
