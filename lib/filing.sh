@@ -521,6 +521,11 @@ _filing_fail() {
       rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
       return 1
     fi
+    # A quarantine marker is an exact file, never a container for the receipt.
+    if [[ -d "$filed_dir/$cluster_id.unverified-url" || -L "$filed_dir/$cluster_id.unverified-url" ]]; then
+      rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
+      return 1
+    fi
     mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url" || move_rc=$?
     # The returning parent handler may accept cancellation while mv waits.
     # Restore a completed rename before leaving this receipt for resume.
@@ -553,6 +558,9 @@ _filing_cross_link_fail() {
     # Reserve the already completed POST before any marker move, including crashes.
     : > "${done_file%.done}.attempted" || return 1
     _filing_cancelled && return 1
+    if [[ -d "${done_file%.done}.unverified-done" || -L "${done_file%.done}.unverified-done" ]]; then
+      return 1
+    fi
     mv "$done_file" "${done_file%.done}.unverified-done" || move_rc=$?
     # A returning handler may run while mv waits for its child. Even a failed
     # command can have completed the rename before reporting interruption.
@@ -697,7 +705,8 @@ _filing_action_reference_candidates() {
 #   budget reservation. Verified readback writes .done; failure writes .failed.
 #
 #   Ordinary action failures are best-effort and logged to stderr. Parent
-#   cancellation stops admission and makes the enclosing dispatch fail.
+#   cancellation stops admission and makes the enclosing dispatch fail. A failed
+#   saved-receipt quarantine also fails the dispatch.
 #
 #   Required globals: FORGE_REPO (or REPO_OWNER+REPO_NAME).
 #   Optional globals: REPOLENS_REOPEN_LABEL (defaults "repolens:reopen-candidate").
@@ -1128,7 +1137,7 @@ _filing_cross_link_enact() {
 #        markers and counted in the aggregate output).
 #     1  on parent cancellation or infrastructure failure: invalid manifest,
 #        failed process-scope initialization/launch/cleanup, or a missing
-#        callback outcome.
+#        callback outcome, or failed saved-receipt quarantine.
 #
 #   Aggregate output on stdout:
 #     Filed: X, Verification-failed: Y, Skipped-existing: Z
@@ -1203,7 +1212,10 @@ dispatch_filing_batch() {
     if ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
       local cross_link_rc=0
       _filing_cross_link_enact "$run_id" || cross_link_rc=$?
-      (( cross_link_rc != 2 )) || return 1
+      if (( cross_link_rc != 0 )); then
+        echo "dispatch_filing_batch: cross-link enactment failed (rc=$cross_link_rc)" >&2
+        return 1
+      fi
     fi
     _filing_cancelled && return 1
     printf 'Filed: 0, Verification-failed: 0, Skipped-existing: 0\n'
@@ -1239,7 +1251,13 @@ dispatch_filing_batch() {
       if (( reconcile_rc == 2 )); then admission_rc=1; break; fi
       if (( reconcile_rc != 0 )); then
         _filing_cancelled && break
-        _filing_fail "$filed_dir" "$cid" 'success marker could not be reconciled'
+        if ! _filing_fail "$filed_dir" "$cid" 'success marker could not be reconciled'; then
+          # A retained receipt is pending reconciliation, not verified success.
+          # Stop before callbacks/cross-links and release queued reservations.
+          echo "dispatch_filing_batch: saved receipt quarantine failed for $cid" >&2
+          admission_rc=1
+          break
+        fi
       fi
     fi
     _filing_cancelled && break
@@ -1355,7 +1373,10 @@ dispatch_filing_batch() {
   if (( dispatch_rc == 0 )) && ! _filing_cancelled && [[ "${CROSS_LINK_MODE:-off}" != "off" ]]; then
     local cross_link_rc=0
     _filing_cross_link_enact "$run_id" || cross_link_rc=$?
-    (( cross_link_rc != 2 )) || dispatch_rc=1
+    if (( cross_link_rc != 0 )); then
+      echo "dispatch_filing_batch: cross-link enactment failed (rc=$cross_link_rc)" >&2
+      dispatch_rc=1
+    fi
   fi
   _filing_cancelled && dispatch_rc=1
 
