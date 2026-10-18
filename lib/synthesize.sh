@@ -1196,6 +1196,8 @@ _synthesize_generate() {
 
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
+  # The loaded scope helper replaces exact paths on GNU and BSD/macOS, so a
+  # directory appearing after retirement cannot consume the candidate as a child.
   # Zero findings require no model work. Write the canonical empty manifest so
   # downstream consumers can distinguish a correct empty run from synthesis
   # failure.
@@ -1207,7 +1209,7 @@ _synthesize_generate() {
       return 1
     fi
     [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
-    if ! mv "$candidate" "$final_dir/manifest.json"; then
+    if ! _branch_scope_replace_file "$candidate" "$final_dir/manifest.json"; then
       echo "run_synthesizer: failed to promote empty manifest.json" >&2
       rm -f "$candidate" "$candidate_actions"
       return 1
@@ -1391,7 +1393,7 @@ _synthesize_generate() {
     rm -f "$final_dir/cross-link-actions.preserved.json"
   fi
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
-  if ! mv "$candidate" "$final_dir/manifest.json"; then
+  if ! _branch_scope_replace_file "$candidate" "$final_dir/manifest.json"; then
     echo "run_synthesizer: failed to promote manifest" >&2
     rm -f "$candidate" "$candidate_actions"
     return 1

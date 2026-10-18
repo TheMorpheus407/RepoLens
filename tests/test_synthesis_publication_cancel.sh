@@ -66,8 +66,12 @@ for scenario in branch-agent branch-agent-success failure-report staged-actions 
       }
       # Use the real severity filter to stage an action, then cancel between
       # its promotion and manifest publication, or during failure reporting.
-      mv() {
+      eval "$(declare -f _branch_scope_replace_file | sed '1s/_branch_scope_replace_file/_real_replace_file/')"
+      _branch_scope_replace_file() {
         if [[ "$scenario" == staged-report && "${2:-}" == "$LOG_BASE/final/manifest.json" ]]; then return 42; fi
+        _real_replace_file "$@"
+      }
+      mv() {
         command mv "$@" || return $?
         if [[ "$scenario" == staged-* && "${2:-}" == "$LOG_BASE/final/cross-link-actions.preserved.json" ]]; then
           jq -e 'length == 1 and .[0].body == "Staged action"' "$2" > "$LOG_BASE/staged" || return 98
