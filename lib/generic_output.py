@@ -18,7 +18,8 @@
 Only receipt-owned files are replaced/retired. Staging and rollback copies are
 necessary for publication, contain derived findings only, and are removed after
 success or successful rollback. A private pending record permits exact-state
-recovery after process death. Raw round evidence is never changed.
+recovery and terminal cleanup after process death. Raw round evidence is never
+changed.
 """
 
 import hashlib
@@ -51,7 +52,7 @@ def checked_path(root, relative):
 
 
 def publish(plan, output, receipt, run_id):
-    """Stage and publish a complete delivery, restoring files and receipt on failure."""
+    """Publish with rollback before commit and resumable cleanup after commit."""
     root = output.resolve(strict=True)
     pending = receipt.with_name(receipt.name + ".pending")
     _recover_pending(root, receipt, pending, run_id)
@@ -120,7 +121,7 @@ def publish(plan, output, receipt, run_id):
             stream.write("\n")
         if receipt.exists():
             shutil.copy2(receipt, stage / "receipt-before")
-        journal = {"root": str(root), "run_id": run_id, "stage": str(stage),
+        journal = {"root": str(root), "run_id": run_id, "stage": str(stage), "phase": "rollback",
                    "files": states, "receipt_stage": str(receipt_stage.resolve()),
                    "receipt_before": _content_hash(receipt),
                    "receipt_after": _content_hash(receipt_stage)}
@@ -137,9 +138,12 @@ def publish(plan, output, receipt, run_id):
             for name in old.keys() - desired.keys():
                 checked_path(root, name).unlink(missing_ok=True)
             os.replace(receipt_stage, receipt)
-            # Both publications are complete. Removing intent commits them;
-            # a crash before this point can still restore the previous state.
-            pending.unlink()
+            # Commit before removing backups, retaining their exact cleanup
+            # pointer until deletion finishes. Recovery must never roll back a
+            # terminal transaction whose backups may already be partly deleted.
+            journal["phase"] = "cleanup"
+            _write_pending(pending, journal)
+            _cleanup_pending(stage, receipt_stage, pending)
         except BaseException:
             blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
             try:
@@ -191,8 +195,16 @@ def _restore_copy(backup, destination):
         temporary.unlink(missing_ok=True)
 
 
+def _cleanup_pending(stage, receipt_stage, pending):
+    """Remove only journal-owned stages, keeping the pointer until cleanup ends."""
+    receipt_stage.unlink(missing_ok=True)
+    if stage.exists():
+        shutil.rmtree(stage)
+    pending.unlink()
+
+
 def _recover_pending(root, receipt, pending, run_id):
-    """Validate all pre/post states, then idempotently restore interrupted delivery."""
+    """Restore interrupted publication or finish a terminal cleanup phase."""
     if pending.is_symlink():
         raise ValueError("Generic delivery refuses symlink pending record")
     if not pending.exists():
@@ -208,6 +220,12 @@ def _recover_pending(root, receipt, pending, run_id):
             or not re.fullmatch(r"\.generic-receipt-[a-z0-9_]+", receipt_stage.name)
             or receipt_stage.is_symlink()):
         raise ValueError("invalid Generic recovery receipt staging path")
+    phase = journal.get("phase", "rollback")  # Legacy intent records roll back.
+    if phase == "cleanup":
+        _cleanup_pending(stage, receipt_stage, pending)
+        return
+    if phase != "rollback":
+        raise ValueError("invalid Generic recovery phase")
     # Complete admission before restoration: even a matching frontmatter marker
     # cannot authorize overwriting bytes edited after an interrupted publication.
     restores = []
@@ -241,10 +259,11 @@ def _recover_pending(root, receipt, pending, run_id):
             receipt.unlink(missing_ok=True)
         else:
             _restore_copy(backup, receipt)
-    pending.unlink()
-    receipt_stage.unlink(missing_ok=True)
-    if stage.exists():
-        shutil.rmtree(stage)
+    # Restoration is complete. A crash during deletion now needs cleanup only,
+    # even when some backups no longer exist.
+    journal["phase"] = "cleanup"
+    _write_pending(pending, journal)
+    _cleanup_pending(stage, receipt_stage, pending)
 
 
 def main():

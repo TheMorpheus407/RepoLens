@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Retain Generic delivery journals through terminal cleanup, so process death after commit or successful rollback cannot orphan owned backup stages; resume cleans only the recorded stages without changing public files (repolens-r14-p4-2).
+
 - Fail Polish issue emission on a missing or incomplete staged group inventory, retaining completed receipts for retry while preserving deliberate budget stops and interruption status (repolens-r14-p4-1).
 
 - Quarantine and restore ordinary and Cross-Link receipts with exact-path replacement so directory races at either rename boundary cannot nest or replace the saved receipt (repolens-r14-p3-1).
