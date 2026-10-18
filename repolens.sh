@@ -2659,9 +2659,9 @@ if [[ -n "$RESUME_RUN_ID" && -f "$LOG_BASE/.systemic-failure-abort" ]]; then
   rm -f "$LOG_BASE/.systemic-failure-abort"
   clear_stop_reason "$SUMMARY_FILE"
 fi
-# A failed marker write must not leave an old execution error on a successful retry.
+# Resume retires prior execution diagnostics even when no abort marker was written.
 if [[ -n "$RESUME_RUN_ID" && -f "$SUMMARY_FILE" ]] \
-    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|custom-lens-materialization-failed|process-scope-cleanup-failed|verifier-preparation-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
+    && [[ "$(jq -r '.stopped_reason // ""' "$SUMMARY_FILE")" =~ ^(prompt-render-failed|lens-execution-failed|lens-dispatch-read-failed|generic-dispatch-failed|custom-lens-materialization-failed|process-scope-cleanup-failed|verifier-preparation-failed|interrupted-(sighup|sigint|sigterm))$ ]]; then
   clear_stop_reason "$SUMMARY_FILE"
 fi
 if [[ -n "$REMOTE_TARGET" ]]; then
