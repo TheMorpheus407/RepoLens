@@ -472,12 +472,13 @@ except OSError:
 #   polish issue per lens, containing that lens's ranked top-N suggestions.
 #   Stops on parent interruption with its signal exit code. A successful
 #   in-flight create still records its receipt/count before stopping the batch.
+#   Missing/incomplete group reads fail; completed receipts remain resumable.
 #   Remote attempts are reserved before POST. An attempt without a nonempty URL
 #   stops emission until reconciled, including after a receipt-write failure.
 run_polish_issue_emission() {
   local run_id="${1:-${RUN_ID:-}}" top_n="${2:-${REPOLENS_POLISH_TOP_N:-3}}"
   local base_dir polish_dir ranked_file groups_file filed_dir group_json
-  local emitted=0 forge_rc=0 emission_rc=0
+  local emitted=0 forge_rc=0 emission_rc=0 groups_complete=0 budget_stopped=0
 
   # Sequential CLI handlers must return while an in-flight POST is being
   # reconciled, so its successful URL and counters survive before signal exit.
@@ -553,7 +554,10 @@ run_polish_issue_emission() {
     fi
   done
 
-  if ! _polish_build_issue_groups "$ranked_file" "$top_n" > "$groups_file"; then
+  # Frame the staged inventory so an open error or an early EOF cannot become
+  # a successful empty/partial batch. Only a planned budget stop may skip EOF.
+  local groups_end='REPOLENS_POLISH_GROUPS_COMPLETE'
+  if ! { _polish_build_issue_groups "$ranked_file" "$top_n" && printf '%s\n' "$groups_end"; } > "$groups_file"; then
     rm -f "$groups_file"
     _polish_log_warn "Polish issue emission: failed to group ranked suggestions"
     [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
@@ -561,6 +565,10 @@ run_polish_issue_emission() {
   fi
 
   while IFS= read -r group_json || [[ -n "$group_json" ]]; do
+    if [[ "$group_json" == "$groups_end" ]]; then
+      groups_complete=1
+      break
+    fi
     [[ -n "$group_json" ]] || continue
     if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
       emission_rc="${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
@@ -569,6 +577,7 @@ run_polish_issue_emission() {
 
     if ! _polish_issue_budget_available; then
       _polish_log_info "Polish issue emission: global issue budget exhausted (${GLOBAL_ISSUES_CREATED:-0}/${MAX_ISSUES:-})"
+      budget_stopped=1
       break
     fi
 
@@ -676,7 +685,11 @@ run_polish_issue_emission() {
       break
     fi
     emitted=$((emitted + 1))
-  done < "$groups_file"
+  done < "$groups_file" || emission_rc=1
+  if (( emission_rc == 0 && groups_complete == 0 && budget_stopped == 0 )); then
+    _polish_log_warn "Polish issue emission: incomplete group inventory; retry after restoring access"
+    emission_rc=1
+  fi
 
   rm -f "$groups_file"
   # Covers empty batches, the last in-flight create, and operation failures.
