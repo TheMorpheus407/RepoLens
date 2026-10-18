@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve finding registries and CSV output when SHA-256 identity generation fails or returns a malformed digest (repolens-r14-p2-1).
+
 - Preserve full out-of-scope manifest proposals above exec argument limits and fail safely if their rejection report cannot be serialized (repolens-r13-p6-4).
 
 - Count per-round lens completion receipts in attempt totals and resume deltas for multi-round runs, discarding partial counts from failed receipt reads.
