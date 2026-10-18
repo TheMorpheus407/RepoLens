@@ -533,7 +533,9 @@ _filing_fail() {
     if _filing_cancelled; then
       if [[ ! -e "$filed_dir/$cluster_id.url" && ! -L "$filed_dir/$cluster_id.url" ]] \
           && [[ -e "$filed_dir/$cluster_id.unverified-url" || -L "$filed_dir/$cluster_id.unverified-url" ]]; then
-        _branch_scope_replace_file "$filed_dir/$cluster_id.unverified-url" "$filed_dir/$cluster_id.url" || return 1
+        # Cancellation returns failure either way. A failed restore retains the
+        # quarantine and attempt guard, but must still release this governor.
+        _branch_scope_replace_file "$filed_dir/$cluster_id.unverified-url" "$filed_dir/$cluster_id.url" || true
       fi
       rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
       return 1

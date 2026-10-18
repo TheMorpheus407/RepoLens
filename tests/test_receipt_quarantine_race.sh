@@ -84,6 +84,9 @@ case_race() (
     _filing_cross_link_fail "$original" "$saved/c1.failed" invalid || rc=$?
   fi
   [[ "$rc" != 0 && "$boundaries" == 1 && -f "$saved/c1.attempted" && ! -e "$saved/c1.failed" ]] || return 1
+  if [[ "$kind" == ordinary ]]; then
+    [[ ! -e "$saved/c1.governor" ]] || return 1
+  fi
   if [[ "$signal" == none ]]; then
     [[ "$REPOLENS_FINAL_STATE" == finished ]] || return 1
   else

@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - Quarantine and restore ordinary and Cross-Link receipts with exact-path replacement so directory races at either rename boundary cannot nest or replace the saved receipt (repolens-r14-p3-1).
+  Release the ordinary receipt's read-only governor even when cancellation rollback fails, allowing reattestation after receipt repair without repeating the POST.
 
 - Reject non-regular or symlink Polish URL markers before recovering budget or resolving uncertain POST attempts; preserve saved state until the receipt is reconciled and refuse directory races during exact-path receipt publication (repolens-r14-p2-2).
 
