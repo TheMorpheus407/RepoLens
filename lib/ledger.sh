@@ -437,9 +437,19 @@ _ledger_frontmatter_scalar() {
 # _ledger_frontmatter_value <file> <key>
 #   Propagate the reader status before trimming/de-quoting a scalar. Nested
 #   command substitutions otherwise hide an IO failure behind the trim helper.
+#   Unquoted YAML null attribution is missing metadata, allowing directory
+#   fallback. Ignore YAML comments for that check only, before de-quoting so
+#   literal strings retain their identity and existing parsing behavior.
 _ledger_frontmatter_value() {
-  local raw
+  local raw attribution
   raw="$(_ledger_frontmatter_scalar "$1" "$2")" || return 2
+  if [[ "$2" == domain || "$2" == lens ]]; then
+    raw="${raw#"${raw%%[![:space:]]*}"}"
+    raw="${raw%"${raw##*[![:space:]]}"}"
+    attribution="${raw%%[[:space:]]#*}"
+    attribution="${attribution%"${attribution##*[![:space:]]}"}"
+    case "$attribution" in ''|null|Null|NULL|'~'|'#'*) return 0 ;; esac
+  fi
   _ledger_trim_yaml_value "$raw"
 }
 

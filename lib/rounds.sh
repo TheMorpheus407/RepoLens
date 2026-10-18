@@ -2045,7 +2045,12 @@ _generic_local_findings() (
   # Generic raw evidence and projections never reserve ordinary capacity.
   if [[ -d "$output_dir" ]]; then
     build_findings_jsonl_from_local "$output_dir" "$stage/ordinary.jsonl" || return 1
-    jq -j 'select(.domain != "generic") | .markdown_path, "\u0000", (.severity // ""), "\u0000"' "$stage/ordinary.jsonl" > "$stage/ordinary-values" || return 1
+    # A closed YAML block also occurs in documentation and partial drafts.
+    # Only canonical finding metadata consumes capacity. Ledger normalization
+    # rejects unknown severity values and retains domain/lens directory fallback.
+    jq -j 'select(.domain != "generic" and (.domain // "") != ""
+        and (.lens // "") != "" and (.severity // "") != "")
+      | .markdown_path, "\u0000", .severity, "\u0000"' "$stage/ordinary.jsonl" > "$stage/ordinary-values" || return 1
     printf '\0' >> "$stage/ordinary-values" || return 1
     while IFS= read -r -d '' source; do
       if [[ -z "$source" ]]; then ordinary_complete=1; break; fi

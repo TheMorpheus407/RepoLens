@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Ignore documentation and incomplete ordinary finding metadata, including YAML-null or empty attribution with comments, when reconciling the local issue budget, preserving directory fallback, quoted values and severity filtering so investigations are not skipped by a README or draft (repolens-r14-p6-1).
+
 - Traverse an explicitly symlinked rounds directory in verification and synthesis so readable findings cannot be replaced by false empty results (repolens-r14-p5-4).
 
 - Preserve the previous round digest when finding source reads or the segment parser fail with an IO error, while continuing to skip readable malformed drafts (repolens-r14-p5-2).
