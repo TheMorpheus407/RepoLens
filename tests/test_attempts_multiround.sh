@@ -108,12 +108,12 @@ for failed_receipt in .completed .rounds/round-1.lenses.completed; do
       healthy_receipt=.rounds/round-1.lenses.completed
       healthy_count=2
     fi
-    grep() {
-      if [[ "${3:-}" == "$read_base/$failed_receipt" ]]; then
+    wc() {
+      if [[ /dev/stdin -ef "$read_base/$failed_receipt" ]]; then
         printf '7\n'
         return 2
       fi
-      command grep "$@"
+      command wc "$@"
     }
     check test "$(_attempts_completed_count "$read_base")" -eq "$healthy_count"
     check attempts_begin "$read_base"

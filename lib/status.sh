@@ -309,7 +309,15 @@ _write_status_snapshot_locked() {
   fi
 
   if [[ -f "$completed_file" ]]; then
-    grep -v '^[[:space:]]*$' "$completed_file" 2>/dev/null | sort -u > "$completed_tmp" || : > "$completed_tmp"
+    # Use the same locked, newline-framed receipt contract as resume checks.
+    python3 - "$completed_file" <<'PYCOMPLETED' 2>/dev/null | grep -v '^[[:space:]]*$' | sort -u > "$completed_tmp" || : > "$completed_tmp"
+import fcntl
+import sys
+with open(sys.argv[1], "rb") as receipt:
+    fcntl.flock(receipt, fcntl.LOCK_SH)
+    data = receipt.read()
+    sys.stdout.buffer.write(data[:data.rfind(b"\n") + 1])
+PYCOMPLETED
   else
     : > "$completed_tmp"
   fi

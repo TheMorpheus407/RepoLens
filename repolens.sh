@@ -3495,10 +3495,10 @@ is_lens_completed() {
 
 mark_lens_completed() {
   # Lock the stable receipt inode; rollback short writes and retire any old
-  # unterminated tail before appending a complete dispatch identity.
-  python3 - "$completed_lenses_file" "$1" <<'PYRECEIPT'
+  # unterminated tail before appending a complete dispatch identity. Transfer
+  # the identity over stdin so exec argument limits cannot reject long tuples.
+  printf '%s\n' "$1" | python3 -c '
 import fcntl
-import os
 import sys
 try:
     with open(sys.argv[1], "a+b", buffering=0) as receipt:
@@ -3507,7 +3507,7 @@ try:
         data = receipt.read()
         complete_end = data.rfind(b"\n") + 1
         receipt.truncate(complete_end)
-        payload = os.fsencode(sys.argv[2]) + b"\n"
+        payload = sys.stdin.buffer.read()
         try:
             while payload:
                 written = receipt.write(payload)
@@ -3520,7 +3520,7 @@ try:
 except OSError as error:
     print(f"Cannot persist lens completion: {error}", file=sys.stderr)
     sys.exit(1)
-PYRECEIPT
+' "$completed_lenses_file"
 }
 
 LENS_HEARTBEAT_INTERVAL_DEFAULT=15

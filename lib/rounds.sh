@@ -140,7 +140,7 @@ _rounds_restore_completed_lenses_file() {
 _rounds_all_lenses_completed() {
   local completion_file="$1"
   shift
-  local lens_entry receipts lookup
+  local lens_entry receipts lookup receipt_fd
 
   [[ -n "$completion_file" ]] || return 1
   if [[ ! -e "$completion_file" && ! -L "$completion_file" ]]; then
@@ -161,12 +161,20 @@ except OSError:
   fi
   [[ -f "$completion_file" ]] || return 2
   # Snapshot all bytes before checking membership; grep -q may hide read errors.
+  # Share the writer lock so tail repair cannot mix old and new bytes.
   # Preserve trailing newlines through command substitution. An interrupted
   # append has no terminating newline and never constitutes a receipt.
-  receipts="$(cat "$completion_file" && printf '.')" || return 2
+  receipts="$(
+    exec {receipt_fd}<"$completion_file" || exit 1
+    flock -s "$receipt_fd" || exit 1
+    cat "$completion_file" && printf '.'
+  )" || return 2
   receipts="${receipts%.}"
-  [[ "$receipts" == *$'\n'* ]] || return 1
-  receipts=$'\n'"${receipts%$'\n'*}"$'\n'
+  if [[ "$receipts" == *$'\n'* ]]; then
+    receipts=$'\n'"${receipts%$'\n'*}"$'\n'
+  else
+    receipts=''
+  fi
 
   for lens_entry in "$@"; do
     # Receipts bind the full dispatch, including its role/focus/anchor/exclusions.
