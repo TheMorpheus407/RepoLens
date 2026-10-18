@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Exclusively allocate Polish URL receipt stages and reject non-regular staged sources, preventing planted predictable symlinks from overwriting unrelated files or becoming published receipts; keep uncertain POST reservations on staging failure (repolens-r15-p8-4).
+
 - Treat quoted empty domain/lens attribution with YAML comments as missing metadata, preserving directory fallback and preventing incomplete drafts from exhausting the local issue budget (repolens-r15-p8-2).
 
 - Preserve verification, synthesis manifests and actions when an existing rounds root is a dangling or looping symlink, resolves to a non-directory, or becomes unavailable during inventory enumeration; only absent or readable empty roots publish empty results (repolens-r15-p8-1).
