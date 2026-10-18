@@ -445,8 +445,10 @@ _polish_issue_budget_available() {
 }
 
 # _polish_publish_receipt <staged_file> <receipt>
-# Recheck source and destination types after the in-flight create, then replace
-# the exact path. Only a regular, non-symlink source can become a receipt.
+# Recheck source and destination types after the in-flight create, rejecting
+# objects observed to be non-regular or symlinks, then replace the exact path.
+# The run directory and its parents must remain trusted: these path checks do
+# not prevent a concurrent writer replacing the source before os.replace.
 # os.replace never moves a receipt into a raced directory or follows a final
 # symlink; it is available on GNU and BSD/macOS. Callers clean stages on failure.
 _polish_publish_receipt() {
