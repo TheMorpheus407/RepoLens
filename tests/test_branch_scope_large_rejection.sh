@@ -61,7 +61,7 @@ assert_publications() {
   check jq -e 'length == 0' "$LOG_BASE/final/manifest.json"
   check jq -e --slurpfile original "$LOG_BASE/proposal.json" '
     length == 1 and .[0].finding == $original[0][0]
-    and (.[0].reason | length) > 0
+    and .[0].reason == "out-of-scope citation: src/unchanged.sh"
   ' "$LOG_BASE/final/manifest.json.out-of-scope.json"
 }
 # Feed the large candidate to the real scope filter directly: the unrelated
@@ -74,12 +74,26 @@ check branch_scope_filter_manifest "$candidate"
 check mv "$candidate" "$LOG_BASE/final/manifest.json"
 assert_publications
 check jq -e '.[0].finding.body | length > 160000' "$LOG_BASE/final/manifest.json.out-of-scope.json"
-before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json")"
+printf '[{"cluster_id":"saved","cross_link_actions":[]}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+publication_hashes() {
+  sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json"
+}
+before="$(publication_hashes)"
 cp "$LOG_BASE/proposal.json" "$candidate"
 check branch_scope_filter_manifest "$candidate"
 check mv "$candidate" "$LOG_BASE/final/manifest.json"
 assert_publications
-check test "$before" = "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json")"
+check test "$before" = "$(publication_hashes)"
+# Pin the retryable status and candidate preservation at the filter boundary.
+cp "$LOG_BASE/proposal.json" "$candidate"
+FAULT_REJECTION=1
+rc=0
+branch_scope_filter_manifest "$candidate" || rc=$?
+check test "$rc" -eq 2
+check jq -e --slurpfile original "$LOG_BASE/proposal.json" '. == $original[0]' "$candidate"
+check test "$before" = "$(publication_hashes)"
+check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
+check rm "$candidate"
 # Keep the prior large rejection report while the caller handles a failed
 # serialization of a fresh, small candidate with partial stdout.
 jq '.[0].body = "src/unchanged.sh:1"' "$LOG_BASE/proposal.json" > "$TMP/small.json"
@@ -88,11 +102,12 @@ FAULT_REJECTION=1
 rc=0
 run_synthesizer probe || rc=$?
 check test "$rc" -ne 0
-check test "$before" = "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json")"
+check test "$before" = "$(publication_hashes)"
 check jq -e --slurpfile original "$LOG_BASE/proposal.json" '. == $original[0]' "$LOG_BASE/final/manifest.scope-pending.json"
 check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
 FAULT_REJECTION=0
 check run_synthesizer probe
 assert_publications
 check test ! -e "$LOG_BASE/final/manifest.scope-pending.json"
+check test ! -e "$LOG_BASE/final/cross-link-actions.preserved.json"
 printf 'PASS: large rejected findings survive; failed serialization preserves publications and repairs on retry.\n'
