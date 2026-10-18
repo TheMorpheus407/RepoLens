@@ -388,18 +388,18 @@ branch_scope_filter_directory() {
 # Side effects: filter a synthesized candidate before promotion, preserve
 # rejected proposals, and retain the branch title convention mechanically.
 # Returns 2 on unavailable scope evidence, an incomplete candidate read, or
-# rejection serialization failure, preserving publications through the
-# synthesis caller; 1 on other failures.
+# rejection serialization/publication failure, preserving publications through
+# the synthesis caller; 1 on other failures.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local manifest="$1" entry reason kept rejected verification_rc entries
+  local manifest="$1" entry reason kept rejected verification_rc entries report_tmp
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
   _branch_scope_read_paths >/dev/null || return 2
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
-  rejected="${kept}.rejected"
   # Capture and check the whole stream before filtering or publishing a prefix.
   entries="$(jq -c '.[]' "$manifest")" || { rm -f "$kept"; return 2; }
-  : > "$rejected"
+  # Exclusively create derived stages rather than opening predictable siblings.
+  rejected="$(mktemp "${kept}.rejected.XXXXXX")" || { rm -f "$kept"; return 2; }
   while IFS= read -r entry; do
     [[ -n "$entry" ]] || continue
     if reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$entry")")"; then
@@ -422,7 +422,16 @@ branch_scope_filter_manifest() {
       }
     fi
   done <<< "$entries"
-  jq -s '.' "$rejected" > "${manifest%.tmp.*}.out-of-scope.json" || return 1
+  # Keep the previous report until the complete aggregation can be published.
+  report_tmp="$(mktemp "${kept}.report.XXXXXX")" || {
+    rm -f -- "$kept" "$rejected"
+    return 2
+  }
+  if ! jq -s '.' "$rejected" > "$report_tmp" ||
+      ! _branch_scope_replace_file "$report_tmp" "${manifest%.tmp.*}.out-of-scope.json"; then
+    rm -f -- "$kept" "$rejected" "$report_tmp"
+    return 2
+  fi
   jq -s '.' "$kept" > "$manifest" || return 1
   rm -f "$kept" "$rejected"
 }
