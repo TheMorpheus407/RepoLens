@@ -16,7 +16,7 @@
 # RepoLens — per-invocation attempt record (issue #371).
 #
 # A run lives at `logs/<run-id>/` and survives `--resume` by reusing the SAME
-# dir. Completion state persists in `logs/<run-id>/.completed` (append-only),
+# dir. Completion state persists in append-only root or per-round lens receipts,
 # but nothing records the SEPARATE invocations ("attempts") that touched the
 # run: when each pass started/stopped, why it stopped, or how many lenses it
 # completed. This module writes that audit trail to
@@ -25,7 +25,7 @@
 #
 # Two functions:
 #   attempts_begin <log_base>                       — called once near run-id
-#       resolution; records started_at + a baseline .completed line count to a
+#       resolution; records started_at + a baseline lens-receipt count to a
 #       transient `.attempt-start` marker.
 #   attempts_finalize <log_base> <status> <why> <exit_code>
 #       — appends one attempt entry atomically (temp file + mv).
@@ -40,11 +40,11 @@
 #                                 sentinel fallback (rate-limit / agent-no-progress
 #                                 / systemic-failure / interrupted-<signal>), or ""
 #   lenses_completed_this_attempt lenses completed during THIS attempt (delta =
-#                                 current .completed line count - baseline at
+#                                 current lens-receipt count - baseline at
 #                                 attempts_begin), clamped at >= 0. Answers "what
 #                                 did THIS pass complete", which a cumulative
 #                                 snapshot cannot.
-#   lenses_completed_total        cumulative .completed line count at finalize —
+#   lenses_completed_total        cumulative lens-receipt count at finalize —
 #                                 "how far is the WHOLE run", across all attempts.
 #   exit_code                     the process exit code this attempt is about to
 #                                 exit with, as a JSON number; null when no exit
@@ -57,26 +57,27 @@
 # NEVER reset to [] (that would silently drop prior attempts) — we warn and
 # skip the append instead. Pattern mirrors lib/result_pointer.sh (#308).
 
-# _attempts_completed_count <log_base> — print the number of lenses recorded in
-# <log_base>/.completed (one lens id per line). 0 if the file is absent or
-# unreadable. Always prints a non-negative integer.
+# _attempts_completed_count <log_base> — count lens receipts across the run.
+# Single-round work uses .completed; multi-round work uses one
+# .rounds/round-N.lenses.completed file per round. The same lens in two rounds
+# is two investigations. Round barrier markers are not lens receipts.
+# Absent/unreadable files contribute 0; always prints a non-negative integer.
 _attempts_completed_count() {
-  local log_base="$1" completed_file count
-  completed_file="$log_base/.completed"
-  if [[ ! -f "$completed_file" ]]; then
-    printf '0'
-    return 0
-  fi
-  count="$(grep -c '' "$completed_file" 2>/dev/null || printf '0')"
-  [[ "$count" =~ ^[0-9]+$ ]] || count=0
-  printf '%s' "$count"
+  local log_base="$1" completed_file count total=0
+  for completed_file in "$log_base/.completed" "$log_base"/.rounds/round-*.lenses.completed; do
+    [[ -f "$completed_file" ]] || continue
+    count="$(grep -c '' "$completed_file" 2>/dev/null)" || count=0
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+    total=$(( total + count ))
+  done
+  printf '%s' "$total"
 }
 
 # attempts_begin <log_base> — record the start of this invocation. Writes a
 # transient `.attempt-start` marker (key=value lines, like the .rate-limit-*
-# markers) capturing started_at and the baseline .completed line count so
+# markers) capturing started_at and the baseline lens-receipt count so
 # attempts_finalize can compute the per-attempt lenses-completed delta. On a
-# fresh run .completed does not exist yet (it is touched later), so the baseline
+# fresh run no receipt files exist yet (they are created later), so the baseline
 # is correctly 0; on a resume it reflects work done by earlier attempts.
 #
 # Side effects: creates/overwrites <log_base>/.attempt-start. Strictly
@@ -114,7 +115,7 @@ attempts_begin() {
 # Reads started_at + baseline_completed from the .attempt-start marker written
 # by attempts_begin (fallbacks: started_at="", baseline 0 if absent). attempt_id
 # is the current array length + 1; lenses_completed_this_attempt is the
-# per-attempt delta, lenses_completed_total is the cumulative .completed count.
+# per-attempt delta, lenses_completed_total is the cumulative lens-receipt count.
 # exit_code is recorded as a JSON number when numeric, else null (the 4th arg is
 # optional so a caller that does not know the exit code records null).
 #
@@ -183,7 +184,7 @@ attempts_finalize() {
   # lenses_completed_this_attempt = work done during THIS attempt (current -
   # baseline), clamped at >= 0 defensively. lenses_completed_total = the same
   # cumulative current_completed count, recorded so consumers don't have to read
-  # .completed separately.
+  # receipt files separately.
   local current_completed lenses_completed
   current_completed="$(_attempts_completed_count "$log_base")"
   lenses_completed=$(( current_completed - baseline ))

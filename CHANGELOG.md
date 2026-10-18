@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Count per-round lens completion receipts in attempt totals and resume deltas for multi-round runs, discarding partial counts from failed receipt reads.
+
 - Clear recovered LENS/GENERIC dispatch-read stop reasons on explicit resume while preserving previous attempt history, allowing successful completed runs to leave the incomplete-run retention set (repolens-r13-p1-1).
 
 - Keep saved synthesis results recoverable until a validated replacement is published, including branch reviews. Cancellation before publication restores the previous files, including prior absence after cross-link staging, cancellation after publication preserves the replacement and returns the signal status, and failed attempts retain a recovery snapshot until a successful retry. Obsolete backup cleanup failures warn without blocking a valid result (repolens-r13-p5-1).
