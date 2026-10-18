@@ -31,12 +31,13 @@ printf '["src/changed.sh"]\n' > "$LOG_BASE/branch-scope.json"
 printf 'src/changed.sh:1\n' > "$LOG_BASE/rounds/round-1/lens-outputs/security/finding.md"
 python3 - "$LOG_BASE/proposal.json" <<'PYDATA'
 import json, sys
+# Exceed the serialized exec-argument limit without one huge citation-scan record.
 finding = {
     "cluster_id": "large", "title": "Large out-of-scope finding", "severity": "high",
     "domain": "security", "lens": "injection", "root_cause_category": "validation",
     "source_finding_paths": ["finding.md"], "dedup_against_existing": [],
     "proposed_labels": [], "cross_link_actions": [], "granularity": "independent",
-    "body": "x" * 160000 + "\nsrc/unchanged.sh:1\n",
+    "body": ("x" * 79 + "\n") * 2000 + "src/unchanged.sh:1\n",
 }
 with open(sys.argv[1], "w", encoding="utf-8") as stream:
     json.dump([finding], stream)
