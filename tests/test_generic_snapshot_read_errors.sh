@@ -23,7 +23,7 @@ source <(awk '/^LOG_BASE=/ {exit} /^REPO=/ {next} {print}' "$REPO/tests/test_gen
 trap 'chmod -R u+rwX "$FIXTURE"; rm -rf -- "$FIXTURE"' EXIT
 printf -- '---\n---\nBody\n' > "$FIXTURE/empty-block.md"
 _round_digest_frontmatter_block "$FIXTURE/empty-block.md" >/dev/null
-if (( $# == 0 )); then set -- unreadable empty-error partial-error; fi
+if (( $# == 0 )); then set -- unreadable empty-error partial-error metadata-empty metadata-partial; fi
 for fault in "$@"; do
   (
     LOG_BASE="$FIXTURE/$fault/run" OUTPUT_DIR="$FIXTURE/$fault/output"
@@ -56,6 +56,12 @@ for fault in "$@"; do
       fi
     }
     awk() {
+      # Fail only root metadata selection after the full source snapshot read.
+      if [[ "$fault" == metadata-* && "${FUNCNAME[1]:-}" == _round_digest_frontmatter_values ]]; then
+        : > "$fault_marker"
+        [[ "$fault" != metadata-partial ]] || command awk "$@"
+        return 74
+      fi
       if [[ "${!#}" == "$TMPDIR"/repolens-generic-plan.*/source ]]; then
         : > "$fault_marker"
         case "$fault" in

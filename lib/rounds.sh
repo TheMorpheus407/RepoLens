@@ -2032,7 +2032,7 @@ _round_digest_finding_segments() {
 # after all lens/round completion receipts have been written.
 _generic_local_findings() (
   local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count=0 count total physical_rounds physical_source ordinary_complete=0
-  local stage="" stage_root candidate physical_output="" source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0
+  local stage="" stage_root candidate physical_output="" source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0 generic_source_id
   local rounds_dir="${LOG_BASE:-}/rounds"
   mkdir -p "$LOG_BASE/final" || return 1
   # TMPDIR can itself be inside a scanned tree, including through a symlink.
@@ -2107,11 +2107,12 @@ _generic_local_findings() (
       [[ "$?" == 1 ]] && continue
       return 1
     fi
-    domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)"
+    domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)" || return 1
     [[ "$domain" == generic ]] || continue
     # An overlapping destination may live in the private inventory. Projections
     # are derived outputs, never new investigator sources.
-    [[ -z "$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar generic_source_id)" ]] || continue
+    generic_source_id="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar generic_source_id)" || return 1
+    [[ -z "$generic_source_id" ]] || continue
     segments="$(_round_digest_finding_segments "$stage/source")" || return 1
     relative="${source#"$rounds_dir/"}" index=0
     round_root="$rounds_dir/${relative%%/*}"
@@ -2137,19 +2138,19 @@ _generic_local_findings() (
       segment="${segments%%$'\036'*}"; segments="${segments#*$'\036'}"
       frontmatter="${segment%%$'\037'*}" body="${segment#*$'\037'}"
       index=$((index + 1))
-      domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)"
+      domain="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar domain)" || return 1
       [[ "$domain" == generic ]] || continue
-      lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens_id)"
-      [[ -n "$lens" ]] || lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens)"
+      lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens_id)" || return 1
+      [[ -n "$lens" ]] || lens="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar lens)" || return 1
       [[ -n "$lens" ]] || continue
       grep -Fxq -- "generic/$lens" "$stage/trusted" || continue
-      severity="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar severity)"
+      severity="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar severity)" || return 1
       severity="$(severity_normalize "$severity")"
       [[ -n "$severity" ]] || continue
       if [[ -n "${REPOLENS_MIN_SEVERITY:-}" ]] && ! severity_meets_min "$severity" "$REPOLENS_MIN_SEVERITY"; then
         continue
       fi
-      title="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar title)"
+      title="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar title)" || return 1
       if [[ -z "$title" ]]; then
         title="$(printf '%s' "$body" | _round_digest_section_text_from_stream hypothesis | _round_digest_inline_text 200)"
       fi
@@ -2271,10 +2272,13 @@ _round_digest_frontmatter_values() {
   '
 }
 
+# Read the first root value from stdin and trim YAML whitespace/outer quotes.
+# Missing keys succeed with an empty value. Failed selection returns 2 without
+# emitting partial data; the caller's pipefail setting is preserved.
 _round_digest_frontmatter_scalar() {
   local key="$1" value
 
-  value="$(_round_digest_frontmatter_values "$key" | sed -n '1p')"
+  value="$(set -o pipefail; _round_digest_frontmatter_values "$key" | sed -n '1p')" || return 2
   _round_digest_trim_yaml_value "$value"
 }
 
@@ -2422,13 +2426,14 @@ _round_digest_rank_suspect_files() {
 # Usage: build_round_digest <round_dir> [dispatched domain/lens[|attributes] ...]
 # Static findings require a registered domain/lens pair; Generic/Custom findings
 # require a matching dispatch argument. Malformed/untrusted findings are skipped.
-# Returns 2 for a missing round directory argument, 1 for publication failure,
+# Returns 2 for a missing round directory argument, 1 for read/publication failure,
 # and 0 on success (including an empty digest).
 build_round_digest() {
+  local generic_source_id
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
   local dispatched_entry
   local file segment segment_sep field_sep segments_output segments_rc frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
-  local suspect_file audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
+  local suspect_file category_values suspect_values audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
   local round_number confidence confidence_rank severity_rank_value score finding_id hypothesis files_display title_text finding_identity
   local omitted_total content_mode content_priority min_severity log_title
   local tmp_digest digest_lines
@@ -2545,14 +2550,16 @@ build_round_digest() {
       body="${segment#*"$field_sep"}"
 
       # Generated delivery can overlap this inventory after a completed resume.
-      [[ -z "$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar generic_source_id)" ]] || continue
-      title_text="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "title" | _round_digest_inline_text 160)"
-      raw_severity="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "severity")"
+      generic_source_id="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar generic_source_id)" || return 1
+      [[ -z "$generic_source_id" ]] || continue
+      title_text="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "title")" || return 1
+      title_text="$(printf '%s\n' "$title_text" | _round_digest_inline_text 160)"
+      raw_severity="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "severity")" || return 1
       severity="$(severity_normalize "$raw_severity")"
-      domain="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "domain")"
-      lens="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "lens_id")"
+      domain="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "domain")" || return 1
+      lens="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "lens_id")" || return 1
       if [[ -z "$lens" ]]; then
-        lens="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "lens")"
+        lens="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "lens")" || return 1
       fi
       log_title="${title_text:-<untitled>}"
 
@@ -2604,6 +2611,9 @@ build_round_digest() {
 
       category_seen=0
       primary_category=""
+      # Capture complete list reads before consuming them: process substitution
+      # hides producer errors and can replace a saved digest with missing data.
+      category_values="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "root_cause_category")" || return 1
       while IFS= read -r category; do
         normalized="$(_round_digest_normalize_label "$category")"
         [[ -n "$normalized" ]] || continue
@@ -2613,7 +2623,7 @@ build_round_digest() {
         fi
         _round_digest_lens_category_counts["$lens|$normalized"]=$(( ${_round_digest_lens_category_counts["$lens|$normalized"]:-0} + 1 ))
         _round_digest_category_counts["$normalized"]=$(( ${_round_digest_category_counts["$normalized"]:-0} + 1 ))
-      done < <(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "root_cause_category")
+      done <<< "$category_values"
 
       if (( category_seen == 0 )); then
         primary_category="uncategorized"
@@ -2623,6 +2633,7 @@ build_round_digest() {
 
       suspect_files=()
       display_files=()
+      suspect_values="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "suspect_files")" || return 1
       while IFS= read -r suspect_file; do
         suspect_file="$(_round_digest_display_path "$suspect_file")"
         [[ -n "$suspect_file" ]] || continue
@@ -2631,14 +2642,15 @@ build_round_digest() {
         if (( ${#display_files[@]} < 3 )); then
           display_files+=("$suspect_file")
         fi
-      done < <(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "suspect_files")
+      done <<< "$suspect_values"
 
-      confidence="$(_round_digest_sanitize_identifier "$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "confidence")")"
+      confidence="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "confidence")" || return 1
+      confidence="$(_round_digest_sanitize_identifier "$confidence")"
       [[ -n "$confidence" ]] || confidence="unknown"
       confidence_rank="$(_round_digest_confidence_rank "$confidence")"
       severity_rank_value="$(severity_rank "$severity" 2>/dev/null || printf '0')"
       score=$(( severity_rank_value * 100 + confidence_rank * 10 ))
-      round_number="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "round")"
+      round_number="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "round")" || return 1
       if [[ ! "$round_number" =~ ^[0-9]+$ ]]; then
         round_number="$(basename "$round_dir" | sed -nE 's/^round-([0-9]+)$/\1/p')"
       fi

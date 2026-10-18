@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Propagate failed root-frontmatter scalar reads through Generic delivery and round digests, preserving delivered findings, ownership receipts and the last complete digest on empty or partial parser failures (repolens-r15-p6-3).
+  Round digests also reject failed category and suspect-file list reads before replacing the saved digest.
+
 - Treat failed branch-scope body extraction as retryable IO instead of rejecting or silently accepting a finding from partial output; preserve saved publications and the complete pending proposal (repolens-r15-p6-2).
 
 - Preserve saved synthesis manifest, actions and rejection report on accepted-scope staging, serialization, aggregation, candidate replacement and stream cleanup failures; restore the previous report if candidate replacement fails, and keep the complete candidate pending for retry (repolens-r15-p6-1, repolens-r15-p8-3).

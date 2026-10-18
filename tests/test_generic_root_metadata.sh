@@ -118,6 +118,20 @@ check jq -se 'length==1 and .[0].severity=="high"' "$TMP/before.jsonl"
 check build_round_digest "$LOG_BASE/rounds/round-1" generic/probe
 cp "$LOG_BASE/rounds/round-1/digest.md" "$TMP/before-digest.md"
 check grep -Fq 'high/high `generic/probe` category=race files=`src/right.sh:1`' "$TMP/before-digest.md"
+# A failed root-metadata reader must preserve the saved digest too.
+awk() {
+  if [[ "${FUNCNAME[1]:-}" == _round_digest_frontmatter_values ]]; then
+    printf 'fault\n' > "$TMP/metadata-fault-hit"
+    return 74
+  fi
+  command awk "$@"
+}
+rc=0
+build_round_digest "$LOG_BASE/rounds/round-1" generic/probe || rc=$?
+check test -s "$TMP/metadata-fault-hit"
+check test "$rc" -ne 0
+check cmp -s "$TMP/before-digest.md" "$LOG_BASE/rounds/round-1/digest.md"
+unset -f awk
 # Complete digest equality also pins the finding ID, category counts and files.
 for placement in before after; do
   for indent in 0 2 4; do
@@ -138,5 +152,19 @@ check jq -se 'length==1 and .[0].title=="Actual high finding" and .[0].severity=
 check jq -se --slurpfile old "$TMP/before.jsonl" 'length==1 and .[0].id==$old[0].id and .[0].markdown_path==$old[0].markdown_path' "$TMP/after.jsonl"
 check test "$(find "$OUTPUT_DIR" -type f -name '*.md' | wc -l)" -eq 1
 check export_generic_local_findings "$OUTPUT_DIR"
+# Reader errors propagate even when a caller has disabled pipefail.
+for caller_pipefail in on off; do
+  check bash -c '
+    set -euo pipefail
+    source "$1/lib/rounds.sh"
+    [[ "$2" != off ]] || set +o pipefail
+    # Simulate failed metadata selection without producing a value.
+    awk() { return 74; }
+    rc=0
+    value="$(printf "domain: generic\n" | _round_digest_frontmatter_scalar domain)" || rc=$?
+    [[ "$rc" -eq 2 && -z "$value" ]]
+    [[ "$2" != off ]] || [[ ! -o pipefail ]]
+  ' _ "$ROOT" "$caller_pipefail"
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
