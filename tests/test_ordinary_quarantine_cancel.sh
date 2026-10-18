@@ -18,6 +18,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO/lib/filing.sh"
+eval "$(declare -f _branch_scope_replace_file | sed '1s/_branch_scope_replace_file/real_replace/')"
 eval "$(sed -n '/^_install_finalization_signal_handlers() {/,/^}/p' "$REPO/repolens.sh")"
 FIXTURE="$(mktemp -d )"
 trap 'rm -rf -- "$FIXTURE"' EXIT
@@ -39,9 +40,9 @@ case_quarantine() (
     $read_ok || return 1
     printf '{"url":"https://github.com/acme/probe/issues/17","number":17,"title":"Finding","body":"Evidence","state":"open","labels":[]}\n'
   }
-  mv() {
-    command mv "$@" || return 1
-    if [[ "${2:-}" == "$prefix.url" ]]; then kill -s "$signal" "$BASHPID"; fi
+  _branch_scope_replace_file() {
+    real_replace "$@" || return 1
+    if [[ "${1:-}" == "$prefix.url" ]]; then kill -s "$signal" "$BASHPID"; fi
   }
   rc=0
   filing_verified_issue_count probe > "$LOG_BASE/count" || rc=$?

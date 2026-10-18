@@ -18,6 +18,7 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO/lib/filing.sh"
+eval "$(declare -f _branch_scope_replace_file | sed '1s/_branch_scope_replace_file/real_replace/')"
 FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 for signal in HUP INT TERM; do
@@ -37,7 +38,7 @@ for signal in HUP INT TERM; do
   else printf 'FAIL: %s failure admission\n' "$signal"; exit 1; fi
 done
 
-# A returning signal inside mv must roll quarantine back before writing a result.
+# A returning signal inside exact-path replacement must roll quarantine back before writing a result.
 for signal in HUP INT TERM; do
   for move_status in 0 1; do
     if (
@@ -45,8 +46,8 @@ for signal in HUP INT TERM; do
       printf 'saved receipt\n' > "$prefix.done"
       REPOLENS_FINAL_STATE=finished
       trap 'REPOLENS_FINAL_STATE=interrupted' HUP INT TERM
-      mv() {
-        command mv "$@" || return 1
+      _branch_scope_replace_file() {
+        real_replace "$@" || return 1
         if [[ "$1" == "$prefix.done" ]]; then
           kill -s "$signal" "$BASHPID"
           return "$move_status"
@@ -76,8 +77,8 @@ for signal in HUP INT TERM; do
     trap 'REPOLENS_FINAL_STATE=interrupted' HUP INT TERM
     forge_issue_number_from_url() { printf '17\n'; }
     forge_issue_read_json() { printf '{}\n'; }
-    mv() {
-      command mv "$@" || return 1
+    _branch_scope_replace_file() {
+      real_replace "$@" || return 1
       if [[ "$1" == "$prefix.done" ]]; then kill -s "$signal" "$BASHPID"; fi
     }
     rc=0

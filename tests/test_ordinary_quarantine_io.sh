@@ -18,6 +18,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO/lib/filing.sh"
+eval "$(declare -f _branch_scope_replace_file | sed '1s/_branch_scope_replace_file/real_replace/')"
 eval "$(sed -n '/^_install_finalization_signal_handlers() {/,/^}/p' "$REPO/repolens.sh")"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
@@ -50,11 +51,11 @@ case_io() (
     printf 'POST\n' >> "$LOG_BASE/posts"
     printf 'https://github.com/acme/probe/issues/17\n'
   }
-  mv() {
-    if [[ "$mode" == move && "${2:-}" == "$prefix.url" ]]; then return 1; fi
-    if [[ "$mode" == rollback && "${2:-}" == "$prefix.unverified-url" ]]; then return 1; fi
-    command mv "$@" || return 1
-    if [[ "$mode" == rollback && "${2:-}" == "$prefix.url" ]]; then
+  _branch_scope_replace_file() {
+    if [[ "$mode" == move && "${1:-}" == "$prefix.url" ]]; then return 1; fi
+    if [[ "$mode" == rollback && "${1:-}" == "$prefix.unverified-url" ]]; then return 1; fi
+    real_replace "$@" || return 1
+    if [[ "$mode" == rollback && "${1:-}" == "$prefix.url" ]]; then
       kill -s "$signal" "$BASHPID"
     fi
   }

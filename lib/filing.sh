@@ -522,17 +522,20 @@ _filing_fail() {
       return 1
     fi
     # A quarantine marker is an exact file, never a container for the receipt.
+    # Exact-path replacement also refuses a directory created after this guard.
     if [[ -d "$filed_dir/$cluster_id.unverified-url" || -L "$filed_dir/$cluster_id.unverified-url" ]]; then
       rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
       return 1
     fi
-    mv -f "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url" || move_rc=$?
+    _branch_scope_replace_file "$filed_dir/$cluster_id.url" "$filed_dir/$cluster_id.unverified-url" || move_rc=$?
     # The returning parent handler may accept cancellation while mv waits.
     # Restore a completed rename before leaving this receipt for resume.
     if _filing_cancelled; then
       if [[ ! -e "$filed_dir/$cluster_id.url" && ! -L "$filed_dir/$cluster_id.url" ]] \
           && [[ -e "$filed_dir/$cluster_id.unverified-url" || -L "$filed_dir/$cluster_id.unverified-url" ]]; then
-        mv -f "$filed_dir/$cluster_id.unverified-url" "$filed_dir/$cluster_id.url" || return 1
+        # Cancellation returns failure either way. A failed restore retains the
+        # quarantine and attempt guard, but must still release this governor.
+        _branch_scope_replace_file "$filed_dir/$cluster_id.unverified-url" "$filed_dir/$cluster_id.url" || true
       fi
       rmdir "$filed_dir/$cluster_id.governor" 2>/dev/null || true
       return 1
@@ -561,13 +564,13 @@ _filing_cross_link_fail() {
     if [[ -d "${done_file%.done}.unverified-done" || -L "${done_file%.done}.unverified-done" ]]; then
       return 1
     fi
-    mv "$done_file" "${done_file%.done}.unverified-done" || move_rc=$?
+    _branch_scope_replace_file "$done_file" "${done_file%.done}.unverified-done" || move_rc=$?
     # A returning handler may run while mv waits for its child. Even a failed
     # command can have completed the rename before reporting interruption.
     if _filing_cancelled; then
       if [[ ! -e "$done_file" && ! -L "$done_file" ]] \
           && [[ -e "${done_file%.done}.unverified-done" || -L "${done_file%.done}.unverified-done" ]]; then
-        mv "${done_file%.done}.unverified-done" "$done_file" || return 1
+        _branch_scope_replace_file "${done_file%.done}.unverified-done" "$done_file" || return 1
       fi
       return 1
     fi

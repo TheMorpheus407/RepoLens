@@ -19,6 +19,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$REPO/lib/filing.sh"
+eval "$(declare -f _branch_scope_replace_file | sed '1s/_branch_scope_replace_file/real_replace/')"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 for kind in ordinary cross-link; do
@@ -44,9 +45,9 @@ for kind in ordinary cross-link; do
       esac
       REPOLENS_FINAL_STATE=finished
       trap 'REPOLENS_FINAL_STATE=interrupted' TERM
-      mv() {
+      _branch_scope_replace_file() {
         local target="${!#}"
-        command mv "$@" || return 1
+        real_replace "$@" || return 1
         # Real signal at the same rename boundary as the original failure.
         [[ "$target" != "$quarantine" ]] || kill -TERM "$BASHPID"
       }
@@ -75,7 +76,7 @@ for kind in ordinary cross-link; do
       test -z "$(find "$LOG_BASE/outside" -type f -print)"
       if [[ "$kind" == ordinary ]]; then
         test ! -e "$prefix.governor"
-        unset -f mv
+        eval "$(declare -f real_replace | sed '1s/real_replace/_branch_scope_replace_file/')"
         REPOLENS_FINAL_STATE=finished FORGE_REPO=acme/repo
         printf '{"title":"Finding","body":"Evidence","proposed_labels":[]}\n' > "$prefix.request.json"
         forge_issue_number_from_url() { printf '17\n'; }
