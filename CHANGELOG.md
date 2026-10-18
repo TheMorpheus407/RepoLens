@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve the previous round digest when finding source reads or the segment parser fail with an IO error, while continuing to skip readable malformed drafts (repolens-r14-p5-2).
+
 - Preserve the previous round digest when finding enumeration fails or its staged inventory is incomplete, keeping filesystem paths intact through NUL framing (repolens-r14-p5-1).
 
 - Preserve finding registries and CSV output when SHA-256 identity generation fails or returns a malformed digest (repolens-r14-p2-1).

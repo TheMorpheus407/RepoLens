@@ -1910,20 +1910,21 @@ _round_digest_frontmatter_block() {
 }
 
 _round_digest_finding_segments() {
-  local file="$1" content_mode=0
+  local file="$1" content_mode=0 parsed
+  # Check the complete parser read before emitting any segments. IO errors (2)
+  # are distinct from readable malformed frontmatter (1) and cannot be skipped.
 
   if _round_digest_content_mode_enabled; then
     content_mode=1
   fi
 
-  awk -v content_mode="$content_mode" '
+  if ! parsed="$(awk -v content_mode="$content_mode" '
     BEGIN {
       segment_sep = sprintf("%c", 30)
       field_sep = sprintf("%c", 31)
       state = "start"
       frontmatter = ""
       body = ""
-      emitted = 0
     }
     function emit_segment() {
       if (frontmatter == "") {
@@ -1932,7 +1933,6 @@ _round_digest_finding_segments() {
       printf "%s%s%s%s", frontmatter, field_sep, body, segment_sep
       frontmatter = ""
       body = ""
-      emitted = 1
     }
     function valid_finding_frontmatter(candidate,    lines, count, i) {
       has_severity = 0
@@ -1956,9 +1956,8 @@ _round_digest_finding_segments() {
       }
       return (has_severity || has_content_priority_title || has_content_audit_title) && has_domain && has_lens
     }
-    NR == 1 && $0 != "---" {
-      exit 1
-    }
+    NR == 1 && $0 != "---" { invalid = 1 }
+    invalid { next }
     state == "start" {
       if ($0 == "---") {
         state = "frontmatter"
@@ -2000,18 +1999,20 @@ _round_digest_finding_segments() {
       next
     }
     END {
-      if (state == "frontmatter") {
-        exit 1
-      }
-      if (pending_frontmatter) {
-        body = body "---\n" candidate_frontmatter
-      }
-      emit_segment()
-      if (!emitted) {
-        exit 1
+      # Do not override an awk IO failure with a format-error exit status.
+      # Readable malformed input emits nothing and is identified by the shell.
+      if (!invalid && state != "frontmatter") {
+        if (pending_frontmatter) {
+          body = body "---\n" candidate_frontmatter
+        }
+        emit_segment()
       }
     }
-  ' "$file"
+  ' "$file")"; then
+    return 2
+  fi
+  [[ -n "$parsed" ]] || return 1
+  printf '%s' "$parsed"
 }
 
 # Deliver Generic raw segments as ordinary local findings. The private source
@@ -2409,7 +2410,7 @@ _round_digest_rank_suspect_files() {
 build_round_digest() {
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
   local dispatched_entry
-  local file segment segment_sep field_sep segments_output frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
+  local file segment segment_sep field_sep segments_output segments_rc frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
   local suspect_file audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
   local round_number confidence confidence_rank severity_rank_value score finding_id hypothesis files_display title_text finding_identity
   local omitted_total content_mode content_priority min_severity log_title
@@ -2504,7 +2505,14 @@ build_round_digest() {
     segment_sep=$'\036'
     field_sep=$'\037'
     finding_segments=()
-    if ! segments_output="$(_round_digest_finding_segments "$file")"; then
+    if segments_output="$(_round_digest_finding_segments "$file")"; then
+      :
+    else
+      segments_rc=$?
+      if (( segments_rc != 1 )); then
+        _round_digest_warn "Unable to read lens output for digest: $file"
+        return 1
+      fi
       _round_digest_warn "Skipping malformed lens output $(basename "$file"): missing or unterminated YAML frontmatter"
       continue
     fi
