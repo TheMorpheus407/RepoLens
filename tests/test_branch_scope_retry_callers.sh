@@ -375,6 +375,7 @@ case_synthesis_body_io() (
   printf '[{"retained":true}]\n' > "$LOG_BASE/final/manifest.json.out-of-scope.json"
   printf '[{"cluster_id":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
   before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  # Fail only the scope body reader, optionally emitting a valid citation first.
   jq() {
     if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "$#" == 2 && "$1" == -r && "$2" == .body ]]; then
       printf 'fault\n' >> "$LOG_BASE/fault-hit"
