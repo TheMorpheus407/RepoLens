@@ -1422,13 +1422,9 @@ run_synthesizer() {
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
     done
   elif [[ -n "$_synthesis_recovery_path" ]]; then
-    if [[ -e "$_synthesis_recovery_path/manifest.json" || -L "$_synthesis_recovery_path/manifest.json" \
-        || -e "$_synthesis_recovery_path/cross-link-actions.preserved.json" \
-        || -L "$_synthesis_recovery_path/cross-link-actions.preserved.json" ]]; then
-      echo "run_synthesizer: saved results retained under $_synthesis_recovery_path" >&2
-    else
-      rmdir -- "$_synthesis_recovery_path" 2>/dev/null || true
-    fi
+    # An empty snapshot records prior absence. Retain it too, so cancellation
+    # during failure reporting can remove newly staged actions on restore.
+    echo "run_synthesizer: saved results retained under $_synthesis_recovery_path" >&2
   fi
   if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
     if [[ "$_synthesis_published" == false && -n "$_synthesis_recovery_path" ]]; then

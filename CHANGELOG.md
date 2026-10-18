@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Keep saved synthesis results recoverable until a validated replacement is published, including branch reviews. Cancellation before publication restores the previous files, cancellation after publication preserves the replacement and returns the signal status, and failed attempts retain a recovery copy until a successful retry. Obsolete backup cleanup failures warn without blocking a valid result (repolens-r13-p5-1).
+- Keep saved synthesis results recoverable until a validated replacement is published, including branch reviews. Cancellation before publication restores the previous files, including prior absence after cross-link staging, cancellation after publication preserves the replacement and returns the signal status, and failed attempts retain a recovery snapshot until a successful retry. Obsolete backup cleanup failures warn without blocking a valid result (repolens-r13-p5-1).
 
 - Fail round-digest generation on failed or partial lens-registry reads, preserving the last digest for a repaired retry instead of publishing a false empty findings inventory (repolens-r13-p6-5).
 

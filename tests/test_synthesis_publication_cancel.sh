@@ -22,7 +22,7 @@ source "$REPO/lib/synthesize.sh"
 FIXTURE="$(mktemp -d)"
 trap 'command rm -rf -- "$FIXTURE"' EXIT
 
-for scenario in branch-agent branch-agent-success failure-report post-publish-empty post-publish-model cleanup-error; do
+for scenario in branch-agent branch-agent-success failure-report staged-actions staged-report post-publish-empty post-publish-model cleanup-error; do
   [[ -z "${TEST_CASE:-}" || "$TEST_CASE" == "$scenario" ]] || continue
   for prior in present absent; do
     (
@@ -44,25 +44,35 @@ for scenario in branch-agent branch-agent-success failure-report post-publish-em
         printf 'src/probe.sh:1\n' > "$LOG_BASE/rounds/round-1/lens-outputs/current.md"
       fi
       if [[ "$scenario" == branch-agent* ]]; then MODE=branch-review; fi
+      if [[ "$scenario" == staged-* ]]; then REPOLENS_MIN_SEVERITY=high CROSS_LINK_MODE=comment; fi
       compose_prompt() { printf 'mock prompt\n'; }
       # Cancel inside model work; its nonzero exit must still restore publication.
       run_agent() {
         if [[ "$scenario" == branch-agent ]]; then kill -TERM "$BASHPID"; return 99; fi
         if [[ "$scenario" == branch-agent-success ]]; then kill -TERM "$BASHPID"; fi
         if [[ "$scenario" == failure-report ]]; then return 99; fi
+        if [[ "$scenario" == staged-* ]]; then
+          printf '%s\n' '[{"cluster_id":"low","severity":"low","source_finding_paths":["current.md"],"cross_link_actions":[{"type":"comment","issue_number":9,"body":"Staged action"}]}]'
+          return 0
+        fi
         printf '[]\n'
       }
       # Deliver TERM after the generator's first interruption check has passed.
       echo() {
         builtin echo "$@"
-        if [[ "$scenario" == failure-report && "$*" == *'saved results retained under '* ]]; then
+        if [[ ( "$scenario" == failure-report || "$scenario" == staged-report ) && "$*" == *'saved results retained under '* ]]; then
           kill -TERM "$BASHPID"
         fi
       }
-      # Empty snapshots use the failure path's rmdir instead of its diagnostic.
-      rmdir() {
-        command rmdir "$@" || return $?
-        if [[ "$scenario" == failure-report ]]; then kill -TERM "$BASHPID"; fi
+      # Use the real severity filter to stage an action, then cancel between
+      # its promotion and manifest publication, or during failure reporting.
+      mv() {
+        if [[ "$scenario" == staged-report && "${2:-}" == "$LOG_BASE/final/manifest.json" ]]; then return 42; fi
+        command mv "$@" || return $?
+        if [[ "$scenario" == staged-* && "${2:-}" == "$LOG_BASE/final/cross-link-actions.preserved.json" ]]; then
+          jq -e 'length == 1 and .[0].body == "Staged action"' "$2" > "$LOG_BASE/staged" || return 98
+          if [[ "$scenario" == staged-actions ]]; then kill -TERM "$BASHPID"; fi
+        fi
       }
       # Inject cancellation after publication but before the generator returns,
       # or fail obsolete backup deletion without changing the current result.
@@ -84,7 +94,7 @@ for scenario in branch-agent branch-agent-success failure-report post-publish-em
         test "$rc" -eq 143
         test "$REPOLENS_FINAL_STATE" = interrupted
       fi
-      if [[ "$scenario" == branch-agent* || "$scenario" == failure-report ]]; then
+      if [[ "$scenario" == branch-agent* || "$scenario" == failure-report || "$scenario" == staged-* ]]; then
         if [[ "$prior" == present ]]; then
           test "$(sha256sum < "$LOG_BASE/final/manifest.json")" = "$manifest_hash"
           test "$(sha256sum < "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$actions_hash"
@@ -95,6 +105,15 @@ for scenario in branch-agent branch-agent-success failure-report post-publish-em
       else
         test "$(cat "$LOG_BASE/final/manifest.json")" = '[]'
         test ! -e "$LOG_BASE/final/cross-link-actions.preserved.json"
+      fi
+      if [[ "$scenario" == staged-* ]]; then
+        test -s "$LOG_BASE/staged"
+        test -z "$(find "$LOG_BASE/final" -name '.synthesis-cleanup.*' -print)"
+        scenario=repaired REPOLENS_FINAL_STATE=finished
+        run_synthesizer probe || exit 1
+        test "$(cat "$LOG_BASE/final/manifest.json")" = '[]'
+        test ! -e "$LOG_BASE/final/cross-link-actions.preserved.json"
+        test -z "$(find "$LOG_BASE/final" -name '.synthesis-cleanup.*' -print)"
       fi
     )
   done
