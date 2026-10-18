@@ -101,7 +101,10 @@ _local_dedupe_mark_file() {
         match(line, /^[[:space:]]*/)
         indent = RLENGTH
         if (skip_arb) {
-          if (indent > root_indent || line ~ /^[[:space:]]*$/) continue
+          if (line ~ /^[[:space:]]*#/) { print line; continue }
+          # YAML permits sequence dashes at the parent mapping indentation.
+          if (indent > root_indent || line ~ /^[[:space:]]*$/ ||
+              (indent == root_indent && line ~ /^[[:space:]]*-([[:space:]]|$)/)) continue
           skip_arb = 0
         }
         text = substr(line, indent + 1)
