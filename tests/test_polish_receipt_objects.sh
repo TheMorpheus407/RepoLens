@@ -24,12 +24,14 @@ source "$REPO/lib/summary.sh"
 fixture="$(mktemp -d)"
 trap 'rm -rf -- "$fixture"' EXIT
 failures=0
+# Accumulate assertion failures while exercising every object and budget case.
 check() {
   if ! "$@"; then
     printf 'FAIL: %s\n' "$*" >&2
     failures=$((failures + 1))
   fi
 }
+# Record remote-create attempts locally and return a deterministic receipt URL.
 forge_issue_create() {
   printf 'post\n' >> "$LOG_BASE/posts"
   printf 'https://github.com/fixture/repo/issues/1\n'

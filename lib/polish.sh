@@ -444,6 +444,29 @@ _polish_issue_budget_available() {
   return 0
 }
 
+# _polish_publish_receipt <staged_file> <receipt>
+# Recheck object type after the in-flight create and replace the exact path.
+# os.replace never moves a receipt into a raced directory or follows a final
+# symlink; it is available on GNU and BSD/macOS. Callers clean stages on failure.
+_polish_publish_receipt() {
+  python3 -c '
+import os
+import stat
+import sys
+try:
+    try:
+        mode = os.lstat(sys.argv[2]).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(mode):
+            sys.exit(1)
+    os.replace(sys.argv[1], sys.argv[2])
+except OSError:
+    sys.exit(1)
+' "$1" "$2"
+}
+
 # run_polish_issue_emission [run_id] [top_n]
 #   Reads logs/<run-id>/polish/ranked-suggestions.json and emits one grouped
 #   polish issue per lens, containing that lens's ranked top-N suggestions.
@@ -641,7 +664,7 @@ run_polish_issue_emission() {
         && printf '%s\n' "$issue_url" > "$tmp_receipt" \
         && saved_url="$(cat "$tmp_receipt")" \
         && [[ "$saved_url" == "$issue_url" ]] \
-        && mv "$tmp_receipt" "$sentinel"; }; then
+        && _polish_publish_receipt "$tmp_receipt" "$sentinel"; }; then
       rm -f -- "$tmp_receipt"
       _polish_log_warn "Polish issue emission: failed to save complete URL receipt for $domain/$lens_id"
       emission_rc=1

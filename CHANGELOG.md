@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Reject non-regular or symlink Polish URL markers before recovering budget or resolving uncertain POST attempts; preserve saved state until the receipt is reconciled (repolens-r14-p2-2).
+- Reject non-regular or symlink Polish URL markers before recovering budget or resolving uncertain POST attempts; preserve saved state until the receipt is reconciled and refuse directory races during exact-path receipt publication (repolens-r14-p2-2).
 
 - Publish complete branch-scope rejection reports atomically using uniquely created rejection/report stages and retain the retryable candidate, saved manifest and actions on report staging/aggregation/publication failure, cleaning stages for a repaired retry (repolens-r14-p7-2).
 
