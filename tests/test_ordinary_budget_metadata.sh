@@ -55,6 +55,16 @@ printf -- '---\nseverity: high\ndomain: security\nlens: ~\t# pending\n---\nDraft
 printf -- '---\nseverity: high\ndomain: Null # pending\nlens: NULL # pending\n---\nDraft.\n' > "$OUTPUT_DIR/comment-both.md"
 printf -- '---\nseverity: high\ndomain: # pending\nlens: injection\n---\nDraft.\n' > "$OUTPUT_DIR/comment-empty-domain.md"
 printf -- '---\nseverity: high\ndomain: security\nlens: # pending\n---\nDraft.\n' > "$OUTPUT_DIR/comment-empty-lens.md"
+# Empty quoted scalars stay empty with legal comments, for either attribution.
+empty_values=('""' "''" '"" # pending attribution' "'' # pending attribution" $'""\t# pending' $'\'\'\t# pending')
+for index in "${!empty_values[@]}"; do
+  for empty_field in domain lens; do
+    domain=security lens=injection
+    printf -v "$empty_field" '%s' "${empty_values[index]}"
+    printf -- '---\nseverity: high\ndomain: %s\nlens: %s\n---\nDraft.\n' \
+      "$domain" "$lens" > "$OUTPUT_DIR/empty-$empty_field-$index.md"
+  done
+done
 init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' 1 local "$OUTPUT_DIR"
 FAIL=0
 # Record every assertion failure and return the aggregate result at the end.
@@ -86,6 +96,12 @@ check test "$(jq '.totals.ordinary_issues_created' "$SUMMARY_FILE")" -eq 0
 # remain literal strings; the registry must not erase their identity.
 REPOLENS_MIN_SEVERITY=''
 printf -- '---\nseverity: high\ndomain: null # pending\nlens: ~\t# pending\n---\nDirectory-attributed finding.\n' > "$OUTPUT_DIR/security/injection/001.md"
+check reconcile_generic_local_counts
+check test "$GLOBAL_ISSUES_CREATED" -eq 1
+check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
+check jq -se 'any(.[]; (.markdown_path | endswith("/security/injection/001.md")) and .domain == "security" and .lens == "injection")' "$LOG_BASE/registry.jsonl"
+# Quoted empties with comments also use the normal directory fallback.
+printf -- '---\nseverity: high\ndomain: "" # pending\nlens: '\'''\''\t# pending\n---\nDirectory-attributed finding.\n' > "$OUTPUT_DIR/security/injection/001.md"
 check reconcile_generic_local_counts
 check test "$GLOBAL_ISSUES_CREATED" -eq 1
 check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
