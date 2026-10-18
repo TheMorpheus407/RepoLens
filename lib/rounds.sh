@@ -2272,6 +2272,9 @@ _round_digest_frontmatter_values() {
   '
 }
 
+# Read the first root value from stdin and trim YAML whitespace/outer quotes.
+# Missing keys succeed with an empty value. Failed selection returns 2 without
+# emitting partial data; the caller's pipefail setting is preserved.
 _round_digest_frontmatter_scalar() {
   local key="$1" value
 
@@ -2423,14 +2426,14 @@ _round_digest_rank_suspect_files() {
 # Usage: build_round_digest <round_dir> [dispatched domain/lens[|attributes] ...]
 # Static findings require a registered domain/lens pair; Generic/Custom findings
 # require a matching dispatch argument. Malformed/untrusted findings are skipped.
-# Returns 2 for a missing round directory argument, 1 for publication failure,
+# Returns 2 for a missing round directory argument, 1 for read/publication failure,
 # and 0 on success (including an empty digest).
 build_round_digest() {
   local generic_source_id
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
   local dispatched_entry
   local file segment segment_sep field_sep segments_output segments_rc frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
-  local suspect_file audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
+  local suspect_file category_values suspect_values audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
   local round_number confidence confidence_rank severity_rank_value score finding_id hypothesis files_display title_text finding_identity
   local omitted_total content_mode content_priority min_severity log_title
   local tmp_digest digest_lines
@@ -2608,6 +2611,9 @@ build_round_digest() {
 
       category_seen=0
       primary_category=""
+      # Capture complete list reads before consuming them: process substitution
+      # hides producer errors and can replace a saved digest with missing data.
+      category_values="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "root_cause_category")" || return 1
       while IFS= read -r category; do
         normalized="$(_round_digest_normalize_label "$category")"
         [[ -n "$normalized" ]] || continue
@@ -2617,7 +2623,7 @@ build_round_digest() {
         fi
         _round_digest_lens_category_counts["$lens|$normalized"]=$(( ${_round_digest_lens_category_counts["$lens|$normalized"]:-0} + 1 ))
         _round_digest_category_counts["$normalized"]=$(( ${_round_digest_category_counts["$normalized"]:-0} + 1 ))
-      done < <(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "root_cause_category")
+      done <<< "$category_values"
 
       if (( category_seen == 0 )); then
         primary_category="uncategorized"
@@ -2627,6 +2633,7 @@ build_round_digest() {
 
       suspect_files=()
       display_files=()
+      suspect_values="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "suspect_files")" || return 1
       while IFS= read -r suspect_file; do
         suspect_file="$(_round_digest_display_path "$suspect_file")"
         [[ -n "$suspect_file" ]] || continue
@@ -2635,7 +2642,7 @@ build_round_digest() {
         if (( ${#display_files[@]} < 3 )); then
           display_files+=("$suspect_file")
         fi
-      done < <(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_values "suspect_files")
+      done <<< "$suspect_values"
 
       confidence="$(printf '%s\n' "$frontmatter" | _round_digest_frontmatter_scalar "confidence")" || return 1
       confidence="$(_round_digest_sanitize_identifier "$confidence")"

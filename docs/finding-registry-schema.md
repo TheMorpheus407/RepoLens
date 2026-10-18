@@ -78,6 +78,10 @@ records when titles match. Private evidence, digests and verifier IDs are unchan
 Only findings with valid severity meeting `--min-severity` and a round-dispatched
 Generic identity are delivered. Round layout metadata, saved dispatch and completion
 receipts establish that identity; source files cannot grant themselves trust.
+Failed root metadata selection stops Generic delivery before publication, even
+when the reader emitted a partial value. Round digests likewise preserve their
+last complete version on failed scalar, category-list or suspect-file-list reads.
+Successfully absent optional metadata remains valid.
 Overlapping output is supported: generated projections are excluded from private
 digest/verifier/synthesizer discovery, and explicit delivery excludes private raw
 Generic evidence from local dedupe/indexing. Default builder source selection is
