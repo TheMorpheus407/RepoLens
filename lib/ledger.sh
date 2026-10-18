@@ -378,9 +378,9 @@ build_findings_jsonl_from_manifest() {
 #   double or single quotes. A frontmatter `title: "[high] X"` must de-quote to
 #   the bare `[high] X` so it earns the SAME finding_id as the manifest path
 #   (the surrounding quotes otherwise prevent the [severity] prefix from being
-#   stripped during normalization — an id-divergence bug). Self-contained
-#   replica of lib/rounds.sh::_round_digest_trim_yaml_value (no dependency, to
-#   keep lib/ledger.sh sourceable on its own).
+#   stripped during normalization — an id-divergence bug). This ordinary-header
+#   helper keeps ledger.sh sourceable on its own. Generic projection titles are
+#   JSON-quoted by the publisher and decoded separately during ingestion below.
 _ledger_trim_yaml_value() {
   local v="$*"
   v="${v#"${v%%[![:space:]]*}"}"

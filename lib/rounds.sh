@@ -2313,13 +2313,51 @@ _round_digest_frontmatter_values() {
   '
 }
 
-# Read the first root value from stdin and trim YAML whitespace/outer quotes.
+# Read the first root value, trimming quotes and decoding double-quoted escapes.
 # Missing keys succeed with an empty value. Failed selection returns 2 without
 # emitting partial data; the caller's pipefail setting is preserved.
 _round_digest_frontmatter_scalar() {
   local key="$1" value
 
   value="$(set -o pipefail; _round_digest_frontmatter_values "$key" | sed -n '1p')" || return 2
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  # Only double-quoted YAML scalars interpret backslash escapes (YAML 1.2.2
+  # sections 5.7/7.3.1). Keep plain/single-quoted backslashes literal. Decode
+  # the single-line scalar grammar supported by this frontmatter reader with
+  # Python stdlib; no optional YAML package or argument-size limit is needed.
+  if [[ "$value" == \"* && "$value" == *\\* ]]; then
+    printf '%s' "$value" | python3 -c '
+import re
+import sys
+try:
+    match = re.fullmatch(r"\"((?:[^\"\\]|\\.)*)\"(?:[ \t]+#.*)?", sys.stdin.read())
+    if match is None:
+        raise ValueError("invalid quoted scalar")
+    escapes = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "n": "\n",
+               "v": "\v", "f": "\f", "r": "\r", "e": "\x1b", " ": " ",
+               "\"": "\"", "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0",
+               "L": "\u2028", "P": "\u2029"}
+    def unescape(item):
+        token = item.group(1)
+        if token in escapes:
+            return escapes[token]
+        if token[0] in "xuU":
+            return chr(int(token[1:], 16))
+        raise ValueError("invalid YAML escape")
+    decoded = re.sub(r"\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|.)",
+                     unescape, match.group(1))
+    # Bash variables cannot represent NUL; surrogate code points are not YAML
+    # Unicode characters. Refuse these before emitting any partial metadata.
+    if "\0" in decoded or any(0xD800 <= ord(char) <= 0xDFFF for char in decoded):
+        raise ValueError("unrepresentable scalar")
+    sys.stdout.write(decoded + "\n")
+except (ValueError, UnicodeError, OSError) as exc:
+    print(f"frontmatter scalar decode failed: {exc}", file=sys.stderr)
+    sys.exit(2)
+'
+    return $?
+  fi
   _round_digest_trim_yaml_value "$value"
 }
 
