@@ -5579,9 +5579,12 @@ fi
 # separately (sibling issue). Non-fatal, mirroring the verifier/synthesizer/
 # triage precedent: the registry is a convenience index, not a gate, so a failure
 # warns and never flips the run's final state or return code.
+# Saved registries remain on failure, but consumers need this attempt's rebuild.
+_registry_ready=false
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
     && ! $LOCAL_MODE && [[ -f "$LOG_BASE/final/manifest.json" ]]; then
   if build_finding_registry "$RUN_ID"; then
+    _registry_ready=true
     log_info "Finding registry: findings.jsonl + findings.csv written"
   else
     log_warn "Finding registry: build failed (findings index not produced)"
@@ -5651,7 +5654,6 @@ fi
 # local findings. Non-fatal: a failure warns and NEVER flips
 # REPOLENS_FINAL_STATE or RUN_ROUNDS_RC. Consumers require this invocation's
 # successful rebuild; a failed pre-promotion write may leave an older index.
-_local_registry_ready=false
 _local_registry_source="${OUTPUT_DIR:-}"
 _local_registry_manifest=true
 if ${OUTPUT_DIR_SET:-false}; then _local_registry_manifest=false; fi
@@ -5663,7 +5665,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
   if branch_scope_filter_directory "$OUTPUT_DIR" \
       && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
       && build_finding_registry "$RUN_ID" "$_local_registry_source" "$_local_registry_manifest" "$_local_generic_raw_root"; then
-    _local_registry_ready=true
+    _registry_ready=true
     log_info "Finding registry: findings.jsonl + findings.csv written -> $LOG_BASE/final/ (index for $OUTPUT_DIR)"
   else
     log_warn "Finding registry: build failed (findings index not produced)"
@@ -5684,7 +5686,7 @@ fi
 TRIAGE_FINDINGS="$LOG_BASE/final/findings.jsonl"
 _duplicate_report_ready=false
 if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-    && { ! $LOCAL_MODE || $_local_registry_ready; }; then
+    && $_registry_ready; then
   for _triage_spec in \
     "generate_todo_md:TODO.md" \
     "generate_summary_md:SUMMARY.md" \
@@ -5704,7 +5706,7 @@ if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != inte
 else
   if [[ -f "$TRIAGE_FINDINGS" && ! -s "$TRIAGE_FINDINGS" \
       && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-      && $LOCAL_MODE && $_local_registry_ready; then
+      && $LOCAL_MODE && $_registry_ready; then
     for _triage_empty_out in TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md; do
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
       rm -f -- "$LOG_BASE/final/$_triage_empty_out" \
@@ -5725,7 +5727,7 @@ fi
 # flag is off or no findings.jsonl exists.
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
     && "${HUMAN_REVIEW:-false}" == "true" && -f "$LOG_BASE/final/findings.jsonl" ]] \
-    && { ! $LOCAL_MODE || $_local_registry_ready; }; then
+    && $_registry_ready; then
   if render_human_review_digest "$RUN_ID" "$_duplicate_report_ready"; then
     log_info "Human review: HUMAN_REVIEW.md written"
   else
@@ -5741,7 +5743,7 @@ if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted \
   fi
 fi
 
-unset _local_registry_ready _duplicate_report_ready _local_generic_raw_root _local_delivery_ready _local_registry_manifest _local_registry_source
+unset _registry_ready _duplicate_report_ready _local_generic_raw_root _local_delivery_ready _local_registry_manifest _local_registry_source
 
 # Persist required delivery failure after the artifact-preservation boundary.
 # Failed accounting admission leaves the summary inventory snapshot intact;

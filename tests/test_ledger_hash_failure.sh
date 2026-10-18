@@ -43,15 +43,18 @@ for tool in awk cat dirname find jq mkdir mktemp mv python3 realpath rm sort tr 
   ln -s "$(type -P "$tool")" "$fixture/bin/$tool"
 done
 normal_path="$PATH"
-for fault in failed malformed missing; do
+for fault in failed failed_valid malformed missing; do
   case "$fault" in
     failed) sha256sum() { cat >/dev/null; return 71; } ;;
+    # Digest syntax alone must not hide a failed producer behind awk's success.
+    failed_valid) sha256sum() { cat >/dev/null; printf '%064d\n' 0; return 71; } ;;
     malformed) sha256sum() { cat >/dev/null; printf 'invalid digest\n'; } ;;
     missing) unset -f sha256sum; PATH="$fixture/bin" ;;
   esac
   id=''
   rc=0
-  id="$(finding_id security injection one)" || rc=$?
+  # The library must detect pipeline failures even for callers without pipefail.
+  id="$(set +o pipefail; finding_id security injection one)" || rc=$?
   check test "$rc" -ne 0
   check test -z "$id"
   rc=0

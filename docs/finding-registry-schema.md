@@ -130,9 +130,15 @@ before ingestion finishes. Registry assembly checks the exit status of `cat` whe
 appending staged manifest or local records. A nonzero status, including after
 partial output, discards the candidate before replacing JSONL or CSV. Concurrent
 truncation that leaves valid JSONL and a successful `cat` exit is not detected.
-A repaired retry rebuilds the artifacts from the current findings. Branch-review
-scope filtering aborts on a failed read without quarantining that source. Readable malformed
-frontmatter still produces a warning and is skipped. Each local finding is
+A repaired retry rebuilds the artifacts from the current findings.
+
+Triage and human-review rendering in both local and non-local runs requires a
+successful registry rebuild in the current invocation. A saved registry remains
+available for retry but cannot refresh reports after a failed rebuild or when
+the current source is unavailable.
+
+Branch-review scope filtering aborts on a failed read without quarantining that
+source. Readable malformed frontmatter still produces a warning and is skipped. Each local finding is
 parsed from one complete temporary snapshot created with owner-only permissions;
 normal success and failure paths remove the snapshot. Raw Markdown evidence is
 retained in every case.
