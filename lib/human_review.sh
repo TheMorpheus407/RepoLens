@@ -245,8 +245,11 @@ _human_review_log_base() {
 #   tests set it to a temp dir), else <repo_root>/logs/<run_id>. So the test drives
 #   the function by just setting LOG_BASE and dropping a fixture findings.jsonl.
 #
-#   ATOMIC WRITE: builds the document into <out>.tmp.$$ and replaces the exact
-#   output path via lib/artifacts.sh (directory targets are rejected). On a
+#   ATOMIC WRITE: builds the document into an exclusively allocated mktemp
+#   stage (<out>.tmp.XXXXXX) and replaces the exact output path via
+#   lib/artifacts.sh (directory targets are rejected). Run/log directories must
+#   be trusted against concurrent modification: exclusive allocation does not
+#   protect against another writer replacing the stage after allocation. On a
 #   render/IO failure the tmp file is removed and the function returns 1, leaving
 #   NO partial HUMAN_REVIEW.md behind.
 #
