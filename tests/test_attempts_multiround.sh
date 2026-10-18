@@ -94,6 +94,27 @@ printf 'not a receipt\n' > "$TMP/single/.rounds/round-2.lenses.completed.tmp"
 check test "$(_attempts_completed_count "$TMP/single")" -eq 2
 check test "$(_attempts_completed_count "$TMP/missing")" -eq 0
 
+# BSD/macOS wc pads successful counts. Keep both receipt layouts and the
+# begin/finalize delta accurate when stdout contains surrounding whitespace.
+(
+  padded_base="$TMP/padded-counts"
+  mkdir -p "$padded_base/.rounds"
+  printf 'security/injection\n' > "$padded_base/.completed"
+  printf 'security/injection\nsecurity/auth\n' > "$padded_base/.rounds/round-1.lenses.completed"
+  wc() {
+    local count
+    count="$(command wc "$@")" || return $?
+    printf ' \t%s \t\n' "$count"
+  }
+  check test "$(_attempts_completed_count "$padded_base")" -eq 3
+  check attempts_begin "$padded_base"
+  check grep -qx 'baseline_completed=3' "$padded_base/.attempt-start"
+  printf 'security/authorization\n' >> "$padded_base/.completed"
+  check attempts_finalize "$padded_base" finished '' 0
+  check jq -e '.[0] | .lenses_completed_this_attempt == 1 and .lenses_completed_total == 4' \
+    "$padded_base/attempts.json"
+)
+
 # A read can emit a numeric partial count before failing. Discard that file's
 # output while retaining healthy receipts, both at begin and at finalize.
 for failed_receipt in .completed .rounds/round-1.lenses.completed; do
@@ -125,4 +146,4 @@ for failed_receipt in .completed .rounds/round-1.lenses.completed; do
       "$read_base/attempts.json"
   )
 done
-printf 'PASS: round/resume/single-round counts and failed-read accounting.\n'
+printf 'PASS: round/resume/single-round counts, padded counts and failed-read accounting.\n'

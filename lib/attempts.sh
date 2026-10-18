@@ -73,6 +73,8 @@ _attempts_completed_count() {
       flock -s "$receipt_fd" || exit 1
       wc -l < "$completed_file"
     )" 2>/dev/null || count=0
+    # BSD/macOS wc pads counts with whitespace even when reading stdin.
+    count="${count//[[:space:]]/}"
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
     total=$(( total + count ))
   done
