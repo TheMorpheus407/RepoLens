@@ -592,6 +592,13 @@ _filing_cross_link_promote_payload() {
   fi
   candidates+=("$body_candidate")
   targets+=("$prefix.body.md")
+  # Saved payloads must be plain files. Reject obstructions before any rename
+  # so a directory symlink cannot redirect a private candidate or its backup.
+  for i in "${!targets[@]}"; do
+    if [[ -e "${targets[$i]}" || -L "${targets[$i]}" ]]; then
+      [[ -f "${targets[$i]}" && ! -L "${targets[$i]}" ]] || return 1
+    fi
+  done
   backup="$(mktemp -d "$prefix.body.md.reconcile.XXXXXX")" || return 1
   mkdir "$backup/originals" || { rmdir "$backup"; return 1; }
   for i in "${!targets[@]}"; do
@@ -607,7 +614,7 @@ _filing_cross_link_promote_payload() {
     return 1
   fi
   for i in "${!targets[@]}"; do
-    mv "${candidates[$i]}" "${targets[$i]}" || rc=1
+    _branch_scope_replace_file "${candidates[$i]}" "${targets[$i]}" || rc=1
     if (( rc != 0 )) || _filing_cancelled; then
       rc=1
       break
@@ -616,7 +623,7 @@ _filing_cross_link_promote_payload() {
   if (( rc != 0 )); then
     for i in "${!targets[@]}"; do
       if [[ -e "$backup/originals/$i" || -L "$backup/originals/$i" ]]; then
-        mv "$backup/originals/$i" "${targets[$i]}" || restore_rc=1
+        _branch_scope_replace_file "$backup/originals/$i" "${targets[$i]}" || restore_rc=1
       else
         rm -f "${targets[$i]}" || restore_rc=1
       fi

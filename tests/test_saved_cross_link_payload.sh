@@ -76,18 +76,19 @@ case_payload() (
     else printf '{"state":"closed"}\n'; fi
   }
   # Inject failures/signals after actual promotion, while originals must remain recoverable.
-  mv() {
+  eval "$(declare -f _branch_scope_replace_file | sed '1s/_branch_scope_replace_file/original_replace_file/')"
+  _branch_scope_replace_file() {
     local source="$1" target="$2"
     if [[ "$source" == *.reconcile.* && "$source" != */originals/* ]]; then
       if [[ ( "$phase" == promote-body-failure || "$phase" == absent-body-failure ) && "$target" == "$cross_dir/$key.body.md" ]]; then return 1; fi
-      command mv "$@" || return 1
+      original_replace_file "$@" || return 1
       if [[ "$phase" == promote-banner-* && "$target" == "$cross_dir/$key.body.banner.md" ]]; then
         kill -s "${phase##*-}" "$parent_pid"
       elif [[ ( "$phase" == promote-body-* || "$phase" == absent-body-TERM ) && "$phase" != promote-body-failure && "$target" == "$cross_dir/$key.body.md" ]]; then
         kill -s "${phase##*-}" "$parent_pid"
       fi
     else
-      command mv "$@"
+      original_replace_file "$@"
     fi
   }
   if [[ "$phase" == absent-* ]]; then rm -f "$cross_dir/$key.body.md"; fi
