@@ -1909,8 +1909,13 @@ _round_digest_frontmatter_block() {
   printf '%s\n' "${parsed#*$'\n'}"
 }
 
-_round_digest_finding_segments() {
-  local file="$1" content_mode=0
+_round_digest_finding_segments() (
+  local file="$1" content_mode=0 snapshot
+  # Read the entire source before parsing. A failed read is an IO error (2),
+  # distinct from readable malformed frontmatter (1), and must not be skipped.
+  snapshot="$(mktemp)" || return 2
+  trap 'rm -f -- "$snapshot"' EXIT
+  cat -- "$file" > "$snapshot" || return 2
 
   if _round_digest_content_mode_enabled; then
     content_mode=1
@@ -2011,8 +2016,8 @@ _round_digest_finding_segments() {
         exit 1
       }
     }
-  ' "$file"
-}
+  ' "$snapshot"
+)
 
 # Deliver Generic raw segments as ordinary local findings. The private source
 # remains canonical for digest/verification; publication can be retried even
@@ -2409,7 +2414,7 @@ _round_digest_rank_suspect_files() {
 build_round_digest() {
   local round_dir="${1:-}" lens_outputs_dir digest_path repo_root domains_file
   local dispatched_entry
-  local file segment segment_sep field_sep segments_output frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
+  local file segment segment_sep field_sep segments_output segments_rc frontmatter body raw_severity severity domain lens category normalized category_seen primary_category
   local suspect_file audit_domain audit_total coverage_count coverage_domains registered_lens display_lens
   local round_number confidence confidence_rank severity_rank_value score finding_id hypothesis files_display title_text finding_identity
   local omitted_total content_mode content_priority min_severity log_title
@@ -2504,7 +2509,14 @@ build_round_digest() {
     segment_sep=$'\036'
     field_sep=$'\037'
     finding_segments=()
-    if ! segments_output="$(_round_digest_finding_segments "$file")"; then
+    if segments_output="$(_round_digest_finding_segments "$file")"; then
+      :
+    else
+      segments_rc=$?
+      if (( segments_rc != 1 )); then
+        _round_digest_warn "Unable to read lens output for digest: $file"
+        return 1
+      fi
       _round_digest_warn "Skipping malformed lens output $(basename "$file"): missing or unterminated YAML frontmatter"
       continue
     fi
