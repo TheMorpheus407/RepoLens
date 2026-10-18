@@ -104,9 +104,10 @@ finding_id() {
   local domain="${1:-}" lens="${2:-}" title="${3:-}" location="${4:-}"
   local sep=$'\037' norm hex
 
-  norm="$(_ledger_normalize_title "$title")"
-  hex="$(printf '%s' "${domain}${sep}${lens}${sep}${norm}${sep}${location}" \
-    | _ledger_sha256_hex)"
+  norm="$(_ledger_normalize_title "$title")" || return 1
+  hex="$(set -o pipefail; printf '%s' "${domain}${sep}${lens}${sep}${norm}${sep}${location}" \
+    | _ledger_sha256_hex)" || return 1
+  [[ "$hex" =~ ^[a-f0-9]{64}$ ]] || return 1
 
   printf 'fnd-%s\n' "${hex:0:12}"
 }
@@ -320,7 +321,7 @@ build_findings_jsonl_from_manifest() {
     # as its bare digits.
     cx="$(_ledger_complexity_normalize "$(jq -r '.complexity // "" | tostring' <<<"$entry")")"
 
-    id="$(finding_id "$domain" "$lens" "$title")"
+    id="$(finding_id "$domain" "$lens" "$title")" || { rm -f "$tmp"; return 1; }
     sev="$(_ledger_severity_normalize "$raw_sev")"
     ftype="$(_ledger_resolve_finding_type "$raw_type" "$domain")"
     status="new"
@@ -605,9 +606,9 @@ build_findings_jsonl_from_local() {
       # Projected blocks may share title/lens while owning separate evidence.
       raw_value="$(_ledger_frontmatter_scalar "$snapshot" title)" || { ingest_failed=1; break; }
       title="$(jq -r . <<< "$raw_value")" || { ingest_failed=1; break; }
-      id="$(finding_id "$domain" "$lens" "$title" "generic:$generic_source_id")"
+      id="$(finding_id "$domain" "$lens" "$title" "generic:$generic_source_id")" || { ingest_failed=1; break; }
     else
-      id="$(finding_id "$domain" "$lens" "$title")"
+      id="$(finding_id "$domain" "$lens" "$title")" || { ingest_failed=1; break; }
     fi
     sev="$(_ledger_severity_normalize "$severity")"
     # Resolve from the POST directory-fallback $domain (not a fresh file read) so

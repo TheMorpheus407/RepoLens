@@ -27,8 +27,10 @@ log_info() { :; }
 log_warn() { printf '%s\n' "$*" >&2; }
 optional_local_finalization() {
   # Execute the current main's actual dedupe, registry and report orchestration.
+  # The non-local hook initializes readiness before this local-only slice.
+  _registry_ready=false
   # shellcheck source=/dev/null
-  source <(sed -n '/^# --- Local-mode deterministic dedupe/,/^unset _local_registry_ready _duplicate_report_ready/p' "$REPO/repolens.sh")
+  source <(sed -n '/^# --- Local-mode deterministic dedupe/,/^unset _registry_ready _duplicate_report_ready/p' "$REPO/repolens.sh")
 }
 
 case_local_verification() (

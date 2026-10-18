@@ -16,7 +16,7 @@
 # repolens-r3-p2-2: signals in early summary persistence must reach the ledger,
 # latest-result pointer and the single Cursor terminal event.
 # shellcheck disable=SC2034,SC2329 # Extracted production code consumes fixtures.
-set -uo pipefail
+set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
@@ -143,6 +143,9 @@ for prior in 0 1; do
         for n in 0 1 2; do printf '%s\n' '---' 'title: saved' '---' 'body' > "$LOG_BASE/output/$n.md"; done ;;
       triage)
         mkdir -p "$LOG_BASE/final"
+        # Admit triage through the current-registry hook before signalling in
+        # TODO generation. The registry stub retains the seeded finding.
+        printf '[]\n' > "$LOG_BASE/final/manifest.json"
         printf '{}\n' > "$LOG_BASE/final/findings.jsonl" ;;
     esac
     if [[ "$prior" == 1 ]]; then
@@ -198,7 +201,7 @@ for prior in 0 1; do
           check test ! -s "$LOG_BASE/marks"
           check test ! -s "$LOG_BASE/optional"
           check test "$(cat "$LOG_BASE/output/2.md")" = $'---\ntitle: saved\n---\nbody' ;;
-        triage) check test "$(cat "$LOG_BASE/optional")" = todo ;;
+        triage) check test "$(cat "$LOG_BASE/optional")" = $'registry\ntodo' ;;
       esac
     else
       case "$hook" in
@@ -206,7 +209,7 @@ for prior in 0 1; do
         dedupe*)
           check test "$(wc -l < "$LOG_BASE/groups")" -eq 1
           check test "$(wc -l < "$LOG_BASE/marks")" -eq 3 ;;
-        triage) check test "$(wc -l < "$LOG_BASE/optional")" -eq 4 ;;
+        triage) check test "$(cat "$LOG_BASE/optional")" = $'registry\ntodo\nsummary\nreview\nduplicates' ;;
       esac
     fi
     if [[ "$prior" == 1 ]]; then
@@ -229,7 +232,7 @@ for prior in 0 1; do
         dedupe-assembly)
           check test "$(wc -l < "$LOG_BASE/groups")" -eq 1
           check test "$(wc -l < "$LOG_BASE/marks")" -eq 3 ;;
-        triage) check test "$(wc -l < "$LOG_BASE/optional")" -eq 5 ;;
+        triage) check test "$(cat "$LOG_BASE/optional")" = $'registry\ntodo\nregistry\ntodo\nsummary\nreview\nduplicates' ;;
       esac
       SIGNAL="$saved_signal"
     fi

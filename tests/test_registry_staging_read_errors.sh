@@ -70,7 +70,7 @@ for scenario in manifest-empty manifest-partial local-empty local-partial combin
   fi
   build_finding_registry fixture "$local_dir"
   before_count="$(jq -s length "$LOG_BASE/final/findings.jsonl")"
-  _local_registry_ready=true
+  _registry_ready=true
   triage
   artifacts=(findings.jsonl findings.csv TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md)
   declare -A hashes=()
@@ -81,8 +81,8 @@ for scenario in manifest-empty manifest-partial local-empty local-partial combin
   build_finding_registry fixture "$local_dir" > "$LOG_BASE/rebuild.log" 2>&1 || rc=$?
   check "$scenario reports a failed rebuild" test "$rc" -ne 0
   check "$scenario reaches staged-source read" test -e "$LOG_BASE/stage-read"
-  _local_registry_ready=false
-  if (( rc == 0 )); then _local_registry_ready=true; fi
+  _registry_ready=false
+  if (( rc == 0 )); then _registry_ready=true; fi
   triage
   for artifact in "${artifacts[@]}"; do
     check "$scenario preserves $artifact" same_bytes "$LOG_BASE/final/$artifact" "${hashes[$artifact]}"
@@ -96,7 +96,7 @@ for scenario in manifest-empty manifest-partial local-empty local-partial combin
     rm "$local_dir/2.md"
   fi
   build_finding_registry fixture "$local_dir"
-  _local_registry_ready=true
+  _registry_ready=true
   triage
   check "$scenario retry refreshes the registry" test "$(jq -s length "$LOG_BASE/final/findings.jsonl")" -eq "$((before_count - 1))"
 done

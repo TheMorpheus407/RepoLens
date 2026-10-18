@@ -27,6 +27,8 @@ eval "$(sed -n '/^rate_limit_sleep_interrupt_marker() {/,/^_handle_hangup() {/p'
 log_info() { :; }
 log_warn() { :; }
 print_resume_hint() { :; }
+# Remote report fixtures have no filed issues; never query a live forge.
+filing_verified_issue_count() { printf '0\n'; }
 eval "$(declare -f dedupe_local_markdown | sed '1s/dedupe_local_markdown/original_dedupe/')"
 dedupe_local_markdown() {
   original_dedupe "$@" || return $?
@@ -47,7 +49,7 @@ run_finalization() (
   REPOLENS_FINAL_STATE=finished REPOLENS_INTERRUPT_EXIT_CODE=130 RUN_ROUNDS_RC=0
   RUN_ID=20261015T000000Z-local MODE=audit AGENT=mock PARALLEL=false
   SCRIPT_DIR="${LOG_BASE%/logs/*}" LOCAL_MODE=true
-  [[ "$scenario" != remote* ]] || LOCAL_MODE=false
+  if [[ "$scenario" == remote* ]]; then LOCAL_MODE=false; OUTPUT_DIR=""; fi
   MAX_ISSUES=1 REPOLENS_DEGENERATE_THRESHOLD=90 CURSOR_IDE_ACTIVE=true
   REPOLENS_CURSOR_IDE_CTL_LOG="$LOG_BASE/control.ndjson"
   if [[ "$scenario" == registry-failure ]]; then build_finding_registry() { return 1; }; fi
@@ -77,7 +79,7 @@ check() {
     failed=$((failed + 1))
   fi
 }
-for scenario in fresh remote absent-HUP absent-INT absent-TERM stale-HUP stale-INT stale-TERM triage-HUP triage-INT triage-TERM empty same-lens-first same-lens-last registry-failure stale-registry-failure digest-failure duplicate-report-failure stale-report-render-failure stale-report-promote-failure remote-report-render-failure remote-report-promote-failure; do
+for scenario in fresh remote remote-no-source absent-HUP absent-INT absent-TERM stale-HUP stale-INT stale-TERM triage-HUP triage-INT triage-TERM empty same-lens-first same-lens-last registry-failure stale-registry-failure digest-failure duplicate-report-failure stale-report-render-failure stale-report-promote-failure remote-report-render-failure remote-report-promote-failure; do
   for HUMAN_REVIEW in true false; do
     # Digest opt-out needs fresh and resumed coverage; other cases share the path.
     [[ "$HUMAN_REVIEW" == true || "$scenario" == fresh || "$scenario" == absent-TERM ]] || continue
@@ -110,11 +112,22 @@ EOF
       build_finding_registry local "$OUTPUT_DIR"
       check jq -se 'length == 2 and all(.status == "new")' "$LOG_BASE/final/findings.jsonl"
     fi
-    # Non-local finalization consumes an already-produced registry when no
-    # manifest is present. Use the real writers to seed that shared path.
+    # Seed saved data with the real local writers, then provide the current
+    # manifest required by non-local finalization. No local output is ingested.
     if [[ "$scenario" == remote* ]]; then
       original_dedupe "$OUTPUT_DIR"
       build_finding_registry local "$OUTPUT_DIR"
+      if [[ "$scenario" != remote-no-source ]]; then
+        jq -s 'map(. + {source_finding_paths: [.markdown_path]})' \
+          "$LOG_BASE/final/findings.jsonl" > "$LOG_BASE/final/manifest.json"
+      fi
+    fi
+    # A saved registry without current source must preserve every saved report.
+    if [[ "$scenario" == remote-no-source ]]; then
+      for artifact in TODO SUMMARY NEEDS_REVIEW DUPLICATES HUMAN_REVIEW; do
+        printf 'Saved %s report\n' "$artifact" > "$LOG_BASE/final/$artifact.md"
+      done
+      saved_artifacts="$(sha256sum "$LOG_BASE/final/"*)"
     fi
     # Model retained output from an earlier attempt. Render/rename failures must
     # preserve it without advertising it as provenance for the rebuilt registry.
@@ -161,6 +174,12 @@ EOF
     check test "$rc" -eq 0
     check jq -e '.status | startswith("finished")' "${LOG_BASE%/*}/latest-result.json"
     check test ! -e "$LOG_BASE/.attempt-start"
+    if [[ "$scenario" == remote-no-source ]]; then
+      check test "$(sha256sum "$LOG_BASE/final/"*)" = "$saved_artifacts"
+      check test ! -e "$LOG_BASE/final/manifest.json"
+      cases=$((cases + 1))
+      continue
+    fi
     if [[ "$scenario" == stale-registry-failure ]]; then
       check jq -se 'length == 2 and all(.status == "new")' "$LOG_BASE/final/findings.jsonl"
       check test ! -e "$LOG_BASE/final/HUMAN_REVIEW.md"
