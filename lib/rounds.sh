@@ -2440,14 +2440,22 @@ build_round_digest() {
   repo_root="$(_round_digest_repo_root)"
   domains_file="$repo_root/config/domains.json"
 
+  # Capture complete registry reads before consuming either list. A failed
+  # producer in process substitution must not become an empty trust set.
+  local audit_registry_output registered_registry_output
+  if ! audit_registry_output="$(_round_digest_audit_domains "$domains_file")" ||
+      ! registered_registry_output="$(_round_digest_registered_lenses "$domains_file")"; then
+    _round_digest_warn "Unable to read lens registry for digest: $domains_file"
+    return 1
+  fi
   while IFS= read -r audit_domain; do
     [[ -n "$audit_domain" ]] || continue
     _round_digest_audit_domain_set["$audit_domain"]=1
-  done < <(_round_digest_audit_domains "$domains_file" || true)
+  done <<< "$audit_registry_output" || return 1
   while IFS= read -r registered_lens; do
     [[ -n "$registered_lens" ]] || continue
     _round_digest_registered_lens_set["$registered_lens"]=1
-  done < <(_round_digest_registered_lenses "$domains_file" || true)
+  done <<< "$registered_registry_output" || return 1
   # Static trust binds the domain and lens together. Generated investigators
   # are absent from the static registry. Trust only
   # Generic/Custom IDs supplied by this round's driver, never IDs claimed by a file.
