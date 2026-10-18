@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Fail Polish issue emission on a missing or incomplete staged group inventory, retaining completed receipts for retry while preserving deliberate budget stops and interruption status (repolens-r14-p4-1).
+
 - Quarantine and restore ordinary and Cross-Link receipts with exact-path replacement so directory races at either rename boundary cannot nest or replace the saved receipt (repolens-r14-p3-1).
   Release the ordinary receipt's read-only governor even when cancellation rollback fails, allowing reattestation after receipt repair without repeating the POST.
 
