@@ -16,7 +16,7 @@
 # RepoLens — per-invocation attempt record (issue #371).
 #
 # A run lives at `logs/<run-id>/` and survives `--resume` by reusing the SAME
-# dir. Completion state persists in `logs/<run-id>/.completed` (append-only),
+# dir. Completion state persists in append-only root or per-round lens receipts,
 # but nothing records the SEPARATE invocations ("attempts") that touched the
 # run: when each pass started/stopped, why it stopped, or how many lenses it
 # completed. This module writes that audit trail to
@@ -66,7 +66,7 @@ _attempts_completed_count() {
   local log_base="$1" completed_file count total=0
   for completed_file in "$log_base/.completed" "$log_base"/.rounds/round-*.lenses.completed; do
     [[ -f "$completed_file" ]] || continue
-    count="$(grep -c '' "$completed_file" 2>/dev/null || true)"
+    count="$(grep -c '' "$completed_file" 2>/dev/null)" || count=0
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
     total=$(( total + count ))
   done

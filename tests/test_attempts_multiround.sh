@@ -93,4 +93,36 @@ touch "$TMP/single/.rounds/round-1.completed"
 printf 'not a receipt\n' > "$TMP/single/.rounds/round-2.lenses.completed.tmp"
 check test "$(_attempts_completed_count "$TMP/single")" -eq 2
 check test "$(_attempts_completed_count "$TMP/missing")" -eq 0
-printf 'PASS: completed rounds, interrupted/resumed deltas and single-round receipts counted.\n'
+
+# A read can emit a numeric partial count before failing. Discard that file's
+# output while retaining healthy receipts, both at begin and at finalize.
+for failed_receipt in .completed .rounds/round-1.lenses.completed; do
+  (
+    read_base="$TMP/read-error-${failed_receipt##*/}"
+    mkdir -p "$read_base/.rounds"
+    printf 'security/injection\n' > "$read_base/.completed"
+    printf 'security/injection\nsecurity/auth\n' > "$read_base/.rounds/round-1.lenses.completed"
+    healthy_receipt=.completed
+    healthy_count=1
+    if [[ "$failed_receipt" == .completed ]]; then
+      healthy_receipt=.rounds/round-1.lenses.completed
+      healthy_count=2
+    fi
+    grep() {
+      if [[ "${3:-}" == "$read_base/$failed_receipt" ]]; then
+        printf '7\n'
+        return 2
+      fi
+      command grep "$@"
+    }
+    check test "$(_attempts_completed_count "$read_base")" -eq "$healthy_count"
+    check attempts_begin "$read_base"
+    check command grep -qx "baseline_completed=$healthy_count" "$read_base/.attempt-start"
+    printf 'security/authorization\n' >> "$read_base/$healthy_receipt"
+    check attempts_finalize "$read_base" finished '' 0
+    check jq -e --argjson total "$((healthy_count + 1))" \
+      '.[0] | .lenses_completed_this_attempt == 1 and .lenses_completed_total == $total' \
+      "$read_base/attempts.json"
+  )
+done
+printf 'PASS: round/resume/single-round counts and failed-read accounting.\n'

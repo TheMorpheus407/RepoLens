@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Count per-round lens completion receipts in attempt totals and resume deltas for multi-round runs.
+- Count per-round lens completion receipts in attempt totals and resume deltas for multi-round runs, discarding partial counts from failed receipt reads.
 
 - Clear recovered LENS/GENERIC dispatch-read stop reasons on explicit resume while preserving previous attempt history, allowing successful completed runs to leave the incomplete-run retention set (repolens-r13-p1-1).
 
