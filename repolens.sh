@@ -3494,14 +3494,33 @@ is_lens_completed() {
 }
 
 mark_lens_completed() {
-  # A full tuple may span multiple writes. Hold the receipt inode lock until
-  # its complete line is appended; the subshell closes the descriptor on exit.
-  (
-    local receipt_fd
-    exec {receipt_fd}>>"$completed_lenses_file" || exit 1
-    flock "$receipt_fd" || exit 1
-    printf '%s\n' "$1" >&"$receipt_fd"
-  )
+  # Lock the stable receipt inode; rollback short writes and retire any old
+  # unterminated tail before appending a complete dispatch identity.
+  python3 - "$completed_lenses_file" "$1" <<'PYRECEIPT'
+import fcntl
+import os
+import sys
+try:
+    with open(sys.argv[1], "a+b", buffering=0) as receipt:
+        fcntl.flock(receipt, fcntl.LOCK_EX)
+        receipt.seek(0)
+        data = receipt.read()
+        complete_end = data.rfind(b"\n") + 1
+        receipt.truncate(complete_end)
+        payload = os.fsencode(sys.argv[2]) + b"\n"
+        try:
+            while payload:
+                written = receipt.write(payload)
+                if not written:
+                    raise OSError("incomplete completion write")
+                payload = payload[written:]
+        except OSError:
+            receipt.truncate(complete_end)
+            raise
+except OSError as error:
+    print(f"Cannot persist lens completion: {error}", file=sys.stderr)
+    sys.exit(1)
+PYRECEIPT
 }
 
 LENS_HEARTBEAT_INTERVAL_DEFAULT=15

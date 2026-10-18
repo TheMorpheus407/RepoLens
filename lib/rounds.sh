@@ -161,8 +161,12 @@ except OSError:
   fi
   [[ -f "$completion_file" ]] || return 2
   # Snapshot all bytes before checking membership; grep -q may hide read errors.
-  receipts="$(cat "$completion_file")" || return 2
-  receipts=$'\n'"$receipts"$'\n'
+  # Preserve trailing newlines through command substitution. An interrupted
+  # append has no terminating newline and never constitutes a receipt.
+  receipts="$(cat "$completion_file" && printf '.')" || return 2
+  receipts="${receipts%.}"
+  [[ "$receipts" == *$'\n'* ]] || return 1
+  receipts=$'\n'"${receipts%$'\n'*}"$'\n'
 
   for lens_entry in "$@"; do
     # Receipts bind the full dispatch, including its role/focus/anchor/exclusions.
