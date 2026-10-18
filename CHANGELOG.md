@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve saved synthesis manifest, actions and rejection report on accepted-scope staging, serialization and aggregation failures; keep the complete candidate pending and clean stages before retry (repolens-r15-p6-1, repolens-r15-p8-3).
+- Preserve saved synthesis manifest, actions and rejection report on accepted-scope staging, serialization, aggregation, candidate replacement and stream cleanup failures; restore the previous report if candidate replacement fails, and keep the complete candidate pending for retry (repolens-r15-p6-1, repolens-r15-p8-3).
 
 - Exclusively allocate Human Review report stages so pre-existing predictable symlinks cannot redirect report output or become the published report (repolens-r15-p5-1).
 

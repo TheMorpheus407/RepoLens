@@ -284,7 +284,11 @@ case_synthesis_kept_io() (
   jq '. + [(.[0] | .cluster_id="rejected" | .title="Unrelated stale endpoint" | .body="src/unchanged.sh:1")]' "$LOG_BASE/final/manifest.json" > "$LOG_BASE/agent.json"
   printf '[{"retained":true}]\n' > "$LOG_BASE/final/manifest.json.out-of-scope.json"
   printf '[{"cluster_id":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
-  before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  if [[ "$failure" == replace-absent ]]; then rm "$LOG_BASE/final/manifest.json.out-of-scope.json"; fi
+  before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/cross-link-actions.preserved.json")"
+  if [[ "$failure" != replace-absent ]]; then
+    cp "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/report-before.json"
+  fi
   jq() {
     if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest ]]; then
       if [[ "$failure" == serialize && "$#" == 2 && "$1" == -c && "$2" == *ascii_upcase* ]] ||
@@ -297,21 +301,63 @@ case_synthesis_kept_io() (
     command jq "$@"
   }
   mktemp() {
-    if [[ "$failure" == allocate && "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "${1:-}" == *.scope.XXXXXX ]]; then
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest ]] &&
+        { [[ "$failure" == allocate && "${1:-}" == *.scope.XXXXXX ]] ||
+          [[ "$failure" == backup-allocate && "${1:-}" == *.report-backup.XXXXXX ]]; }; then
       printf 'fault\n' >> "$LOG_BASE/fault-hit"
       return 74
     fi
     command mktemp "$@"
   }
+  eval "$(declare -f _branch_scope_replace_file | sed '1s/_branch_scope_replace_file/original_replace_file/')"
+  _branch_scope_replace_file() {
+    if [[ "$failure" == replace* && "$2" == "$LOG_BASE/final/manifest.json.tmp.$$" ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      return 74
+    fi
+    original_replace_file "$@"
+  }
+  cp() {
+    if [[ "$failure" == backup-copy && "${FUNCNAME[1]:-}" == branch_scope_filter_manifest ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      return 74
+    fi
+    command cp "$@"
+  }
+  rm() {
+    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && ! -e "$LOG_BASE/fault-hit" ]] &&
+        { [[ "$failure" == cleanup && "$*" == *'.scope.'* ]] ||
+          [[ "$failure" == backup-cleanup && "$#" == 3 && "$3" == *.report-backup.* ]]; }; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      return 74
+    fi
+    command rm "$@"
+  }
   rc=0
-  run_synthesizer probe || rc=$?
-  check test "$rc" -ne 0
+  run_synthesizer probe 2> "$LOG_BASE/attempt.stderr" || rc=$?
   check test -s "$LOG_BASE/fault-hit"
   printf "Reached accepted-stage fault: %s\n" "$failure"
-  check test "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$before"
+  if [[ "$failure" == backup-cleanup ]]; then
+    check test "$rc" -eq 0
+    check jq -e 'length == 1 and .[0].title == "[REGRESSION][HIGH] Finding"' "$LOG_BASE/final/manifest.json"
+    check jq -e 'length == 1 and .[0].finding.cluster_id == "rejected"' "$LOG_BASE/final/manifest.json.out-of-scope.json"
+    check test ! -e "$LOG_BASE/final/manifest.scope-pending.json"
+    check grep -Fq 'cannot remove obsolete report backup:' "$LOG_BASE/attempt.stderr"
+    check test "$(find "$LOG_BASE/final" -name '*.report-backup.*' -type f | wc -l)" -eq 1
+    printf 'PASS: obsolete backup cleanup failure keeps the committed publication usable\n'
+    return 0
+  fi
+  check test "$rc" -ne 0
   check jq -e 'length == 2 and .[0].cluster_id == "c1" and .[1].cluster_id == "rejected"' "$LOG_BASE/final/manifest.scope-pending.json"
+  check test "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$before"
+  if [[ "$failure" == replace-absent ]]; then
+    check test ! -e "$LOG_BASE/final/manifest.json.out-of-scope.json"
+  else
+    check cmp "$LOG_BASE/report-before.json" "$LOG_BASE/final/manifest.json.out-of-scope.json"
+  fi
   check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
-  unset -f jq mktemp
+  unset -f jq mktemp cp rm _branch_scope_replace_file
+  eval "$(declare -f original_replace_file | sed '1s/original_replace_file/_branch_scope_replace_file/')"
   check run_synthesizer probe
   check jq -e 'length == 1 and .[0].title == "[REGRESSION][HIGH] Finding"' "$LOG_BASE/final/manifest.json"
   check jq -e 'length == 1 and .[0].finding.cluster_id == "rejected"' "$LOG_BASE/final/manifest.json.out-of-scope.json"
@@ -330,5 +376,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) for failure in allocate serialize aggregate; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac
