@@ -43,7 +43,9 @@ run_agent() {
 # real directory permissions. Privileged readers receive the same error via
 # injection instead of silently losing coverage when they bypass mode bits.
 find() {
-  if [[ "${1:-}" == "$LOG_BASE/rounds" ]]; then
+  local inventory_root="${1:-}"
+  [[ "$inventory_root" != -H ]] || inventory_root="${2:-}"
+  if [[ "$inventory_root" == "$LOG_BASE/rounds" ]]; then
     : > "$LOG_BASE/inventory-read"
     [[ "$fault" != interrupted* ]] || kill -TERM "$$"
     if [[ "$fault" == find-empty || "$fault" == find-partial || "$fault" == interrupted-error ]] \

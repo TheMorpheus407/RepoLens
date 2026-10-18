@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Traverse an explicitly symlinked rounds directory in verification and synthesis so readable findings cannot be replaced by false empty results (repolens-r14-p5-4).
+
 - Preserve the previous round digest when finding source reads or the segment parser fail with an IO error, while continuing to skip readable malformed drafts (repolens-r14-p5-2).
 
 - Preserve the previous round digest when finding enumeration fails or its staged inventory is incomplete, keeping filesystem paths intact through NUL framing (repolens-r14-p5-1).

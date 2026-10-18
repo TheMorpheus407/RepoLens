@@ -238,7 +238,7 @@ run_verifier() {
 
   local total_findings=0
   if [[ -d "$rounds_dir" ]]; then
-    if ! total_findings=$(set -o pipefail; find "$rounds_dir" -path '*/lens-outputs/*.md' -type f | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}'); then
+    if ! total_findings=$(set -o pipefail; find -H "$rounds_dir" -path '*/lens-outputs/*.md' -type f | LC_ALL=C awk '$0 !~ /\/generic\/[a-f0-9]{32}\/[0-9]+\.md$/ {count++} END {print count+0}'); then
       echo "run_verifier: cannot enumerate complete finding inventory" >&2
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 7

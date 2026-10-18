@@ -37,7 +37,9 @@ SH
 cat > "$FIXTURE/bin/find" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ -e "$REPOLENS_TEST_FAULT" && "${1:-}" == */rounds && "${3:-}" == '*/lens-outputs/*.md' ]]; then
+inventory_args=("$@")
+[[ "${inventory_args[0]:-}" != -H ]] || inventory_args=("${inventory_args[@]:1}")
+if [[ -e "$REPOLENS_TEST_FAULT" && "${inventory_args[0]:-}" == */rounds && "${inventory_args[2]:-}" == '*/lens-outputs/*.md' ]]; then
   # Recreate saved output from a previous attempt at the inventory boundary.
   cp "$REPOLENS_TEST_SAVED/verification.json" "$LOG_BASE/final/verification.json"
   cp "$REPOLENS_TEST_SAVED/manifest.json" "$LOG_BASE/final/manifest.json"
