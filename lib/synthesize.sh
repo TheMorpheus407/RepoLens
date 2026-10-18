@@ -1049,16 +1049,38 @@ validate_manifest_against_verification() {
   return 0
 }
 
-# _synthesize_retire_saved_results <final_dir>
-#   Snapshot the manifest and saved actions before removing either. A failed
-#   removal or parent cancellation restores both; a failed restore retains its
-#   recovery directory and reports its path. Returns 0 only after retirement.
+# Restore both saved paths, including prior absence. Keep recoverable bytes
+# and report their location if any restore fails.
+_synthesize_restore_saved_results() {
+  local final_dir="$1" backup="$2" saved restore_rc=0
+  [[ -d "$backup" && ! -L "$backup" ]] || return 1
+  for saved in manifest.json cross-link-actions.preserved.json; do
+    if [[ -e "$backup/$saved" || -L "$backup/$saved" ]]; then
+      if [[ -d "$final_dir/$saved" ]] || ! mv -f -- "$backup/$saved" "$final_dir/$saved"; then
+        restore_rc=1
+      fi
+    elif ! rm -f -- "$final_dir/$saved"; then
+      restore_rc=1
+    fi
+  done
+  if (( restore_rc != 0 )); then
+    echo "run_synthesizer: restore failed; saved results retained under $backup" >&2
+    return 1
+  fi
+  rm -rf -- "$backup"
+}
+
+# _synthesize_retire_saved_results <final_dir> <backup_variable>
+# Snapshot before removing either saved path. On success, return the recovery
+# directory through the caller's variable and retain it until publication.
+# Failed removal/cancellation restores the originals before returning failure.
 _synthesize_retire_saved_results() {
-  local final_dir="$1" backup saved rc=0 restore_rc=0
+  [[ $# -eq 2 ]] || return 2
+  local final_dir="$1" backup saved rc=0
+  printf -v "$2" '%s' ''
   backup="$(mktemp -d "$final_dir/.synthesis-cleanup.XXXXXX")" || return 1
   for saved in manifest.json cross-link-actions.preserved.json; do
     if [[ -e "$final_dir/$saved" || -L "$final_dir/$saved" ]]; then
-      # Refuse non-file output paths without traversing or removing them.
       if [[ ! -f "$final_dir/$saved" && ! -L "$final_dir/$saved" ]] \
           || ! cp -pP -- "$final_dir/$saved" "$backup/$saved"; then
         echo "run_synthesizer: cannot snapshot saved result: $final_dir/$saved" >&2
@@ -1074,24 +1096,13 @@ _synthesize_retire_saved_results() {
   rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json" || rc=1
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || rc=1
   if (( rc != 0 )); then
-    for saved in manifest.json cross-link-actions.preserved.json; do
-      if [[ -e "$backup/$saved" || -L "$backup/$saved" ]]; then
-        # Never let mv treat an unexpected directory as a destination container.
-        if [[ -d "$final_dir/$saved" ]] || ! mv -f -- "$backup/$saved" "$final_dir/$saved"; then
-          restore_rc=1
-        fi
-      fi
-    done
-    if (( restore_rc != 0 )); then
-      echo "run_synthesizer: restore failed; saved results retained under $backup" >&2
-      return 1
-    fi
+    _synthesize_restore_saved_results "$final_dir" "$backup" || return 1
+    return "$rc"
   fi
-  rm -rf -- "$backup" || echo "run_synthesizer: cannot remove recovery directory: $backup" >&2
-  return "$rc"
+  printf -v "$2" '%s' "$backup"
 }
 
-# run_synthesizer <run_id>
+# _synthesize_generate <run_id> (internal; use run_synthesizer)
 #   Composes the synthesizer prompt, invokes the active agent exactly once,
 #   captures the JSON manifest from stdout, validates it, and atomically
 #   promotes it to logs/<run-id>/final/manifest.json. If validation fails,
@@ -1103,7 +1114,7 @@ _synthesize_retire_saved_results() {
 #   Required globals: AGENT, PROJECT_PATH.
 #   Optional globals: REPO_OWNER, REPO_NAME, FORGE_REPO, ROUNDS,
 #                     GRANULARITY_HINT, LOG_BASE.
-run_synthesizer() {
+_synthesize_generate() {
   local run_id="${1:-}"
   if [[ -z "$run_id" ]]; then
     echo "run_synthesizer: missing run_id" >&2
@@ -1116,6 +1127,7 @@ run_synthesizer() {
   run_log_base="$(_synthesize_log_base "$run_id")"
   rounds_dir="$run_log_base/rounds"
   final_dir="$run_log_base/final"
+  _synthesis_recovery_final="$final_dir"
   candidate_actions="$final_dir/manifest.json.tmp.$$.cross-link-actions.json"
 
   local synthesize_template="$repo_root/prompts/_base/synthesize.md"
@@ -1163,12 +1175,14 @@ run_synthesizer() {
 
   # An unreadable/partial inventory cannot invalidate the saved publication.
   if [[ "${MODE:-${REPOLENS_MODE:-}}" != branch-review ]]; then
-    if ! _synthesize_retire_saved_results "$final_dir"; then
+    if ! _synthesize_retire_saved_results "$final_dir" _synthesis_recovery_path; then
       echo "run_synthesizer: cannot retire saved synthesis results" >&2
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1
     fi
   fi
+
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
   # Zero findings require no model work. Write the canonical empty manifest so
   # downstream consumers can distinguish a correct empty run from synthesis
@@ -1249,6 +1263,7 @@ run_synthesizer() {
   local transcript_path="$final_dir/synthesizer-output.txt"
   local envelope_path="$transcript_path.envelope.json"
   local agent_rc=0
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   run_agent "$agent" "$prompt_text" "$project_path" "" "" "$envelope_path" > "$transcript_path" 2>&1 || agent_rc=$?
   agent_output="$(cat "$transcript_path" 2>/dev/null || true)"
   if declare -F handle_agent_failure_in_phase >/dev/null 2>&1; then
@@ -1367,4 +1382,45 @@ run_synthesizer() {
 
   rm -f "$final_dir/manifest.scope-pending.json" "$final_dir/cross-link-actions.scope-pending.json"
   return 0
+}
+
+# run_synthesizer <run_id>
+# Own the recovery directory across all generator returns. These dynamically
+# scoped locals are outputs of the internal generator and retirement helper.
+# Delete old copies only after a validated replacement has been published.
+run_synthesizer() {
+  local _synthesis_recovery_path="" _synthesis_recovery_final=""
+  local synthesis_rc=0 recovery cleanup_rc=0
+  _synthesize_generate "$@" || synthesis_rc=$?
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    if [[ -n "$_synthesis_recovery_path" ]]; then
+      _synthesize_restore_saved_results "$_synthesis_recovery_final" "$_synthesis_recovery_path" || true
+    fi
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
+  if (( synthesis_rc == 0 )); then
+    # A new publication supersedes retained recovery copies from failed attempts.
+    # This private prefix is reserved for this run's synthesis snapshots.
+    for recovery in "$_synthesis_recovery_final"/.synthesis-cleanup.*; do
+      [[ -d "$recovery" && ! -L "$recovery" ]] || continue
+      if ! rm -rf -- "$recovery"; then
+        echo "run_synthesizer: cannot remove recovery directory: $recovery" >&2
+        cleanup_rc=1
+      fi
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    done
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    return "$cleanup_rc"
+  fi
+  if [[ -n "$_synthesis_recovery_path" ]]; then
+    if [[ -e "$_synthesis_recovery_path/manifest.json" || -L "$_synthesis_recovery_path/manifest.json" \
+        || -e "$_synthesis_recovery_path/cross-link-actions.preserved.json" \
+        || -L "$_synthesis_recovery_path/cross-link-actions.preserved.json" ]]; then
+      echo "run_synthesizer: saved results retained under $_synthesis_recovery_path" >&2
+    else
+      rmdir -- "$_synthesis_recovery_path" 2>/dev/null || true
+    fi
+  fi
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  return "$synthesis_rc"
 }

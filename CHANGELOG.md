@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Keep saved synthesis results recoverable until a validated replacement is published. Cancellation before publication restores the previous files, late cleanup cancellation returns the signal status, and failed attempts retain a recovery copy until a successful retry (repolens-r13-p5-1).
+
 - Fail round-digest generation on failed or partial lens-registry reads, preserving the last digest for a repaired retry instead of publishing a false empty findings inventory (repolens-r13-p6-5).
 
 - Replace indentless root `also_reported_by` sequences completely during local dedupe, preserving nested provenance, canonical metadata and idempotent retries instead of leaving orphan YAML list items (repolens-r13-p6-3).
