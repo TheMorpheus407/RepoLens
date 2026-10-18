@@ -27,8 +27,8 @@ round="$fixture/round-1"
 mkdir -p "$round/lens-outputs"
 finding="$round/lens-outputs/finding.md"
 printf -- '---\ntitle: retained finding\nseverity: high\ndomain: security\nlens: injection\n---\n## hypothesis\nRetained security evidence\n' > "$finding"
-build_round_digest "$round"
-cp "$round/digest.md" "$fixture/before"
+build_round_digest "$round" || exit 1
+cp "$round/digest.md" "$fixture/before" || exit 1
 FAIL=0
 check() {
   if "$@"; then printf 'PASS: %s\n' "$*"; else printf 'FAIL: %s\n' "$*"; FAIL=$((FAIL + 1)); fi
@@ -62,8 +62,25 @@ for fault in permission partial-read parser-io parser-io-one; do
   check build_round_digest "$round"
   check cmp "$fixture/before" "$round/digest.md"
 done
-# Readable malformed drafts are still skippable beside valid findings.
+# The parser must discard emitted segments when its final status is failure.
+for fault in partial-read parser-io parser-io-one; do
+  rc=0
+  _round_digest_finding_segments "$finding" > "$fixture/segments" 2> "$fixture/stderr" || rc=$?
+  check test "$rc" -eq 2
+  check test ! -s "$fixture/segments"
+done
+fault=none
+# Readable empty and malformed drafts return format status, remain skippable,
+# and cannot alter the valid finding's digest.
+: > "$round/lens-outputs/empty.md"
+printf -- '---\nseverity: high\ndomain: security\nlens: injection\n' > "$round/lens-outputs/unterminated.md"
 printf 'ordinary notes without frontmatter\n' > "$round/lens-outputs/notes.md"
+for draft in empty unterminated notes; do
+  rc=0
+  _round_digest_finding_segments "$round/lens-outputs/$draft.md" > "$fixture/segments" || rc=$?
+  check test "$rc" -eq 1
+  check test ! -s "$fixture/segments"
+done
 check build_round_digest "$round"
 check cmp "$fixture/before" "$round/digest.md"
 printf 'Results: %s failed\n' "$FAIL"
