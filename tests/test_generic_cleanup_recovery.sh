@@ -16,7 +16,7 @@
 
 # Crash recovery must retain the exact cleanup pointer until owned backups are
 # removed, including after a completed rollback. Never sweep other runs' stages.
-set -uo pipefail
+set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 -B - "$REPO" <<'PYTEST'
 import copy
@@ -72,6 +72,8 @@ def case_cleanup(scenario):
                     if scenario in ("partial-cleanup", "rollback-cleanup"):
                         backup = next(path.glob("backup-*"))
                         real_unlink(backup)
+                    if scenario == "after-stage-removal":
+                        real_rmtree(path, *args, **kwargs)
                     if scenario != "after-pending-unlink":
                         os.kill(os.getpid(), signal.SIGKILL)
                 return real_rmtree(path, *args, **kwargs)
@@ -116,6 +118,15 @@ def case_cleanup(scenario):
         if scenario != "after-pending-unlink":
             assert pending.exists(), "cleanup lost its pending journal"
             assert json.loads(pending.read_text()).get("phase") == "cleanup", "cleanup lacks terminal phase"
+        if scenario == "after-stage-removal":
+            assert not Path(json.loads(pending.read_text())["stage"]).exists(), "stage deletion did not complete"
+        if scenario == "edited-after-commit":
+            # Terminal cleanup does not need the old public hashes or backups.
+            # Keep edits to both a projection and the receipt byte-for-byte.
+            target = next((root / "generic").rglob("*.md"))
+            target.write_bytes(target.read_bytes() + b"User edit after commit\n")
+            receipt.write_bytes(receipt.read_bytes() + b"\n")
+            interrupted_files, interrupted_receipt = projections(root), receipt.read_bytes()
         if scenario.startswith("guard-"):
             journal = json.loads(pending.read_text())
             invalid = dict(journal)
@@ -167,6 +178,7 @@ def case_cleanup(scenario):
 
 failures = 0
 for scenario in ("after-pending-unlink", "before-cleanup", "partial-cleanup", "rollback-cleanup",
+                 "after-stage-removal", "edited-after-commit",
                  "legacy-intent", "guard-run", "guard-root", "guard-phase", "guard-stage", "guard-receipt-stage"):
     try:
         case_cleanup(scenario)
