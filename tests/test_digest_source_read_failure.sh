@@ -34,15 +34,13 @@ check() {
   if "$@"; then printf 'PASS: %s\n' "$*"; else printf 'FAIL: %s\n' "$*"; FAIL=$((FAIL + 1)); fi
 }
 fault=none
-cat() {
-  command cat "$@" || return $?
-  if [[ "$fault" == partial-read && "${!#}" == "$finding" ]]; then return 74; fi
-}
 awk() {
-  if [[ "$fault" == parser-io* && "${1:-}" == -v && "${2:-}" == content_mode=* ]]; then
-    command awk "$@" || return $?
-    [[ "$fault" != parser-io-one ]] || return 1
-    return 74
+  if [[ "${1:-}" == -v && "${2:-}" == content_mode=* ]]; then
+    case "$fault" in
+      partial-read) command awk "$@" || return $?; return 74 ;;
+      parser-io) return 74 ;;
+      parser-io-one) return 1 ;;
+    esac
   fi
   command awk "$@"
 }

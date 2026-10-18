@@ -1909,13 +1909,10 @@ _round_digest_frontmatter_block() {
   printf '%s\n' "${parsed#*$'\n'}"
 }
 
-_round_digest_finding_segments() (
-  local file="$1" content_mode=0 snapshot parsed
-  # Read the entire source before parsing. A failed read is an IO error (2),
-  # distinct from readable malformed frontmatter (1), and must not be skipped.
-  snapshot="$(mktemp)" || return 2
-  trap 'rm -f -- "$snapshot"' EXIT
-  cat -- "$file" > "$snapshot" || return 2
+_round_digest_finding_segments() {
+  local file="$1" content_mode=0 parsed
+  # Check the complete parser read before emitting any segments. IO errors (2)
+  # are distinct from readable malformed frontmatter (1) and cannot be skipped.
 
   if _round_digest_content_mode_enabled; then
     content_mode=1
@@ -1928,7 +1925,6 @@ _round_digest_finding_segments() (
       state = "start"
       frontmatter = ""
       body = ""
-      emitted = 0
     }
     function emit_segment() {
       if (frontmatter == "") {
@@ -1937,7 +1933,6 @@ _round_digest_finding_segments() (
       printf "%s%s%s%s", frontmatter, field_sep, body, segment_sep
       frontmatter = ""
       body = ""
-      emitted = 1
     }
     function valid_finding_frontmatter(candidate,    lines, count, i) {
       has_severity = 0
@@ -2013,12 +2008,12 @@ _round_digest_finding_segments() (
         emit_segment()
       }
     }
-  ' "$snapshot")"; then
+  ' "$file")"; then
     return 2
   fi
   [[ -n "$parsed" ]] || return 1
   printf '%s' "$parsed"
-)
+}
 
 # Deliver Generic raw segments as ordinary local findings. The private source
 # remains canonical for digest/verification; publication can be retried even
