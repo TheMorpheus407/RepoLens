@@ -272,7 +272,7 @@ render_human_review_digest() {
   out="$final_dir/HUMAN_REVIEW.md"
 
   mkdir -p -- "$final_dir" 2>/dev/null || return 1
-  tmp="$out.tmp.$$"
+  tmp="$(mktemp "$out.tmp.XXXXXX")" || return 1
   local has_duplicate_report=false
   if [[ "${2:-true}" == true && -f "$final_dir/DUPLICATES.md" ]]; then
     has_duplicate_report=true
