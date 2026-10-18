@@ -48,6 +48,13 @@ for null_value in null Null NULL '~'; do
       "$domain" "$lens" > "$OUTPUT_DIR/null-$null_field-$null_value.md"
   done
 done
+# Comments do not give null or omitted attribution a value. Exercise spaces
+# and tabs, either missing field, and all supported null spellings.
+printf -- '---\nseverity: high\ndomain: null # pending\nlens: injection\n---\nDraft.\n' > "$OUTPUT_DIR/comment-domain.md"
+printf -- '---\nseverity: high\ndomain: security\nlens: ~\t# pending\n---\nDraft.\n' > "$OUTPUT_DIR/comment-lens.md"
+printf -- '---\nseverity: high\ndomain: Null # pending\nlens: NULL # pending\n---\nDraft.\n' > "$OUTPUT_DIR/comment-both.md"
+printf -- '---\nseverity: high\ndomain: # pending\nlens: injection\n---\nDraft.\n' > "$OUTPUT_DIR/comment-empty-domain.md"
+printf -- '---\nseverity: high\ndomain: security\nlens: # pending\n---\nDraft.\n' > "$OUTPUT_DIR/comment-empty-lens.md"
 init_summary "$SUMMARY_FILE" probe "$PROJECT_PATH" bugreport mock '' 1 local "$OUTPUT_DIR"
 FAIL=0
 # Record every assertion failure and return the aggregate result at the end.
@@ -78,7 +85,7 @@ check test "$(jq '.totals.ordinary_issues_created' "$SUMMARY_FILE")" -eq 0
 # Null attribution also uses the existing directory fallback. Quoted scalars
 # remain literal strings; the registry must not erase their identity.
 REPOLENS_MIN_SEVERITY=''
-printf -- '---\nseverity: high\ndomain: null\nlens: ~\n---\nDirectory-attributed finding.\n' > "$OUTPUT_DIR/security/injection/001.md"
+printf -- '---\nseverity: high\ndomain: null # pending\nlens: ~\t# pending\n---\nDirectory-attributed finding.\n' > "$OUTPUT_DIR/security/injection/001.md"
 check reconcile_generic_local_counts
 check test "$GLOBAL_ISSUES_CREATED" -eq 1
 check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
@@ -86,5 +93,12 @@ check jq -se 'any(.[]; (.markdown_path | endswith("/security/injection/001.md"))
 printf -- '---\nseverity: high\ndomain: "null"\nlens: '\''~'\''\ntitle: null\n---\nLiteral metadata.\n' > "$OUTPUT_DIR/quoted.md"
 check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
 check jq -se 'any(.[]; (.markdown_path | endswith("/quoted.md")) and .domain == "null" and .lens == "~" and .title == "null")' "$LOG_BASE/registry.jsonl"
+# A hash inside a quoted value or without separating whitespace is literal.
+printf -- '---\nseverity: high\ndomain: "null # literal"\nlens: '\''~ # literal'\''\n---\nLiteral metadata.\n' > "$OUTPUT_DIR/quoted.md"
+check build_findings_jsonl_from_local "$OUTPUT_DIR" "$LOG_BASE/registry.jsonl"
+check jq -se 'any(.[]; (.markdown_path | endswith("/quoted.md")) and .domain == "null # literal" and .lens == "~ # literal")' "$LOG_BASE/registry.jsonl"
+printf -- '---\ndomain: null#literal\nlens: ~#literal\n---\n' > "$LOG_BASE/hash.md"
+check test "$(_ledger_frontmatter_value "$LOG_BASE/hash.md" domain)" = 'null#literal'
+check test "$(_ledger_frontmatter_value "$LOG_BASE/hash.md" lens)" = '~#literal'
 printf 'Results: %s failed\n' "$FAIL"
 (( FAIL == 0 ))

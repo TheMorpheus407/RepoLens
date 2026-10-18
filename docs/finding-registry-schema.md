@@ -214,7 +214,9 @@ One JSON object per line in `findings.jsonl`, with these 13 fields:
   is traversed; symlinks inside the tree are not followed. Flat findings without
   these frontmatter fields retain empty values. Unquoted YAML null scalars
   (`null`, `Null`, `NULL`, `~`) in domain/lens fields are treated as missing;
-  quoted strings remain literal values.
+  this includes null markers followed by whitespace and a `#` comment, and
+  fields containing only a comment. Quoted strings and hashes without
+  separating whitespace remain literal values.
 - `status` — `new` \| `duplicate` \| `needs-validation` \|
   `likely-false-positive`; defaults to `new`.
 - `primary_location` — `"file:line"` or empty string; derived by the builder.
