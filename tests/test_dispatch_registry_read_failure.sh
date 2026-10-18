@@ -21,11 +21,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Reuse the existing round-driver fixture before its scenario loop.
 # shellcheck source=/dev/null
 source <(awk '/^for fault in / {exit} /^ROOT=/ {next} {print}' "$ROOT/tests/test_dispatch_read_failure.sh")
-if (( $# == 0 )); then set -- unreadable empty partial; fi
+if (( $# == 0 )); then set -- unreadable empty partial zero-byte whitespace documents traversal lookup-loop; fi
 for registry_fault in "$@"; do (
+  if [[ "$registry_fault" == traversal && "$(id -u)" == 0 ]]; then
+    printf 'SKIP: root bypasses directory traversal permissions; lookup-loop still tests stat errors\n'
+    exit 0
+  fi
   DOMAINS_FILE="$TMP/$registry_fault-domains.json"
   printf '{"domains":[{"id":"security","order":1,"lenses":["injection","xss-csrf"]}]}\n' > "$DOMAINS_FILE"
-  trap 'chmod u+rw "$DOMAINS_FILE" 2>/dev/null || true' EXIT
+  # Private prompt fixtures permit real traversal faults without touching the repo.
+  LENSES_DIR="$TMP/$registry_fault-lenses"
+  mkdir -p "$LENSES_DIR/security"
+  touch "$LENSES_DIR/security/injection.md" "$LENSES_DIR/security/xss-csrf.md"
+  trap 'chmod u+rw "$DOMAINS_FILE"; chmod u+rwx "$LENSES_DIR/security"' EXIT
   LOG_BASE="$TMP/registry-$registry_fault"
   SUMMARY_FILE="$LOG_BASE/summary.json" completed_lenses_file="$LOG_BASE/.completed"
   mkdir -p "$LOG_BASE"
@@ -38,7 +46,17 @@ for registry_fault in "$@"; do (
     registry_fixture_meta "$@" || return $?
     if [[ "$break_registry" == true ]]; then
       registry_broken=true
-      [[ "$registry_fault" != unreadable ]] || chmod 000 "$DOMAINS_FILE"
+      case "$registry_fault" in
+        unreadable) chmod 000 "$DOMAINS_FILE" ;;
+        zero-byte) : > "$DOMAINS_FILE" ;;
+        whitespace) printf ' \n\t\n' > "$DOMAINS_FILE" ;;
+        documents) printf '{"domains":[]}\n' >> "$DOMAINS_FILE" ;;
+        traversal) chmod 000 "$LENSES_DIR/security" ;;
+        lookup-loop)
+          rm "$LENSES_DIR/security/xss-csrf.md"
+          ln -s xss-csrf.md "$LENSES_DIR/security/xss-csrf.md"
+          ;;
+      esac
     fi
   }
   # Fault only registry enumeration after a complete meta handoff. Actual chmod
@@ -56,7 +74,10 @@ for registry_fault in "$@"; do (
   rc=0
   run_rounds 2 LENSES || rc=$?
   printf 'Registry fault reached: %s; rounds_rc=%s\n' "$registry_fault" "$rc"
-  [[ "$registry_fault" == unreadable ]] || check test -s "$LOG_BASE/fault-hit"
+  case "$registry_fault" in
+    empty|partial) check test -s "$LOG_BASE/fault-hit" ;;
+    traversal) check test ! -x "$LENSES_DIR/security" ;;
+  esac
   check test "$rc" -ne 0
   check test ! -f "$LOG_BASE/rounds/round-2/.completed"
   check test "$(cat "$LOG_BASE/executed")" = '1:security/injection'
@@ -65,7 +86,7 @@ for registry_fault in "$@"; do (
   for reader in _rounds_meta_all_lens_entries _rounds_meta_active_lens_entries; do
     rc=0
     entries="$("$reader" "$LENSES_DIR" "$DOMAINS_FILE")" || rc=$?
-    check test "$rc" -ne 0
+    check test "$rc" -eq 2
     check test -z "$entries"
   done
   rc=0
@@ -84,6 +105,10 @@ for registry_fault in "$@"; do (
   check test "$(sha256sum "$LOG_BASE/saved-dispatch.md" "$LOG_BASE/saved-hypotheses.md")" = "$before"
   # Repair permissions/reader and resume the accepted handoff exactly once.
   chmod 600 "$DOMAINS_FILE"
+  chmod 700 "$LENSES_DIR/security"
+  rm -f "$LENSES_DIR/security/xss-csrf.md"
+  touch "$LENSES_DIR/security/xss-csrf.md"
+  printf '{"domains":[{"id":"security","order":1,"lenses":["injection","xss-csrf"]}]}\n' > "$DOMAINS_FILE"
   registry_broken=false break_registry=false RESUME_RUN_ID=probe
   check run_rounds 2 LENSES
   check test "$(grep -Fxc '2:security/injection' "$LOG_BASE/executed")" -eq 1
@@ -93,6 +118,17 @@ for registry_fault in "$@"; do (
   # Unknown IDs in a readable catalog retain their warning-and-skip behavior.
   printf 'LENS: unknown-id\n' > "$LOG_BASE/unknown.md"
   entries="$(_rounds_meta_dispatch_lens_entries "$LOG_BASE/unknown.md")"
+  check test -z "$entries"
+  # A valid empty selection and genuinely missing prompts remain successful.
+  printf '{"domains":[]}\n' > "$DOMAINS_FILE"
+  for reader in _rounds_meta_all_lens_entries _rounds_meta_active_lens_entries; do
+    rc=0
+    entries="$("$reader" "$LENSES_DIR" "$DOMAINS_FILE")" || rc=$?
+    check test "$rc" -eq 0
+    check test -z "$entries"
+  done
+  printf '{"domains":[{"id":"absent","order":1,"lenses":["missing"]}]}\n' > "$DOMAINS_FILE"
+  entries="$(_rounds_meta_all_lens_entries "$LENSES_DIR" "$DOMAINS_FILE")"
   check test -z "$entries"
   [[ "$FAIL" -eq 0 ]] || exit 1
   printf 'Results: registry %s failure and repaired resume passed\n' "$registry_fault"
