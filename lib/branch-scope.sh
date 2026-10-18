@@ -388,14 +388,15 @@ branch_scope_filter_directory() {
 # Side effects: filter a synthesized candidate before promotion, preserve
 # rejected proposals, and retain the branch title convention mechanically.
 # Returns 2 on unavailable scope evidence, an incomplete candidate read, or
-# rejection serialization/publication failure, preserving publications through
-# the synthesis caller; 1 on other failures.
+# staging/serialization/publication failure, preserving publications through
+# the synthesis caller; 1 on an invalid candidate.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local manifest="$1" entry reason kept rejected verification_rc entries report_tmp
+  local manifest="$1" entry reason kept rejected verification_rc entries report_tmp accepted
+  local report report_backup=""
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
   _branch_scope_read_paths >/dev/null || return 2
-  kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
+  kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 2
   # Capture and check the whole stream before filtering or publishing a prefix.
   entries="$(jq -c '.[]' "$manifest")" || { rm -f "$kept"; return 2; }
   # Exclusively create derived stages rather than opening predictable siblings.
@@ -407,7 +408,7 @@ branch_scope_filter_manifest() {
         .title = ("[REGRESSION][" + (.severity | ascii_upcase) + "] " +
           (.title | sub("^\\[REGRESSION\\][[:space:]]*"; "")
             | sub("^\\[(?i:critical|high|medium|low)\\][[:space:]]*"; "")))
-      ' <<< "$entry" >> "$kept" || { rm -f "$kept" "$rejected"; return 1; }
+      ' <<< "$entry" >> "$kept" || { rm -f "$kept" "$rejected"; return 2; }
     else
       verification_rc=$?
       if (( verification_rc != 1 )); then
@@ -422,16 +423,61 @@ branch_scope_filter_manifest() {
       }
     fi
   done <<< "$entries"
-  # Keep the previous report until the complete aggregation can be published.
-  report_tmp="$(mktemp "${kept}.report.XXXXXX")" || {
+  # Aggregate both streams before publishing either result. Accepted-entry
+  # IO must preserve the candidate and the previous report for the caller.
+  accepted="$(mktemp "${kept}.accepted.XXXXXX")" || {
     rm -f -- "$kept" "$rejected"
     return 2
   }
-  if ! jq -s '.' "$rejected" > "$report_tmp" ||
-      ! _branch_scope_replace_file "$report_tmp" "${manifest%.tmp.*}.out-of-scope.json"; then
-    rm -f -- "$kept" "$rejected" "$report_tmp"
+  if ! jq -s '.' "$kept" > "$accepted"; then
+    rm -f -- "$kept" "$rejected" "$accepted"
     return 2
   fi
-  jq -s '.' "$kept" > "$manifest" || return 1
-  rm -f "$kept" "$rejected"
+  report_tmp="$(mktemp "${kept}.report.XXXXXX")" || {
+    rm -f -- "$kept" "$rejected" "$accepted"
+    return 2
+  }
+  report="${manifest%.tmp.*}.out-of-scope.json"
+  if ! jq -s '.' "$rejected" > "$report_tmp" ||
+      [[ -L "$report" || ( -e "$report" && ! -f "$report" ) ]]; then
+    rm -f -- "$kept" "$rejected" "$report_tmp" "$accepted"
+    return 2
+  fi
+  # Keep the old report recoverable until the candidate replacement succeeds.
+  # An empty backup path records prior absence, including on a first attempt.
+  if [[ -e "$report" ]]; then
+    report_backup="$(mktemp "${kept}.report-backup.XXXXXX")" || {
+      rm -f -- "$kept" "$rejected" "$report_tmp" "$accepted"
+      return 2
+    }
+    if ! cp -p -- "$report" "$report_backup"; then
+      rm -f -- "$kept" "$rejected" "$report_tmp" "$accepted" "$report_backup"
+      return 2
+    fi
+  fi
+  # A cleanup failure must leave the complete proposal available to the caller.
+  # Retire the streams before replacing either output, then retry owned cleanup
+  # on failure without turning a filtered candidate into pending evidence.
+  if ! rm -f -- "$kept" "$rejected" ||
+      ! _branch_scope_replace_file "$report_tmp" "$report"; then
+    rm -f -- "$kept" "$rejected" "$report_tmp" "$accepted" ${report_backup:+"$report_backup"}
+    return 2
+  fi
+  if ! _branch_scope_replace_file "$accepted" "$manifest"; then
+    if [[ -n "$report_backup" ]]; then
+      if ! _branch_scope_replace_file "$report_backup" "$report"; then
+        printf 'branch_scope_filter_manifest: cannot restore rejection report; saved report retained at %s\n' "$report_backup" >&2
+      fi
+    elif ! rm -f -- "$report"; then
+      printf 'branch_scope_filter_manifest: cannot restore rejection report absence: %s\n' "$report" >&2
+    fi
+    rm -f -- "$report_tmp" "$accepted"
+    return 2
+  fi
+  # Publication has committed. Failure to remove an obsolete backup cannot
+  # classify the already-filtered candidate as an incomplete attempt.
+  if [[ -n "$report_backup" ]] && ! rm -f -- "$report_backup"; then
+    printf 'branch_scope_filter_manifest: cannot remove obsolete report backup: %s\n' "$report_backup" >&2
+  fi
+  return 0
 }
