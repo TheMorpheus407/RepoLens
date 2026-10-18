@@ -387,8 +387,9 @@ branch_scope_filter_directory() {
 
 # Side effects: filter a synthesized candidate before promotion, preserve
 # rejected proposals, and retain the branch title convention mechanically.
-# Returns 2 on unavailable scope evidence or an incomplete candidate read,
-# preserving publications through the synthesis caller; 1 on other failures.
+# Returns 2 on unavailable scope evidence, an incomplete candidate read, or
+# rejection serialization failure, preserving publications through the
+# synthesis caller; 1 on other failures.
 branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local manifest="$1" entry reason kept rejected verification_rc entries
@@ -413,7 +414,12 @@ branch_scope_filter_manifest() {
         rm -f "$kept" "$rejected"
         return 2
       fi
-      jq -cn --argjson finding "$entry" --arg reason "$reason" '{finding:$finding,reason:$reason}' >> "$rejected"
+      # Findings can exceed exec argument limits. Stream the entry and check
+      # serialization before publishing either the manifest or rejection report.
+      jq -c --arg reason "$reason" '{finding:.,reason:$reason}' <<< "$entry" >> "$rejected" || {
+        rm -f "$kept" "$rejected"
+        return 2
+      }
     fi
   done <<< "$entries"
   jq -s '.' "$rejected" > "${manifest%.tmp.*}.out-of-scope.json" || return 1

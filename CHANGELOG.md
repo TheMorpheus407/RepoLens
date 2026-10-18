@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve full out-of-scope manifest proposals above exec argument limits and fail safely if their rejection report cannot be serialized (repolens-r13-p6-4).
+
 - Count per-round lens completion receipts in attempt totals and resume deltas for multi-round runs, discarding partial counts from failed receipt reads.
 
 - Clear recovered LENS/GENERIC dispatch-read stop reasons on explicit resume while preserving previous attempt history, allowing successful completed runs to leave the incomplete-run retention set (repolens-r13-p1-1).
