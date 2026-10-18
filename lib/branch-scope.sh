@@ -396,10 +396,10 @@ branch_scope_filter_manifest() {
   jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
   _branch_scope_read_paths >/dev/null || return 2
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 1
-  rejected="${kept}.rejected"
   # Capture and check the whole stream before filtering or publishing a prefix.
   entries="$(jq -c '.[]' "$manifest")" || { rm -f "$kept"; return 2; }
-  : > "$rejected"
+  # Exclusively create derived stages rather than opening predictable siblings.
+  rejected="$(mktemp "${kept}.rejected.XXXXXX")" || { rm -f "$kept"; return 2; }
   while IFS= read -r entry; do
     [[ -n "$entry" ]] || continue
     if reason="$(branch_scope_verify_body "$(jq -r '.body' <<< "$entry")")"; then
@@ -423,7 +423,10 @@ branch_scope_filter_manifest() {
     fi
   done <<< "$entries"
   # Keep the previous report until the complete aggregation can be published.
-  report_tmp="${kept}.report"
+  report_tmp="$(mktemp "${kept}.report.XXXXXX")" || {
+    rm -f -- "$kept" "$rejected"
+    return 2
+  }
   if ! jq -s '.' "$rejected" > "$report_tmp" ||
       ! _branch_scope_replace_file "$report_tmp" "${manifest%.tmp.*}.out-of-scope.json"; then
     rm -f -- "$kept" "$rejected" "$report_tmp"
