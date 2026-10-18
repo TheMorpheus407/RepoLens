@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Fail round-digest generation on failed or partial lens-registry reads, preserving the last digest for a repaired retry instead of publishing a false empty findings inventory (repolens-r13-p6-5).
+
 - Replace indentless root `also_reported_by` sequences completely during local dedupe, preserving nested provenance, canonical metadata and idempotent retries instead of leaving orphan YAML list items (repolens-r13-p6-3).
 
 - Preserve ordinary and cross-link success receipts when their quarantine marker is a directory or symlink, retaining the completed-POST guard and allowing saved receipt reattestation on resume instead of restoring a container as a receipt. Fail dispatch when quarantining a saved ordinary or cross-link receipt fails, so later actions left pending are not silently reported as completed. An ordinary quarantine failure releases queued reservations and stops cross-link admission (repolens-r13-p3-2).
