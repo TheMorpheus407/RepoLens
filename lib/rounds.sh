@@ -2479,7 +2479,25 @@ build_round_digest() {
   fi
 
   if [[ -d "$lens_outputs_dir" ]]; then
-    mapfile -t md_files < <(find "$lens_outputs_dir" -type f -name '*.md' -print | LC_ALL=C sort)
+    # Complete enumeration before consumption: process substitution hides a
+    # failed find/sort and can publish a false empty digest. NUL framing keeps
+    # every filesystem path intact; the final empty entry certifies a full read.
+    local files_list list_complete=0 list_failed=0
+    files_list="$(mktemp "$round_dir/.digest-files.XXXXXX")" || return 1
+    if ! { (set -o pipefail; find -H "$lens_outputs_dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$files_list"; then
+      rm -f -- "$files_list"
+      _round_digest_warn "Unable to enumerate complete findings inventory: $lens_outputs_dir"
+      return 1
+    fi
+    while IFS= read -r -d '' file; do
+      if [[ -z "$file" ]]; then list_complete=1; break; fi
+      md_files+=("$file")
+    done < "$files_list" || list_failed=1
+    rm -f -- "$files_list"
+    if (( list_failed || ! list_complete )); then
+      _round_digest_warn "Unable to read complete findings inventory: $lens_outputs_dir"
+      return 1
+    fi
   fi
 
   for file in "${md_files[@]}"; do
