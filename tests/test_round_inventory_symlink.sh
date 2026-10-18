@@ -105,5 +105,64 @@ check run_synthesizer fixture
 check jq -e 'length == 0' "$LOG_BASE/final/verification.json"
 check jq -e 'length == 0' "$LOG_BASE/final/manifest.json"
 check test "$(cat "$fixture/calls")" = vs
+# Deterministically take a valid symlink target offline after initial validation,
+# either just before/after find or during synthesis's intervening scope pass.
+race_stage=none
+same_bytes() { [[ -f "$1" && "$(sha256sum < "$1")" == "$2" ]]; }
+take_rounds_offline() {
+  mv "$fixture/stored-rounds" "$fixture/offline-rounds"
+  : > "$fixture/race-reached"
+}
+find() {
+  local inventory_root="${1:-}"
+  [[ "$inventory_root" != -H ]] || inventory_root="${2:-}"
+  if [[ "$inventory_root" == "$LOG_BASE/rounds" ]]; then
+    [[ "$race_stage" != find-before ]] || take_rounds_offline
+    command find "$@" || return $?
+    [[ "$race_stage" != find-after ]] || take_rounds_offline
+    return 0
+  fi
+  command find "$@"
+}
+branch_scope_filter_directory() {
+  [[ "$race_stage" != scope ]] || take_rounds_offline
+  return 0
+}
+for phase in verifier synthesizer; do
+  for race_stage in find-before find-after scope; do
+    [[ "$race_stage" != scope || "$phase" == synthesizer ]] || continue
+    ln -s "$fixture/stored-rounds" "$LOG_BASE/rounds"
+    printf '[{"finding_id":"saved","status":"VERIFIED","notes":"Saved verification"}]\n' > "$LOG_BASE/final/verification.json"
+    printf '[{"cluster_id":"saved","title":"Saved result"}]\n' > "$LOG_BASE/final/manifest.json"
+    printf '[{"body":"Saved action"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
+    verification_hash="$(sha256sum < "$LOG_BASE/final/verification.json")"
+    manifest_hash="$(sha256sum < "$LOG_BASE/final/manifest.json")"
+    actions_hash="$(sha256sum < "$LOG_BASE/final/cross-link-actions.preserved.json")"
+    printf vs > "$fixture/calls"
+    rc=0; "run_$phase" fixture || rc=$?
+    printf '%s/%s: status=%s\n' "$phase" "$race_stage" "$rc"
+    expected_rc=1
+    [[ "$phase" != verifier ]] || expected_rc=7
+    check test "$rc" -eq "$expected_rc"
+    check test -f "$fixture/race-reached"
+    check same_bytes "$LOG_BASE/final/verification.json" "$verification_hash"
+    check same_bytes "$LOG_BASE/final/manifest.json" "$manifest_hash"
+    check same_bytes "$LOG_BASE/final/cross-link-actions.preserved.json" "$actions_hash"
+    check test "$(cat "$fixture/calls")" = vs
+    check test -z "$(command find "$LOG_BASE/final" -name '.synthesis-cleanup.*' -print)"
+    # A repaired readable empty root remains a successful, model-free retry.
+    rm "$LOG_BASE/rounds" "$fixture/race-reached"
+    mv "$fixture/offline-rounds" "$fixture/stored-rounds"
+    ln -s "$fixture/empty-rounds" "$LOG_BASE/rounds"
+    race_stage=none
+    calls_before_retry="$(cat "$fixture/calls")"
+    check "run_$phase" fixture
+    output=manifest
+    [[ "$phase" != verifier ]] || output=verification
+    check jq -e 'length == 0' "$LOG_BASE/final/$output.json"
+    check test "$(cat "$fixture/calls")" = "$calls_before_retry"
+    rm "$LOG_BASE/rounds"
+  done
+done
 printf 'Results: %s failed\n' "$FAIL"
 (( FAIL == 0 ))

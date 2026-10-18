@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve verification, synthesis manifests and actions when an existing rounds root is a dangling or looping symlink or resolves to a non-directory; only absent or readable empty roots publish empty results (repolens-r15-p8-1).
+- Preserve verification, synthesis manifests and actions when an existing rounds root is a dangling or looping symlink, resolves to a non-directory, or becomes unavailable during inventory enumeration; only absent or readable empty roots publish empty results (repolens-r15-p8-1).
 
 - Replace synthesis manifests at their exact path on both empty and model-result publication, rejecting directory obstructions while retaining the previous publication in recovery until a repaired retry succeeds (repolens-r15-p7-4).
 
