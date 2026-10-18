@@ -114,8 +114,10 @@ done
 log_info() { :; }
 log_warn() { printf '%s\n' "$*" >&2; }
 finalize_local() {
+  # The non-local hook initializes readiness before this local-only slice.
+  _registry_ready=false
   # shellcheck source=/dev/null
-  source <(sed -n '/^# --- Local-mode deterministic dedupe/,/^unset _local_registry_ready _duplicate_report_ready/p' "$ROOT/repolens.sh")
+  source <(sed -n '/^# --- Local-mode deterministic dedupe/,/^unset _registry_ready _duplicate_report_ready/p' "$ROOT/repolens.sh")
 }
 for mode in audit branch-review; do
 (

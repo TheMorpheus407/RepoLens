@@ -31,8 +31,10 @@ done
 set -euo pipefail
 optional_local_finalization() {
   # Execute the CLI's real delivery, dedupe, registry and report orchestration.
+  # The non-local hook initializes readiness before this local-only slice.
+  _registry_ready=false
   # shellcheck source=/dev/null
-  source <(sed -n '/^# --- Local-mode deterministic dedupe/,/^unset _local_registry_ready _duplicate_report_ready/p' "$REPO/repolens.sh")
+  source <(sed -n '/^# --- Local-mode deterministic dedupe/,/^unset _registry_ready _duplicate_report_ready/p' "$REPO/repolens.sh")
 }
 LOG_BASE="$FIXTURE/run" OUTPUT_DIR="$FIXTURE/explicit findings" PROJECT_PATH="$FIXTURE/project"
 OUTPUT_DIR_SET=true output_name_max=255 log_name_max=255 heartbeat_name_max=255
