@@ -24,20 +24,29 @@ source "$REPO/lib/ledger.sh"
 source "$REPO/lib/local-dedupe.sh"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
-for width in 0 2 4; do
-  dir="$FIXTURE/$width"
+for variant in inline-0 inline-2 inline-4 bare-0 bare-2 bare-4; do
+  style="${variant%-*}"
+  width="${variant##*-}"
+  dir="$FIXTURE/$variant"
   mkdir "$dir"
   prefix="$(printf '%*s' "$width" '')"
   {
     printf -- '---\n'
-    sed "s/^/$prefix/" <<'FRONTMATTER'
+    {
+      cat <<'FRONTMATTER'
 title: Authentication accepts expired session tokens
 severity: high
 domain: security
 lens: injection
 also_reported_by:
 # Keep this contributor note
-- lens: old
+FRONTMATTER
+      if [[ "$style" == bare ]]; then
+        printf -- '-\n  lens: old\n'
+      else
+        printf -- '- lens: old\n'
+      fi
+      cat <<'FRONTMATTER'
   domain: testing
   markdown_path: old.md
 complexity: 5
@@ -46,25 +55,26 @@ context:
   - lens: nested
     domain: keep
 FRONTMATTER
+    } | sed "s/^/$prefix/"
     printf -- '---\nBody preserved\n'
   } > "$dir/canonical.md"
   printf -- '---\ntitle: Authentication accepts expired session tokens\nseverity: low\ndomain: security\nlens: auth\n---\nOther evidence\n' > "$dir/duplicate.md"
   # The library handles its own errors; expected statuses are checked explicitly.
   dedupe_local_markdown "$dir" || exit 1
   if grep -Fq 'lens: old' "$dir/canonical.md"; then
-    printf 'FAIL: root indentation %s left an orphan old contributor\n' "$width" >&2
+    printf 'FAIL: %s left an orphan old contributor\n' "$variant" >&2
     exit 1
   fi
   grep -Fxq "$prefix# Keep this contributor note" "$dir/canonical.md"
   grep -Fq 'lens: nested' "$dir/canonical.md"
   grep -Fxq 'Body preserved' "$dir/canonical.md"
   grep -q '^status: duplicate' "$dir/duplicate.md"
-  build_findings_jsonl_from_local "$dir" "$FIXTURE/registry-$width.jsonl" || exit 1
-  jq -se 'length==2 and ([.[] | select(.status=="new" and .severity=="high" and .complexity==5)] | length)==1 and ([.[] | select(.status=="duplicate")] | length)==1' "$FIXTURE/registry-$width.jsonl" >/dev/null
-  cp "$dir/canonical.md" "$FIXTURE/canonical-$width.before"
-  cp "$dir/duplicate.md" "$FIXTURE/duplicate-$width.before"
+  build_findings_jsonl_from_local "$dir" "$FIXTURE/registry-$variant.jsonl" || exit 1
+  jq -se 'length==2 and ([.[] | select(.status=="new" and .severity=="high" and .complexity==5)] | length)==1 and ([.[] | select(.status=="duplicate")] | length)==1' "$FIXTURE/registry-$variant.jsonl" >/dev/null
+  cp "$dir/canonical.md" "$FIXTURE/canonical-$variant.before"
+  cp "$dir/duplicate.md" "$FIXTURE/duplicate-$variant.before"
   dedupe_local_markdown "$dir" || exit 1
-  cmp "$dir/canonical.md" "$FIXTURE/canonical-$width.before"
-  cmp "$dir/duplicate.md" "$FIXTURE/duplicate-$width.before"
-  printf 'PASS: indent=%s, root list replaced, nested fields retained, retry byte-identical\n' "$width"
+  cmp "$dir/canonical.md" "$FIXTURE/canonical-$variant.before"
+  cmp "$dir/duplicate.md" "$FIXTURE/duplicate-$variant.before"
+  printf 'PASS: %s, root list replaced, nested fields retained, retry byte-identical\n' "$variant"
 done
