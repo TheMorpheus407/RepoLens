@@ -21,6 +21,19 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/lib/core.sh"
 # shellcheck source=/dev/null
 source "$ROOT/lib/rounds.sh"
+fault=none
+# A successful sentinel write can be lost before the inventory is opened;
+# deleting the pathname leaves the producer's already-open descriptor valid.
+printf() {
+  if [[ "${1:-}" == '\0' ]]; then
+    case "$fault" in
+      missing-sentinel) return 0 ;;
+      open) command rm -- "$(cat "$fixture/inventory-path")" ;;
+    esac
+  fi
+  # shellcheck disable=SC2059 # Forward the caller's format and arguments.
+  builtin printf "$@"
+}
 fixture="$(command mktemp -d)"
 trap 'chmod -R u+rwX "$fixture"; rm -rf -- "$fixture"' EXIT
 round="$fixture/round-1"
@@ -68,18 +81,6 @@ mktemp() {
     builtin printf '%s' "$path" > "$fixture/inventory-path"
   fi
   builtin printf '%s\n' "$path"
-}
-# A successful sentinel write can be lost before the inventory is opened;
-# deleting the pathname leaves the producer's already-open descriptor valid.
-printf() {
-  if [[ "${1:-}" == '\0' ]]; then
-    case "$fault" in
-      missing-sentinel) return 0 ;;
-      open) command rm -- "$(cat "$fixture/inventory-path")" ;;
-    esac
-  fi
-  # shellcheck disable=SC2059 # Forward the caller's format and arguments.
-  builtin printf "$@"
 }
 # Interrupt only the NUL-framed inventory reader, before or after a real path.
 read() {
