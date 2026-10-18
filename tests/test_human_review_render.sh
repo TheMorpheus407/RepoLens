@@ -21,7 +21,8 @@
 #
 #   render_human_review_digest <run_id>
 #     Reads logs/<run-id>/final/findings.jsonl via human_review_bucketize and
-#     writes logs/<run-id>/final/HUMAN_REVIEW.md atomically (*.tmp.$$ then mv).
+#     writes logs/<run-id>/final/HUMAN_REVIEW.md atomically (exclusive mktemp
+#     stage, then exact-path replacement).
 #     Honors $LOG_BASE for path resolution (so the test drives it by setting
 #     LOG_BASE and dropping a fixture findings.jsonl). It RENDERS only — never
 #     builds/mutates the registry, never invokes a model.

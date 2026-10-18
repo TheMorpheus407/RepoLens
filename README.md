@@ -274,6 +274,8 @@ Remote deploy mode runs read-only commands on a server you authorize, but the ag
 - **Only scan repositories you own or fully trust.** Do not point RepoLens at random GitHub clones, dependency sources, or third-party code.
 - Treat every run as if the target repo were actively hostile.
 
+Keep run/log directories and their parents trusted against concurrent modification by less-trusted users. Human Review staging uses exclusive allocation to avoid pre-existing path collisions; it does not protect against a writer replacing the stage after allocation.
+
 For vulnerability disclosure, see [SECURITY.md](SECURITY.md).
 
 ### Disclaimer — No Warranty, Use at Your Own Risk
