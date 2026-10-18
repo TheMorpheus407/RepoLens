@@ -1070,13 +1070,12 @@ _synthesize_restore_saved_results() {
   rm -rf -- "$backup"
 }
 
-# _synthesize_retire_saved_results <final_dir> <backup_variable>
-# Snapshot before removing either saved path. On success, return the recovery
-# directory through the caller's variable and retain it until publication.
-# Failed removal/cancellation restores the originals before returning failure.
-_synthesize_retire_saved_results() {
+# _synthesize_snapshot_saved_results <final_dir> <backup_variable>
+# Return a recovery directory through the caller's variable without retiring
+# either publication. Branch-review scope outages must leave both paths intact.
+_synthesize_snapshot_saved_results() {
   [[ $# -eq 2 ]] || return 2
-  local final_dir="$1" backup saved rc=0
+  local final_dir="$1" backup saved
   printf -v "$2" '%s' ''
   backup="$(mktemp -d "$final_dir/.synthesis-cleanup.XXXXXX")" || return 1
   for saved in manifest.json cross-link-actions.preserved.json; do
@@ -1093,13 +1092,24 @@ _synthesize_retire_saved_results() {
     rm -rf -- "$backup"
     return 1
   fi
+  printf -v "$2" '%s' "$backup"
+}
+
+# _synthesize_retire_saved_results <final_dir> <backup_variable>
+# Snapshot before removing either saved path. Failed removal/cancellation
+# restores the originals; success retains recovery until publication.
+_synthesize_retire_saved_results() {
+  [[ $# -eq 2 ]] || return 2
+  local final_dir="$1" retirement_backup="" rc=0
+  printf -v "$2" '%s' ''
+  _synthesize_snapshot_saved_results "$final_dir" retirement_backup || return 1
   rm -f "$final_dir/manifest.json" "$final_dir/cross-link-actions.preserved.json" || rc=1
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || rc=1
   if (( rc != 0 )); then
-    _synthesize_restore_saved_results "$final_dir" "$backup" || return 1
+    _synthesize_restore_saved_results "$final_dir" "$retirement_backup" || return 1
     return "$rc"
   fi
-  printf -v "$2" '%s' "$backup"
+  printf -v "$2" '%s' "$retirement_backup"
 }
 
 # _synthesize_generate <run_id> (internal; use run_synthesizer)
@@ -1174,7 +1184,9 @@ _synthesize_generate() {
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
 
   # An unreadable/partial inventory cannot invalidate the saved publication.
-  if [[ "${MODE:-${REPOLENS_MODE:-}}" != branch-review ]]; then
+  if [[ "${MODE:-${REPOLENS_MODE:-}}" == branch-review ]]; then
+    _synthesize_snapshot_saved_results "$final_dir" _synthesis_recovery_path || return 1
+  else
     if ! _synthesize_retire_saved_results "$final_dir" _synthesis_recovery_path; then
       echo "run_synthesizer: cannot retire saved synthesis results" >&2
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
@@ -1194,11 +1206,13 @@ _synthesize_generate() {
       rm -f "$candidate" "$candidate_actions"
       return 1
     fi
+    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
     if ! mv "$candidate" "$final_dir/manifest.json"; then
       echo "run_synthesizer: failed to promote empty manifest.json" >&2
       rm -f "$candidate" "$candidate_actions"
       return 1
     fi
+    _synthesis_published=true
     rm -f "$final_dir/cross-link-actions.preserved.json" "$final_dir/manifest.scope-pending.json" "$final_dir/cross-link-actions.scope-pending.json"
     return 0
   fi
@@ -1265,6 +1279,7 @@ _synthesize_generate() {
   local agent_rc=0
   [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   run_agent "$agent" "$prompt_text" "$project_path" "" "" "$envelope_path" > "$transcript_path" 2>&1 || agent_rc=$?
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   agent_output="$(cat "$transcript_path" 2>/dev/null || true)"
   if declare -F handle_agent_failure_in_phase >/dev/null 2>&1; then
     local phase_rc
@@ -1369,16 +1384,19 @@ _synthesize_generate() {
     return 5
   fi
 
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if [[ -f "$candidate_actions" ]]; then
     mv "$candidate_actions" "$final_dir/cross-link-actions.preserved.json" || return 1
   else
     rm -f "$final_dir/cross-link-actions.preserved.json"
   fi
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   if ! mv "$candidate" "$final_dir/manifest.json"; then
     echo "run_synthesizer: failed to promote manifest" >&2
     rm -f "$candidate" "$candidate_actions"
     return 1
   fi
+  _synthesis_published=true
 
   rm -f "$final_dir/manifest.scope-pending.json" "$final_dir/cross-link-actions.scope-pending.json"
   return 0
@@ -1390,14 +1408,9 @@ _synthesize_generate() {
 # Delete old copies only after a validated replacement has been published.
 run_synthesizer() {
   local _synthesis_recovery_path="" _synthesis_recovery_final=""
-  local synthesis_rc=0 recovery cleanup_rc=0
+  local _synthesis_published=false
+  local synthesis_rc=0 recovery
   _synthesize_generate "$@" || synthesis_rc=$?
-  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
-    if [[ -n "$_synthesis_recovery_path" ]]; then
-      _synthesize_restore_saved_results "$_synthesis_recovery_final" "$_synthesis_recovery_path" || true
-    fi
-    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
-  fi
   if (( synthesis_rc == 0 )); then
     # A new publication supersedes retained recovery copies from failed attempts.
     # This private prefix is reserved for this run's synthesis snapshots.
@@ -1405,14 +1418,10 @@ run_synthesizer() {
       [[ -d "$recovery" && ! -L "$recovery" ]] || continue
       if ! rm -rf -- "$recovery"; then
         echo "run_synthesizer: cannot remove recovery directory: $recovery" >&2
-        cleanup_rc=1
       fi
-      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
     done
-    [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
-    return "$cleanup_rc"
-  fi
-  if [[ -n "$_synthesis_recovery_path" ]]; then
+  elif [[ -n "$_synthesis_recovery_path" ]]; then
     if [[ -e "$_synthesis_recovery_path/manifest.json" || -L "$_synthesis_recovery_path/manifest.json" \
         || -e "$_synthesis_recovery_path/cross-link-actions.preserved.json" \
         || -L "$_synthesis_recovery_path/cross-link-actions.preserved.json" ]]; then
@@ -1421,6 +1430,11 @@ run_synthesizer() {
       rmdir -- "$_synthesis_recovery_path" 2>/dev/null || true
     fi
   fi
-  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    if [[ "$_synthesis_published" == false && -n "$_synthesis_recovery_path" ]]; then
+      _synthesize_restore_saved_results "$_synthesis_recovery_final" "$_synthesis_recovery_path" || true
+    fi
+    return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+  fi
   return "$synthesis_rc"
 }
