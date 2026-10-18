@@ -2191,7 +2191,11 @@ _generic_local_findings() (
       if [[ -n "${REPOLENS_MIN_SEVERITY:-}" ]] && ! severity_meets_min "$severity" "$REPOLENS_MIN_SEVERITY"; then
         continue
       fi
-      title="$(printf '%s' "$frontmatter" | _round_digest_frontmatter_scalar title)" || return 1
+      # Preserve decoded terminal LF bytes through command substitution. The
+      # sentinel is emitted only on success; remove it and one output separator.
+      title="$(printf '%s' "$frontmatter" | _generic_frontmatter_title && printf '.')" || return 1
+      title="${title%.}"
+      title="${title%$'\n'}"
       if [[ -z "$title" ]]; then
         title="$(printf '%s' "$body" | _round_digest_section_text_from_stream hypothesis | _round_digest_inline_text 200)"
       fi
@@ -2313,20 +2317,29 @@ _round_digest_frontmatter_values() {
   '
 }
 
-# Read the first root value, trimming quotes and decoding double-quoted escapes.
+# Read the first root value from stdin and trim YAML whitespace/outer quotes.
 # Missing keys succeed with an empty value. Failed selection returns 2 without
 # emitting partial data; the caller's pipefail setting is preserved.
 _round_digest_frontmatter_scalar() {
   local key="$1" value
 
   value="$(set -o pipefail; _round_digest_frontmatter_values "$key" | sed -n '1p')" || return 2
+  _round_digest_trim_yaml_value "$value"
+}
+
+# Decode only explicit Generic delivery titles. Digest/verifier identities and
+# admission metadata retain their existing literal scalar interpretation.
+# Success emits exactly one separator newline after the complete title.
+_generic_frontmatter_title() {
+  local value
+  value="$(set -o pipefail; _round_digest_frontmatter_values title | sed -n '1p')" || return 2
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   # Only double-quoted YAML scalars interpret backslash escapes (YAML 1.2.2
   # sections 5.7/7.3.1). Keep plain/single-quoted backslashes literal. Decode
   # the single-line scalar grammar supported by this frontmatter reader with
   # Python stdlib; no optional YAML package or argument-size limit is needed.
-  if [[ "$value" == \"* && "$value" == *\\* ]]; then
+  if [[ "$value" == \"* ]]; then
     printf '%s' "$value" | python3 -c '
 import re
 import sys

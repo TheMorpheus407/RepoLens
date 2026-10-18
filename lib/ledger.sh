@@ -615,7 +615,10 @@ build_findings_jsonl_from_local() {
     if [[ "$domain" == generic && "$generic_source_id" =~ ^[a-f0-9]{64}$ ]]; then
       # Projected blocks may share title/lens while owning separate evidence.
       raw_value="$(_ledger_frontmatter_scalar "$snapshot" title)" || { ingest_failed=1; break; }
-      title="$(jq -r . <<< "$raw_value")" || { ingest_failed=1; break; }
+      # A successful JSON decode appends a sentinel so command substitution
+      # cannot discard LF bytes belonging to the title itself.
+      title="$(jq -jr '. + "."' <<< "$raw_value")" || { ingest_failed=1; break; }
+      title="${title%.}"
       id="$(finding_id "$domain" "$lens" "$title" "generic:$generic_source_id")" || { ingest_failed=1; break; }
     else
       id="$(finding_id "$domain" "$lens" "$title")" || { ingest_failed=1; break; }

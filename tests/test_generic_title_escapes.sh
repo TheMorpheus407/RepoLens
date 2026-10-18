@@ -17,7 +17,7 @@
 # Quoted title syntax is presentation, not literal delivered content.
 # YAML 1.2.2 sections 5.7 and 7.3.1: https://yaml.org/spec/1.2.2/
 # shellcheck disable=SC2034 # Production callbacks consume these globals.
-set -uo pipefail
+set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$REPO/lib/core.sh"
@@ -27,6 +27,7 @@ source "$REPO/lib/rounds.sh"
 source "$REPO/lib/ledger.sh"
 # shellcheck source=/dev/null
 source "$REPO/lib/summary.sh"
+set -euo pipefail
 FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 # Independent expected strings exercise syntax without requiring a YAML package.
@@ -44,9 +45,18 @@ cases = [
     (r'"Literal \\n \\\\"', r'Literal \n \\'),
     (r'"Failure in \"login\"" # explanatory comment', 'Failure in "login"'),
     (r'"https:\/\/fixture.invalid\/path"', 'https://fixture.invalid/path'),
+    (r'"before\Nafter"', 'before\x85after'),
+    (r'"before\Lafter"', 'before\u2028after'),
+    (r'"before\Pafter"', 'before\u2029after'),
+    (r'"before\Lgeneric_source_id: decoy\Pafter"', 'before\u2028generic_source_id: decoy\u2029after'),
+    (r'"tail\n"', 'tail\n'),
+    (r'"tail\n\n"', 'tail\n\n'),
+    (r'"\n"', '\n'),
+    (r'"\a\b\v\f\r\e\ \_"', '\a\b\v\f\r\x1b \xa0'),
+    (r'"No escapes" # explanatory comment', 'No escapes'),
 ]
 for number, (raw, expected) in enumerate(cases):
-    folder = root / str(number)
+    folder = root / f'{number:02d}'
     folder.mkdir()
     (folder / 'raw-title').write_text(raw)
     (folder / 'expected').write_text(expected)
@@ -64,7 +74,10 @@ for case_dir in "$FIXTURE"/*; do
   printf '%s\n' '{"lens_ids":["generic/probe"]}' > "$LOG_BASE/rounds/round-1/metadata.json"
   printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\ntitle: %s\n---\n## hypothesis\nLogin fails\n## evidence\nsrc/login.py:1\n' "$(cat "$case_dir/raw-title")" > "$raw"
   raw_hash="$(sha256sum < "$raw")"
-  check export_generic_local_findings "$OUTPUT_DIR"
+  if ! export_generic_local_findings "$OUTPUT_DIR"; then
+    check false
+    continue
+  fi
   check build_findings_jsonl_from_local "$OUTPUT_DIR" "$case_dir/registry.jsonl"
   check jq -se --rawfile expected "$case_dir/expected" 'length == 1 and .[0].title == $expected' "$case_dir/registry.jsonl"
   # Decode the delivered header independently to pin the Markdown projection too.
@@ -73,10 +86,13 @@ import json, sys
 from pathlib import Path
 row = json.loads(Path(sys.argv[1]).read_text())
 projection = Path(row['markdown_path']).read_text()
-raw_title = projection.splitlines()[1].removeprefix('title: ')
-assert json.loads(raw_title) == Path(sys.argv[2]).read_text(), raw_title
+raw_title = projection.split('\n')[1].removeprefix('title: ')
+assert json.loads(raw_title) == Path(sys.argv[2]).read_bytes().decode(), raw_title
 PYCHECK
   check test "$(sha256sum < "$raw")" = "$raw_hash"
+  # Re-publication must recognize the exact ownership header even when the
+  # title contains Unicode separators followed by metadata-looking text.
+  check export_generic_local_findings "$OUTPUT_DIR"
 done
 # Invalid or failed decoding cannot retire the previous delivery/ownership.
 receipt="$LOG_BASE/final/generic-delivery.json"
@@ -100,7 +116,7 @@ python3() {
   fi
   command python3 "$@"
 }
-printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\ntitle: %s\n---\n## hypothesis\nLogin fails\n' "$(cat "$FIXTURE/0/raw-title")" > "$raw"
+printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\ntitle: %s\n---\n## hypothesis\nLogin fails\n' "$(cat "$FIXTURE/00/raw-title")" > "$raw"
 rc=0; export_generic_local_findings "$OUTPUT_DIR" || rc=$?
 check test -f "$FIXTURE/decoder-fault-reached"
 check test "$rc" -ne 0

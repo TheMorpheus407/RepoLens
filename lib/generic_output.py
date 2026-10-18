@@ -92,7 +92,8 @@ def publish(plan, output, receipt, run_id):
         if path.exists():
             if name not in old:
                 raise ValueError(f"Generic delivery would overwrite an unowned file: {path}")
-            lines = path.read_text().splitlines()
+            # Unicode separators inside JSON-quoted titles are scalar content.
+            lines = path.read_text().split("\n")
             frontmatter = lines[1:lines.index("---", 1)] if lines and lines[0] == "---" and "---" in lines[1:] else []
             # Managed projections always emit this ownership key at column zero.
             # Nested provenance markers cannot alter ownership on retry.
@@ -279,7 +280,9 @@ def main():
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, interrupted)
     try:
-        plan = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+        # JSONL records end at LF; Unicode NEL/LS/PS inside strings are data.
+        with Path(sys.argv[1]).open() as stream:
+            plan = [json.loads(line) for line in stream]
         action = sys.argv[5] if len(sys.argv) > 5 else "publish"
         if len(sys.argv) > 6 and sys.argv[6]:
             limit = int(sys.argv[6])
