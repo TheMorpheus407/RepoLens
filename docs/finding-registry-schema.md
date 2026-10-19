@@ -74,6 +74,48 @@ Quoted literal strings beginning with these characters remain supported;
 other files retain the existing best-effort dedupe behavior. Registry ingestion
 only reads these files and still validates duplicate links before suppression.
 
+Before either rewrite stage, dedupe also checks frontmatter boundaries at every
+depth. Multiline quoted scalars or flow collections anywhere in frontmatter
+(including descriptions, quoted keys, sequences and tagged/anchored values)
+preserve the entire file byte-for-byte with a concise warning. Their continuation
+text could otherwise impersonate root keys in the line-oriented rewrite.
+Single-line quoted/flow metadata and indented literal/folded block text remain
+supported. An unsupported noncanonical file can remain actionable; preservation
+does not imply that duplicate suppression succeeded. Introducing unsupported
+metadata after marking also preserves existing archives, marks and body notes;
+registry link validation still determines eligibility independently.
+
+The transition table below defines the supported ordering of status edits,
+dedupe and registry rebuilding. Each row names an executable regression in
+`tests/test_local_duplicate_metadata_boundaries.sh`. Promotion means the file
+becomes canonical; departure means it is no longer a member of a duplicate group.
+
+| Test | State and event ordering | Intended result |
+| --- | --- | --- |
+| T01 | Custom status → first duplicate marking | Archive the exact original line; write one managed status and current link. |
+| T02 | Marked duplicate → repeated marking or canonical link change | Preserve the original archive; replace the link; identical input and target give identical bytes. |
+| T03 | Custom canonical → canonical rewrite → duplicate marking | Preserve custom status while canonical; archive it when displaced. |
+| T04 | Archived duplicate → promotion → duplicate marking again | Restore the original line on promotion; archive that same line on demotion. |
+| T05 | Archived duplicate → departure → repeated singleton cleanup | Restore the original line and remove managed marks; subsequent cleanup changes nothing. |
+| T06 | No status → marking → promotion | Add managed marks without an archive; remove them on promotion. |
+| T07 | Exact managed scalar with padding, quotes or comment → marking → promotion | Never archive a managed scalar; remove it on promotion. |
+| T08 | Legacy custom + managed status collision → marking → promotion | Repair to one authoritative status and restore the original custom line on promotion. |
+| T09 | Archive created → user edits current status → any rewrite role | Warn and preserve the entire file, including the edit and archive. |
+| T10 | Malformed or unsupported archive → any rewrite role | Warn and preserve; reject nonscalar, managed, multiline, property and block-header originals. |
+| T11 | Archive created → archive key duplicated → any rewrite role | Warn and preserve both entries; never choose or overwrite one. |
+| T12 | Archive created → current status removed; or archive absent → singleton cleanup | Preserve conflicting archived state with a warning; singleton cleanup without an archive changes nothing. |
+| T13 | Unsupported root status → canonical or duplicate rewrite | Warn and preserve, including multiline, property, alias, flow and block forms. |
+| T14 | Unrelated multiline quote/flow metadata → any rewrite role | Warn and preserve before interpreting any status/owned-key-shaped continuation, including tagged/anchored forms. |
+| T15 | Ordinary marking → user adds unsupported unrelated metadata → repeat, promotion or departure | Warn and preserve the complete edited file and existing archive. |
+| T16 | Supported nested mappings, block text or single-line metadata → marking → departure | Suppress normally, preserve unrelated metadata and restore the exact status. |
+| T17 | Unsupported nested/sequence values, quoted keys or flow continuations → any rewrite role | Warn and preserve at every depth, including key-shaped continuation text. |
+| T18 | Unsupported duplicate → registry rebuild → first/repeated dedupe → rebuild → group departure → rebuild | Markdown stays unchanged and both records remain honestly actionable; rebuilding never rewrites evidence. |
+
+Real grouping, canonical role swaps, title/threshold dissolution, provenance,
+JSONL/CSV and HUMAN_REVIEW/TODO/DUPLICATES are additionally covered by
+`test_local_duplicate_status_collision.sh`, `test_local_duplicate_freshness.sh`
+and `test_local_duplicate_nested_status.sh`.
+
 For explicit-local bugreports, eligible ordinary destination files reserve the
 shared `--max-issues` capacity, including files from earlier runs and files
 written before an interrupted lens saved its summary. Ordinary capacity requires

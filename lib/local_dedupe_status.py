@@ -26,6 +26,80 @@ KEY = re.compile(r"^(\s*)([^#\s-][^:]*):")
 STATUS = re.compile(r"^status\s*:")
 MANAGED = re.compile(r"^status\s*:\s*(duplicate|\"duplicate\"|'duplicate')(\s+#.*)?\s*$")
 QUOTED = re.compile(r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?\s*""")
+PROPERTY = re.compile(r"(?:!<[^>]*>|[!&][^\s]+)\s*")
+
+
+def validate_metadata_boundaries(lines):
+    """Refuse multiline quote/flow syntax before either line-oriented rewrite.
+
+    This is a conservative boundary check, not a YAML loader. Block scalar
+    contents are opaque. Elsewhere quotes and flow collections must finish on
+    their opening line, including in nested mappings, sequences and keys. That
+    ensures continuation text cannot impersonate keys in Python or in AWK.
+    """
+    block_indent = None
+    for line in lines:
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if block_indent is not None:
+            if not stripped or indent > block_indent:
+                continue
+            block_indent = None
+        quote = None
+        flow = []
+        node_start = True
+        i = 0
+        while i < len(stripped):
+            char = stripped[i]
+            if quote:
+                if quote == '"' and char == "\\":
+                    i += 2
+                    continue
+                if char == quote:
+                    if quote == "'" and stripped[i:i + 2] == "''":
+                        i += 2
+                        continue
+                    quote = None
+                i += 1
+                continue
+            if char == "#" and (i == 0 or stripped[i - 1].isspace()):
+                break
+            if char.isspace():
+                i += 1
+                continue
+            if node_start:
+                prop = PROPERTY.match(stripped, i)
+                if prop:
+                    i = prop.end()
+                    continue
+                if char in ('"', "'"):
+                    quote = char
+                    node_start = False
+                    i += 1
+                    continue
+                if char in "|>" and not flow and re.fullmatch(
+                    r"[|>][1-9+-]*\s*(?:#.*)?", stripped[i:]
+                ):
+                    block_indent = indent
+                    break
+                if char in "-?" and (i + 1 == len(stripped) or stripped[i + 1].isspace()):
+                    i += 1
+                    continue
+            if char in "[{" and node_start:
+                flow.append(char)
+                node_start = True
+            elif char in "]}" and flow:
+                if (flow.pop(), char) not in (("[", "]"), ("{", "}")):
+                    raise ValueError("ambiguous frontmatter flow collection")
+                node_start = False
+            elif (char == ":" and (flow or i + 1 == len(stripped)
+                                  or stripped[i + 1].isspace())) or (char == "," and flow):
+                node_start = True
+            else:
+                node_start = False
+            i += 1
+        if quote or flow:
+            raise ValueError("multiline quoted or flow metadata is not a single-line scalar")
 
 
 def validate_status_line(line):
@@ -33,7 +107,7 @@ def validate_status_line(line):
     value = line.split(":", 1)[1].lstrip()
     if value.startswith(("!", "&", "*")):
         raise ValueError("unsupported YAML tag, anchor or alias in status")
-    if (value.startswith(("[", "{"))
+    if (value.startswith(("[", "{", "|", ">"))
             or (value.startswith(('"', "'")) and not QUOTED.fullmatch(value))):
         raise ValueError("custom status is not a single-line scalar")
 
@@ -48,6 +122,7 @@ def preserve_status(text, mode):
     if lines[0] != "---" or "---" not in lines[1:]:
         raise ValueError("incomplete leading frontmatter")
     end = lines.index("---", 1)
+    validate_metadata_boundaries(lines[1:end])
     mappings = [(i, KEY.match(lines[i])) for i in range(1, end)]
     mappings = [(i, match) for i, match in mappings if match]
     # The first mapping establishes the YAML root indentation. Taking the
@@ -64,9 +139,8 @@ def preserve_status(text, mode):
     # removing just the first line would attach its continuation to another key.
     for index in statuses:
         validate_status_line(lines[index])
-        value = lines[index].split(":", 1)[1].lstrip()
         next_root = next((i for i, _ in root if i > index), end)
-        if value.startswith(("|", ">")) or any(
+        if any(
             line.strip() and not line.lstrip().startswith("#")
             for line in lines[index + 1:next_root]
         ):
