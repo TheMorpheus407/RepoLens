@@ -236,6 +236,16 @@ class Transitions(unittest.TestCase):
         self.fixture('provenance:\n  - description: |\n      text\n    note: "notes\nstatus: pending\nend: text"', status='')
         self.reject('duplicate')
 
+    def test_T19_root_sequence_preservation(self):
+        for sibling in ['', '\n  description: text']:
+            for indent in ['', '  ']:
+                preamble = '\n# user metadata\n' + indent + '- provenance:\n' + indent + '  status: reviewed'
+                preamble += sibling.replace('\n', '\n' + indent) + '\n'
+                for remainder in ['', self.fixture().decode().split('---\n')[1]]:
+                    self.file.write_text('---\n' + preamble + remainder + '---\nbody\n')
+                    for mode in ['duplicate', 'canonical', 'restore-only']:
+                        self.reject(mode)
+
     def test_T18_registry_before_after_and_departure(self):
         self.fixture('description: "Reviewer notes\nstatus: pending\nclosing: text"', status='')
         other = self.root / 'canonical.md'

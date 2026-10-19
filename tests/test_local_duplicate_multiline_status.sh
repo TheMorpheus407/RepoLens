@@ -21,6 +21,7 @@ trap 'rm -rf -- "$FIXTURE"' EXIT
 # shellcheck source=/dev/null
 source "$REPO/lib/local-dedupe.sh" || exit 1
 failed=0 checks=0
+# Count each assertion and report failures without ending the remaining cases.
 check() {
   checks=$((checks + 1))
   if ! "$@" >/dev/null 2>&1; then

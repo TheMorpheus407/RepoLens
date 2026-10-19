@@ -131,13 +131,16 @@ def preserve_status(text, mode):
         raise ValueError("incomplete leading frontmatter")
     end = lines.index("---", 1)
     validate_metadata_boundaries(lines[1:end])
+    first_node = next((line.lstrip() for line in lines[1:end]
+                       if line.strip() and not line.lstrip().startswith("#")), "")
+    if re.match(r"-(?:\s|$)", first_node):
+        raise ValueError("frontmatter root sequence is not a mapping")
     mappings = [(i, KEY.match(lines[i])) for i in range(1, end)]
     mappings = [(i, match) for i, match in mappings if match]
-    # The first mapping establishes the YAML root indentation. Taking the
-    # minimum over later lines lets quoted continuations resembling root keys
-    # hide an indented status. Deeper status-shaped lines belong to nested
-    # metadata or scalar content and must not be validated as root entries.
-    root_indent = len(mappings[0][1][1]) if mappings else 0
+    # Match AWK/ledger root inference, even when an explicit mapping's nested
+    # value precedes ordinary root keys. Preflight has already excluded quoted
+    # continuations that could otherwise impersonate shallower root mappings.
+    root_indent = min((len(match[1]) for _, match in mappings), default=0)
     root = [(i, match) for i, match in mappings if len(match[1]) == root_indent]
     statuses = [i for i, match in root if match[2].rstrip() == "status"]
     archives = [i for i, match in root if match[2].rstrip() == ARCHIVE]

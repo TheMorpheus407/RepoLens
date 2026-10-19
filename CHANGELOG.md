@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Preserve multiline local statuses during dedupe, including indented or tagged/anchored quoted continuations that resemble root keys, so folded continuations cannot corrupt adjacent finding metadata. Preserve unsupported YAML status properties, aliases and collections, including archived block headers, instead of breaking references or publishing partial values. Restrict status validation to root entries so unrelated nested mappings and block-scalar text cannot prevent duplicate marking or status restoration. Check multiline quoted/flow metadata throughout frontmatter before either rewrite stage and preserve unsupported files with a warning.
 
+- Keep local duplicate suppression and lossless root-status restoration working when an unrelated explicit root mapping precedes finding fields. Preserve frontmatter beginning with a root sequence instead of archiving nested metadata.
+
 - Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).
 
 - Retire stale triage reports after a successful empty non-local registry rebuild; preserve saved registry/reports after failures before current synthesis acceptance, retain accepted findings after filing/accounting failures, and restore the report set on catchable interruption during retirement (repolens-r15-p7-1).

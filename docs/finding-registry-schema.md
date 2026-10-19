@@ -80,7 +80,11 @@ depth. Multiline quoted scalars or flow collections anywhere in frontmatter
 preserve the entire file byte-for-byte with a concise warning. Their continuation
 text could otherwise impersonate root keys in the line-oriented rewrite.
 Single-line quoted/flow metadata and indented literal/folded block text remain
-supported. An unsupported noncanonical file can remain actionable; preservation
+supported, including unrelated explicit root mappings before ordinary finding
+keys. Root indentation agrees with registry ingestion after boundary validation.
+Frontmatter beginning with a root sequence is unsupported: dedupe warns and
+preserves the entire file; nested sequences under root mappings remain supported.
+An unsupported noncanonical file can remain actionable; preservation
 does not imply that duplicate suppression succeeded. Introducing unsupported
 metadata after marking also preserves existing archives, marks and body notes;
 registry link validation still determines eligibility independently.
@@ -110,11 +114,14 @@ becomes canonical; departure means it is no longer a member of a duplicate group
 | T16 | Supported nested mappings, block text or single-line metadata → marking → departure | Suppress normally, preserve unrelated metadata and restore the exact status. |
 | T17 | Unsupported nested/sequence values, quoted keys or flow continuations → any rewrite role | Warn and preserve at every depth, including key-shaped continuation text. |
 | T18 | Unsupported duplicate → registry rebuild → first/repeated dedupe → rebuild → group departure → rebuild | Markdown stays unchanged and both records remain honestly actionable; rebuilding never rewrites evidence. |
+| T19 | Root sequence, including nested status and optional sibling → any rewrite role | Warn and preserve the entire file; never archive nested sequence metadata as a root status. |
 
 Real grouping, canonical role swaps, title/threshold dissolution, provenance,
 JSONL/CSV and HUMAN_REVIEW/TODO/DUPLICATES are additionally covered by
 `test_local_duplicate_status_collision.sh`, `test_local_duplicate_freshness.sh`
 and `test_local_duplicate_nested_status.sh`.
+The latter also covers a leading explicit root mapping, exact root-status
+archival/restoration, suppression, provenance and repeatability.
 
 For explicit-local bugreports, eligible ordinary destination files reserve the
 shared `--max-issues` capacity, including files from earlier runs and files

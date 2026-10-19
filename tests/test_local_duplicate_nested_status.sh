@@ -24,6 +24,7 @@ for lib in local-dedupe ledger human_review artifacts; do
   source "$REPO/lib/$lib.sh" || exit 1
 done
 failed=0 checks=0
+# Count each assertion and report failures while continuing the other scenarios.
 check() {
   checks=$((checks + 1))
   if ! "$@" >/dev/null 2>&1; then
@@ -31,19 +32,21 @@ check() {
     failed=$((failed + 1))
   fi
 }
+# Write unrelated frontmatter at the requested root indentation for each shape.
 metadata() {
   local indent="$1" kind="$2"
   case "$kind" in
     nested) printf '%s%s\n' "$indent" 'provenance:' "$indent" '  status: [pending, reviewed]' ;;
     literal) printf '%s%s\n' "$indent" 'description: |' "$indent" '  status: [draft]' ;;
     folded) printf '%s%s\n' "$indent" 'description: >-' "$indent" '  status: "unfinished literal text' ;;
+    explicit) printf '%s%s\n' "$indent" '? provenance' "$indent" ':' "$indent" '  description: text' ;;
   esac
 }
 # Put unrelated metadata first, so root inference must use its parent mapping.
 # Cover absent and custom root statuses, indentation, both rewrite roles and
 # restore-only cleanup of the archived custom entry.
 for indent in '' '  '; do
-  for kind in nested literal folded; do
+  for kind in nested literal folded explicit; do
     for status in absent custom; do
       for mode in canonical duplicate; do
         scenario="$kind/${#indent}/$status/$mode"
@@ -75,7 +78,7 @@ for indent in '' '  '; do
 done
 # Real grouping and every downstream actionable report must still suppress the
 # duplicate, retain provenance, and restore its custom status on promotion.
-for kind in nested literal; do
+for kind in nested literal explicit; do
   scenario="grouped/$kind"
   output="$FIXTURE/$kind"
   LOG_BASE="$FIXTURE/$kind-run"
