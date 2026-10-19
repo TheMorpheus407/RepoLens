@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve the last complete round digest when final finding sorting or sorted-input redirection fails, including sort failures after producing output (repolens-r15-p7-3).
+
 - Replace spaced local contributor-provenance keys during dedupe, removing stale root contributors while preserving nested user metadata (repolens-r15-pr534-fn-2).
 
 - Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).

@@ -14,6 +14,7 @@
 # limitations under the License.
 
 # repolens-r14-p5-1: incomplete enumeration must preserve the last digest.
+# repolens-r15-p7-3: final finding sort failures must preserve it too.
 # shellcheck disable=SC2317,SC2329
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,6 +51,19 @@ find() {
 }
 # Preserve the real sorter output before reporting an injected producer failure.
 sort() {
+  if [[ " $* " == *' -k3,3 '* ]]; then
+    case "$fault" in
+      final-sort-empty)
+        builtin printf 'reached\n' > "$fixture/final-sort-fault"
+        return 74
+        ;;
+      final-sort-after-output)
+        builtin printf 'reached\n' > "$fixture/final-sort-fault"
+        command sort "$@" || return $?
+        return 74
+        ;;
+    esac
+  fi
   command sort "$@" || return $?
   [[ "$fault" != sort ]]
 }
@@ -109,9 +123,34 @@ for fault in open read-empty read-partial missing-sentinel; do
   build_round_digest "$round"
   cmp "$fixture/before" "$round/digest.md"
 done
+final_sort_failures=0
+for fault in final-sort-empty final-sort-after-output; do
+  rm -f "$fixture/final-sort-fault"
+  rc=0
+  build_round_digest "$round" > "$fixture/stdout" 2> "$fixture/stderr" || rc=$?
+  builtin printf '%s: rc=%s\n' "$fault" "$rc"
+  test -f "$fixture/final-sort-fault"
+  if [[ "$rc" -eq 0 ]]; then
+    builtin printf 'FAIL: %s must fail the digest build\n' "$fault" >&2
+    final_sort_failures=$((final_sort_failures + 1))
+  fi
+  if ! cmp "$fixture/before" "$round/digest.md"; then
+    builtin printf 'FAIL: %s must preserve the complete digest\n' "$fault" >&2
+    final_sort_failures=$((final_sort_failures + 1))
+  fi
+  staged_files="$(command find "$round" -name 'digest.md.tmp.*' -print)" || {
+    builtin printf 'FAIL: staging inspection failed\n' >&2
+    exit 1
+  }
+  test -z "$staged_files"
+  fault=none
+  build_round_digest "$round"
+  cmp "$fixture/before" "$round/digest.md"
+done
+test "$final_sort_failures" -eq 0
 unset -f mktemp printf read
 # The inventory delimiter must also preserve actual newline bytes in paths.
 mv "$round/lens-outputs/subdir/finding.md" "$round/lens-outputs/subdir/"$'line\nbreak.md'
 build_round_digest "$round"
 grep -q 'Retained security evidence' "$round/digest.md"
-printf 'PASS: enumeration and staged-read errors preserve digest; repaired retry succeeds.\n'
+printf 'PASS: enumeration, staged-read and final-sort errors preserve digest; repaired retry succeeds.\n'
