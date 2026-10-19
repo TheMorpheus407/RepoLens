@@ -28,9 +28,28 @@ check() {
     failed=$((failed + 1))
   fi
 }
+values=(
+  '"&workflow needs-validation"'
+  "'&workflow needs-validation'"
+  'needs-validation # &workflow'
+  'needs-validation &workflow'
+  duplicate_candidate
+  duplicate_of
+  '"duplicate pending"'
+  "'needs-validation' # keep \\ and \"quotes\""
+  $'duplicate_pending # \u007f\u0085\u009f\u2028\u2029\ufffe\uffff'
+  '"needs \"validation\"" # workflow'
+  "'needs ''validation''' # workflow"
+  '!!str "needs-validation"'
+  '"|"'
+  "'>'"
+  '[needs, "validation"]'
+  '{needs: "validation"}'
+  '[[needs], {validation: pending}] # workflow'
+)
 for indent in '' '  '; do
   for padding in '' ' ' $'\t'; do
-    for value in '"&workflow needs-validation"' "'&workflow needs-validation'" 'needs-validation # &workflow' 'needs-validation &workflow' duplicate_candidate duplicate_of '"duplicate pending"' "'needs-validation' # keep \\ and \"quotes\"" $'duplicate_pending # \u007f\u0085\u009f\u2028\u2029\ufffe\uffff'; do
+    for value in "${values[@]}"; do
       scenario="indent=${#indent} / padding=${#padding} / $value"
       original="${indent}status${padding}: $value"
       printf -- '---\n%stitle: Saved finding\n%s\n%sdetails:\n%s  status : duplicate\n---\nEvidence: src/state.sh:12\n' \
@@ -56,7 +75,7 @@ done
 for role in duplicate canonical; do
   additions=''
   [[ "$role" != duplicate ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
-  for invalid in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status multi-string-backup leading-nonstring-backup trailing-nonstring-backup cr-backup crlf-backup trailing-cr-backup; do
+  for invalid in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status multi-string-backup leading-nonstring-backup trailing-nonstring-backup cr-backup crlf-backup trailing-cr-backup open-double-backup open-single-backup block-header-backup open-flow-backup; do
     scenario="$role / $invalid"
     printf -- '---\ntitle: Saved finding\nstatus: duplicate\n' > "$FIXTURE/input.md"
     case "$invalid" in
@@ -71,6 +90,10 @@ for role in duplicate canonical; do
       cr-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: needs-validation\rstatus: duplicate"' ;;
       crlf-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: needs-validation\r\nstatus: duplicate"' ;;
       trailing-cr-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: needs-validation\r"' ;;
+      open-double-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: \"needs"' ;;
+      open-single-backup) printf '%s\n' "repolens_dedupe_original_status: \"status: 'needs\"" ;;
+      block-header-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: |"' ;;
+      open-flow-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: [needs,"' ;;
     esac >> "$FIXTURE/input.md"
     printf -- '---\nEvidence: keep this\n' >> "$FIXTURE/input.md"
     cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
@@ -146,6 +169,42 @@ for indent in '' '  '; do
       # Refused duplicate assignment leaves the original usable on promotion.
       check _local_dedupe_mark_file "$FIXTURE/input.md" '' ''
       check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
+    done
+  done
+done
+
+# Quoted scalars can continue at the root indentation, and indented comments
+# are scalar content in literal/folded blocks. Never archive just their header.
+for indent in '' '  '; do
+  for form in double-quoted single-quoted tagged-quoted escaped-quote literal-comment folded-comment chomp-comment empty-block flow-sequence flow-mapping plain-managed-prefix; do
+    case "$form" in
+      double-quoted) status=$'"needs\nvalidation"' ;;
+      single-quoted) status=$'\'needs\nvalidation\'' ;;
+      tagged-quoted) status=$'!!str "needs\nvalidation: pending"' ;;
+      escaped-quote) status=$'"needs \\"\nvalidation"' ;;
+      literal-comment) status=$'|\n  # needs-validation' ;;
+      folded-comment) status=$'>\n  # needs-validation' ;;
+      chomp-comment) status=$'|- # workflow\n  # needs-validation' ;;
+      empty-block) status='|' ;;
+      flow-sequence) status=$'[needs,\nvalidation]' ;;
+      flow-mapping) status=$'{needs:\nvalidation}' ;;
+      plain-managed-prefix) status=$'duplicate\n  pending' ;;
+    esac
+    for role in duplicate canonical; do
+      scenario="multiline status / indent=${#indent} / $form / $role"
+      printf -- '---\n%stitle: Multiline status\n' "$indent" > "$FIXTURE/input.md"
+      printf 'status : %s\n' "$status" | sed "s/^/$indent/" >> "$FIXTURE/input.md"
+      printf -- '%sseverity: high\n---\nEvidence: keep this\n' "$indent" >> "$FIXTURE/input.md"
+      cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
+      additions=''
+      [[ "$role" != duplicate ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
+      for attempt in first rerun; do
+        rc=0
+        _local_dedupe_mark_file "$FIXTURE/input.md" "$additions" '' || rc=$?
+        check test "$rc" -ne 0
+        check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
+        check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+      done
     done
   done
 done

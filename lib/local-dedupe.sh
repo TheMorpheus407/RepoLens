@@ -118,15 +118,54 @@ _local_dedupe_mark_file() {
       # Own only the complete scalar, with matching quotes if present.
       return text ~ /^status[[:space:]]*:[[:space:]]*(duplicate|"duplicate"|'\''duplicate'\'')([[:space:]]+#.*|[[:space:]]*)$/
     }
+    # Reject scalar headers and unfinished quotes/flow collections whose value
+    # needs further lines. Complete inline values remain losslessly restorable.
+    function complete_status_line(text,    first, quote, stack, i, c, previous) {
+      sub(/^[[:space:]]*status[[:space:]]*:[[:space:]]*/, "", text)
+      # Node properties may precede quoted, block or flow values.
+      while (sub(/^(!<[^>]*>|![^[:space:]]*|&[^[:space:]]+)[[:space:]]+/, "", text)) {}
+      first = substr(text, 1, 1)
+      # Even empty blocks have content/indentation semantics beyond this line.
+      if (first == "|" || first == ">") return 0
+      if (first != "\"" && first != "'\''" && first != "[" && first != "{") return 1
+      for (i = 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        if (quote != "") {
+          if (quote == "\"" && c == "\\") { i++; continue }
+          if (c == quote) {
+            if (quote == "'\''" && substr(text, i + 1, 1) == quote) { i++; continue }
+            quote = ""
+          }
+        } else {
+          previous = i > 1 ? substr(text, i - 1, 1) : " "
+          if (c == "#" && previous ~ /[[:space:]]/) return 0
+          if ((c == "\"" || c == "'\''") && previous ~ /[[:space:]\[{:,]/) quote = c
+          else if (c == "[" || c == "{") stack = stack c
+          else if (c == "]" || c == "}") {
+            if ((c == "]" && substr(stack, length(stack)) != "[") ||
+                (c == "}" && substr(stack, length(stack)) != "{")) return 0
+            stack = substr(stack, 1, length(stack) - 1)
+          }
+        }
+        # A closed quoted scalar or outer flow collection must end this line.
+        if (quote == "" && stack == "")
+          return substr(text, i + 1) ~ /^[[:space:]]*(#.*)?$/
+      }
+      return 0
+    }
+    # Collect root originals/backups and flag unsupported continuations before
+    # either pass can remove a line from the source document.
     function status_metadata(    i, j, line, text, indent, result) {
       for (i = 1; i <= nf; i++) {
         line = frontmatter[i]
         match(line, /^[[:space:]]*/)
         if (RLENGTH != root_indent) continue
         text = substr(line, RLENGTH + 1)
-        if (text ~ /^status[[:space:]]*:/ && !duplicate_status(text)) {
-          result = result "S" line "\n"
-          # Only single-line scalar statuses can be archived losslessly here.
+        if (text ~ /^status[[:space:]]*:/) {
+          if (!duplicate_status(text)) result = result "S" line "\n"
+          # Only complete single-line values can be archived losslessly here.
+          # A plain continuation can also extend an apparent duplicate mark.
+          if (!complete_status_line(text)) result = result "Xmultiline-status\n"
           for (j = i + 1; j <= nf; j++) {
             if (frontmatter[j] ~ /^[[:space:]]*(#|$)/) continue
             match(frontmatter[j], /^[[:space:]]*/)
@@ -144,6 +183,8 @@ _local_dedupe_mark_file() {
       }
       return substr(result, 1, length(result) > 0 ? length(result) - 1 : 0)
     }
+    # Share metadata selection across scan/rewrite and check restored values
+    # before publishing any frontmatter changes.
     function emit_frontmatter(    i, line, indent, text, count, additions, metadata) {
       metadata = status_metadata()
       if (scanning) {
@@ -152,6 +193,8 @@ _local_dedupe_mark_file() {
       }
       # A status edit between passes must not be replaced by a stale backup.
       if (metadata != ENVIRON["RL_EXPECTED_STATUS_METADATA"]) exit 1
+      if (length(ENVIRON["RL_SAVED_STATUS"]) > 0 &&
+          !complete_status_line(ENVIRON["RL_SAVED_STATUS"])) exit 1
       for (i = 1; i <= nf; i++) {
         line = frontmatter[i]
         match(line, /^[[:space:]]*/)
@@ -273,6 +316,7 @@ _local_dedupe_mark_file() {
   fi
   RL_STATUS_SCAN=0 RL_EXPECTED_STATUS_METADATA="$metadata" \
     RL_FM_ADD="$fm_add" RL_NOTE="$note" RL_DUPLICATE_ROLE="$duplicate_role" \
+    RL_SAVED_STATUS="$saved" \
     RL_STATUS_BACKUP="$backup" RL_STATUS_RESTORE="$restore" \
     awk "$program" "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
 

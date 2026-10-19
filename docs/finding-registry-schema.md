@@ -142,11 +142,14 @@ JSON string encoding a single status line without CR, LF or NUL bytes. It writes
 one authoritative duplicate status, preserves the saved line on reruns, and
 restores it on canonical promotion,
 consuming the backup. Nested metadata remains unchanged. Invalid or conflicting
-backups, multiple custom root statuses, unsupported block statuses, CR-bearing
+backups, multiple custom root statuses, unsupported multiline statuses (including
+root-aligned quoted/flow continuations and comment-only blocks), CR-bearing
 status lines that would need archiving, anchored statuses (including those with
 the non-specific `!` tag) that would need archiving or restoration, or status
 edits detected between the scan and rewrite leave that file intact and emit the
 existing best-effort warning.
+Block scalar headers and incomplete quoted/flow values are also rejected in
+saved backups, so promotion cannot restore a truncated status value.
 Canonical custom statuses stay in their original position, preserving anchor
 definitions before aliases. Quoted ampersands and ampersands in plain values or
 comments remain ordinary status data.
