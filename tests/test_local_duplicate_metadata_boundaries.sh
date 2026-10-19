@@ -26,6 +26,9 @@ import tempfile
 import unittest
 
 REPO = Path(sys.argv[1])
+sys.path.insert(0, str(REPO / 'lib'))
+from local_dedupe_status import preserve_status
+
 ARCHIVE = 'repolens_dedupe_original_status'
 ORIGINAL = 'status\t: "duplicate-pending" # original'
 MARK = 'status: duplicate\nduplicate_of: canonical.md'
@@ -66,9 +69,13 @@ class Transitions(unittest.TestCase):
         self.assertEqual(values, [ORIGINAL])
         self.assertEqual(lines.count('status: duplicate'), 1)
 
-    def reject(self, mode):
+    def reject(self, mode, direct=False):
         before = self.file.read_bytes()
-        self.mark(mode, succeeds=False)
+        if direct:
+            with self.assertRaises(ValueError):
+                preserve_status(self.file.read_text(), mode)
+        else:
+            self.mark(mode, succeeds=False)
         self.assertEqual(self.file.read_bytes(), before)
 
     def test_T01_first_mark(self):
@@ -182,7 +189,10 @@ class Transitions(unittest.TestCase):
                 self.fixture('description: ' + prefix + 'Reviewer notes\n' + key
                              + '\nclosing: text' + closing, status='')
                 for mode in ['duplicate', 'canonical', 'restore-only']:
-                    self.reject(mode)
+                    self.reject(mode, direct=True)
+        self.fixture('description: "Reviewer notes\nstatus: pending\nclosing: text"', status='')
+        for mode in ['duplicate', 'canonical', 'restore-only']:
+            self.reject(mode)
 
     def test_T15_unsupported_after_mark(self):
         for mode in ['duplicate', 'canonical', 'restore-only']:
@@ -197,6 +207,8 @@ class Transitions(unittest.TestCase):
                          'description: |\n  status: "unfinished\n  [brackets',
                          'description: >-\n  status: [draft]',
                          'description: &notes |2-\n  status: "unfinished',
+                         'provenance:\n  - description: |\n      status: "unfinished\n    note: [pending]',
+                         'provenance:\n  - |\n    status: "unfinished',
                          'description: "Single \\"quoted\\" value"',
                          "description: 'Single ''quoted'' value'",
                          'description: plain apostrophe isn\'t a quoted scalar',
@@ -214,11 +226,15 @@ class Transitions(unittest.TestCase):
                          '"long key\nstatus: pending\nend": text',
                          '? "long key\nstatus: pending\nend"\n: text',
                          '? [long,\nstatus: pending]\n: text',
+                         'provenance:\n  - description: |\n      block text\n    note: "notes\nstatus: pending\nend: text"',
+                         'provenance:\n  - - description: >\n        block text\n      note: "notes\nstatus: pending\nend: text"',
                          'description: [pending,\nstatus: reviewed]',
                          'description: {notes: pending,\nstatus: reviewed}']:
-            self.fixture(metadata)
+            self.fixture(metadata, status='')
             for mode in ['duplicate', 'canonical', 'restore-only']:
-                self.reject(mode)
+                self.reject(mode, direct=True)
+        self.fixture('provenance:\n  - description: |\n      text\n    note: "notes\nstatus: pending\nend: text"', status='')
+        self.reject('duplicate')
 
     def test_T18_registry_before_after_and_departure(self):
         self.fixture('description: "Reviewer notes\nstatus: pending\nclosing: text"', status='')

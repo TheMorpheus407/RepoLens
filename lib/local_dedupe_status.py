@@ -80,7 +80,15 @@ def validate_metadata_boundaries(lines):
                 if char in "|>" and not flow and re.fullmatch(
                     r"[|>][1-9+-]*\s*(?:#.*)?", stripped[i:]
                 ):
-                    block_indent = indent
+                    # Compact sequence mappings put the key after a dash:
+                    # `- description: |` has siblings two columns deeper than
+                    # the dash. They must not be mistaken for block contents.
+                    prefix = re.match(r"(?:[-?]\s+)*", stripped).end()
+                    if KEY.match(stripped[prefix:]):
+                        block_indent = indent + prefix
+                    else:
+                        markers = list(re.finditer(r"[-?]\s+", stripped[:prefix]))
+                        block_indent = indent + (markers[-1].start() if markers else 0)
                     break
                 if char in "-?" and (i + 1 == len(stripped) or stripped[i + 1].isspace()):
                     i += 1
