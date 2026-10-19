@@ -146,8 +146,8 @@ consuming the backup. Nested metadata remains unchanged. Invalid or conflicting
 backups, multiple custom root statuses, unsupported multiline statuses (including
 root-aligned quoted/flow continuations and comment-only blocks), CR-bearing
 status lines that would need archiving, anchored statuses (including those with
-the non-specific `!` tag or anchors inside nested flow collections) that would
-need archiving or restoration, or status
+the non-specific `!` tag or anchors inside nested flow collections) or alias nodes
+that would need archiving or restoration, or status
 edits detected between the scan and rewrite leave that file intact and emit the
 existing best-effort warning.
 Block scalar headers and incomplete quoted/flow values are also rejected in
@@ -156,8 +156,9 @@ If the saved status indentation differs from the current root indentation,
 promotion leaves the file and backup intact. Restoring the original frontmatter
 indentation allows the saved status to be restored on retry.
 Canonical custom statuses stay in their original position, preserving anchor
-definitions before aliases. Quoted ampersands and ampersands in plain values or
-comments remain ordinary status data.
+definitions before aliases and alias bindings when an anchor name is reused
+later. Existing alias-valued backups remain intact for repair. Quoted ampersands
+and asterisks, and those inside plain values or comments, remain ordinary status data.
 Complete flow values remain supported when their plain scalars contain quotes,
 such as `status: [pending, needs "manual review]`; only quotes starting a node
 introduce a quoted scalar.

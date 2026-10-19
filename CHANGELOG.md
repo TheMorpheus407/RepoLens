@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   Preserve files and saved statuses when promotion would restore obsolete root indentation after a frontmatter edit.
   Reject saved backups of the managed duplicate status instead of restoring a misleading mark during promotion.
   Accept complete flow statuses containing quotes inside plain scalars so valid findings still receive duplicate updates and restore their original status on promotion.
+  Refuse relocation of alias-valued statuses and saved aliases, preserving their binding when later fields reuse the same anchor name.
 
 - Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).
 

@@ -119,10 +119,10 @@ _local_dedupe_mark_file() {
       sub(/^[[:space:]]*/, "", text)
       return text ~ /^status[[:space:]]*:[[:space:]]*(duplicate|"duplicate"|'\''duplicate'\'')([[:space:]]+#.*|[[:space:]]*)$/
     }
-    # Anchors are node properties, including on children of flow collections.
-    # Moving any such definition can strand aliases elsewhere in frontmatter.
-    # Quoted strings, comments and ampersands inside plain scalars are data.
-    function anchored_status_line(text,    i, c, quote, depth, node_start, plain) {
+    # Anchors and aliases depend on position, including inside flow collections.
+    # Moving a definition can strand aliases; moving an alias can rebind it to
+    # a later definition. Quoted/comment/plain-scalar ampersands and stars are data.
+    function position_dependent_status_line(text,    i, c, quote, depth, node_start, plain) {
       sub(/^[[:space:]]*status[[:space:]]*:[[:space:]]*/, "", text)
       node_start = 1
       for (i = 1; i <= length(text); i++) {
@@ -137,7 +137,7 @@ _local_dedupe_mark_file() {
         }
         if (c ~ /[[:space:]]/) continue
         if (c == "#" && (i == 1 || substr(text, i - 1, 1) ~ /[[:space:]]/)) return 0
-        if (node_start && c == "&") return 1
+        if (node_start && (c == "&" || c == "*")) return 1
         # In flow collections an explicit key may start ?&anchor without a gap.
         if (depth && node_start && c == "?") continue
         if (node_start && c == "!") {
@@ -259,7 +259,7 @@ _local_dedupe_mark_file() {
       if (length(ENVIRON["RL_SAVED_STATUS"]) > 0 &&
           (!complete_status_line(ENVIRON["RL_SAVED_STATUS"]) ||
            duplicate_status(ENVIRON["RL_SAVED_STATUS"]) ||
-           anchored_status_line(ENVIRON["RL_SAVED_STATUS"]))) exit 1
+           position_dependent_status_line(ENVIRON["RL_SAVED_STATUS"]))) exit 1
       # The current root may have been reindented since status archival.
       # Keep the backup rather than restore its old line as nested/invalid YAML.
       if (length(ENVIRON["RL_STATUS_RESTORE"]) > 0) {
@@ -282,7 +282,7 @@ _local_dedupe_mark_file() {
           if (text ~ /^also_reported_by:/) { skip_arb = 1; continue }
           if (duplicate_status(text)) continue
           if (ENVIRON["RL_DUPLICATE_ROLE"] == "1" && text ~ /^status[[:space:]]*:/) {
-            if (anchored_status_line(text)) exit 1
+            if (position_dependent_status_line(text)) exit 1
             continue
           }
           if (text ~ /^repolens_dedupe_original_status[[:space:]]*:/) continue

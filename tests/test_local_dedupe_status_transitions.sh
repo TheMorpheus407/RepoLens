@@ -49,7 +49,7 @@ refuse() {
   check test ! -e "$FIXTURE/input.md.rldedupe.$$"
 }
 original=$'status : needs-validation # retain\n'
-for scenario in T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 T17 T18; do
+for scenario in T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 T17 T18 T19; do
   fixture "$original"
   cp "$FIXTURE/input.md" "$FIXTURE/original.md"
   case "$scenario" in
@@ -194,6 +194,15 @@ for scenario in T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 
       check test "$before" = "$(sha256sum "$output/"*.md)"
       check build_findings_jsonl_from_local "$output" "$FIXTURE/records.jsonl"
       check jq -se 'length == 2 and all(.[]; .status == "new")' "$FIXTURE/records.jsonl"
+      ;;
+    T19)
+      fixture $'current: &workflow needs-validation\nstatus: *workflow\nnext: &workflow approved\n'
+      cp "$FIXTURE/input.md" "$FIXTURE/original.md"
+      check mark C
+      refuse D
+      refuse D
+      check mark C
+      check cmp -s "$FIXTURE/original.md" "$FIXTURE/input.md"
       ;;
   esac
 done
