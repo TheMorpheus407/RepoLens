@@ -257,10 +257,12 @@ _local_dedupe_mark_file() {
   # their definitions; restoring at the end puts definitions after aliases.
   # Refuse relocation, including tagged scalar properties, but keep canonical
   # status lines in their original position. Quoted/comment ampersands are data.
-  local anchored_status='^[[:blank:]]*status[[:blank:]]*:[[:blank:]]*(![^[:blank:]]+[[:blank:]]+)?&'
+  local anchored_status='^[[:blank:]]*status[[:blank:]]*:[[:blank:]]*(![^[:blank:]]*[[:blank:]]+)?&'
   [[ ! "$saved" =~ $anchored_status ]] || return 1
   if (( duplicate_role )); then
     [[ ! "$original" =~ $anchored_status ]] || return 1
+    # Never create a saved line that the backup decoder cannot restore.
+    [[ "$original" != *$'\r'* ]] || return 1
     if [[ -z "$backup" && -n "$original" ]]; then
       backup="$(jq -nr --arg line "$original" "$(_local_dedupe_yaml_string_filter)"'
         $line | yaml_string')" || return 1

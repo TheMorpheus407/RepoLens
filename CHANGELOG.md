@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Remove spaced duplicate status keys when local dedupe promotes a previous duplicate to canonical, preserving one actionable finding after registry rebuilding (repolens-r15-pr534-fn-1).
   Preserve other status values beginning with `duplicate`, including user-authored candidate and pending states.
   Retain custom non-canonical status metadata losslessly while assigning one duplicate status, and restore it on canonical promotion. Reject backups containing multiple JSON values without changing the finding.
-  Reject carriage returns in saved status lines and refuse to relocate anchored statuses, preserving findings instead of introducing duplicate YAML keys or broken aliases.
+  Reject carriage returns before saving status lines and refuse to relocate anchored statuses, including those with a non-specific YAML tag, preserving findings instead of introducing unusable backups, duplicate YAML keys or broken aliases.
 
 - Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).
 

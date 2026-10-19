@@ -85,7 +85,7 @@ done
 # Moving an anchor into a quoted backup removes definitions used by aliases;
 # restoring it at the end would put the definition after those aliases.
 for indent in '' '  '; do
-  for value in '&workflow needs-validation' '!!str &workflow needs-validation' '!<tag:yaml.org,2002:str> &workflow needs-validation'; do
+  for value in '&workflow needs-validation' '! &workflow needs-validation' $'!\t&workflow needs-validation' '!!str &workflow needs-validation' '!<tag:yaml.org,2002:str> &workflow needs-validation'; do
     original="${indent}status : $value"
     for role in duplicate canonical; do
       scenario="anchored status / indent=${#indent} / $value / $role"
@@ -117,6 +117,35 @@ for indent in '' '  '; do
       check test "$rc" -ne 0
       check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
       check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+    done
+  done
+done
+
+# A CRLF status among LF-delimited frontmatter must not create a backup that
+# the next duplicate pass or canonical promotion would reject as invalid.
+for indent in '' '  '; do
+  for padding in '' ' ' $'\t'; do
+    for role in duplicate canonical; do
+      printf -- '---\n%stitle: Saved finding\n%sstatus%s: needs-validation\r\n---\nEvidence: keep this\n' \
+        "$indent" "$indent" "$padding" > "$FIXTURE/input.md"
+      cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
+      additions=''
+      [[ "$role" != duplicate ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
+      for attempt in first rerun; do
+        scenario="CR-bearing original / indent=${#indent} / padding=${#padding} / $role / $attempt"
+        rc=0
+        _local_dedupe_mark_file "$FIXTURE/input.md" "$additions" '' || rc=$?
+        if [[ "$role" == duplicate ]]; then
+          check test "$rc" -ne 0
+        else
+          check test "$rc" -eq 0
+        fi
+        check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
+        check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+      done
+      # Refused duplicate assignment leaves the original usable on promotion.
+      check _local_dedupe_mark_file "$FIXTURE/input.md" '' ''
+      check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
     done
   done
 done
