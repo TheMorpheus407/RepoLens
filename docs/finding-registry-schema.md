@@ -137,7 +137,8 @@ scalar, including quoted values and trailing YAML comments. Other canonical
 statuses remain unchanged. Before assigning duplicate status to a non-canonical
 finding, the pass retains its original status line (including indentation,
 spacing, quotes and comments) as a JSON-quoted YAML string in the reserved
-`repolens_dedupe_original_status` field. It writes one authoritative duplicate
+`repolens_dedupe_original_status` field. The backup must contain exactly one
+JSON string encoding a single status line. It writes one authoritative duplicate
 status, preserves the saved line on reruns, and restores it on canonical promotion,
 consuming the backup. Nested metadata remains unchanged. Invalid or conflicting
 backups, multiple custom root statuses, unsupported block statuses, or status

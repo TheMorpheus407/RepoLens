@@ -35,16 +35,16 @@ for indent in '' '  '; do
       original="${indent}status${padding}: $value"
       printf -- '---\n%stitle: Saved finding\n%s\n%sdetails:\n%s  status : duplicate\n---\nEvidence: src/state.sh:12\n' \
         "$indent" "$original" "$indent" "$indent" > "$FIXTURE/input.md"
-      _local_dedupe_mark_file "$FIXTURE/input.md" $'status: duplicate\nduplicate_of: canonical.md' ''
+      check _local_dedupe_mark_file "$FIXTURE/input.md" $'status: duplicate\nduplicate_of: canonical.md' ''
       check test "$(grep -cE "^${indent}status[[:space:]]*:" "$FIXTURE/input.md")" -eq 1
       backup="$(sed -n "s/^${indent}repolens_dedupe_original_status: //p" "$FIXTURE/input.md")"
       check test "$(jq -r . <<< "$backup")" = "$original"
       check jq -ne --arg text "$backup" '$text | explode | all(.[];
         ((. >= 127 and . <= 159) or . == 8232 or . == 8233 or . == 65534 or . == 65535) | not)'
       before="$(sha256sum "$FIXTURE/input.md")"
-      _local_dedupe_mark_file "$FIXTURE/input.md" $'status: duplicate\nduplicate_of: canonical.md' ''
+      check _local_dedupe_mark_file "$FIXTURE/input.md" $'status: duplicate\nduplicate_of: canonical.md' ''
       check test "$before" = "$(sha256sum "$FIXTURE/input.md")"
-      _local_dedupe_mark_file "$FIXTURE/input.md" '' ''
+      check _local_dedupe_mark_file "$FIXTURE/input.md" '' ''
       check grep -qxF "$original" "$FIXTURE/input.md"
       check grep -qxF "${indent}  status : duplicate" "$FIXTURE/input.md"
       check test "$(grep -c 'repolens_dedupe_original_status' "$FIXTURE/input.md" || true)" -eq 0
@@ -52,23 +52,31 @@ for indent in '' '  '; do
   done
 done
 
-# Refuse invalid/conflicting saved data instead of overwriting evidence.
-for scenario in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status; do
-  printf -- '---\ntitle: Saved finding\nstatus: duplicate\n' > "$FIXTURE/input.md"
-  case "$scenario" in
-    invalid-backup) printf 'repolens_dedupe_original_status: {broken}\n' ;;
-    conflicting-status) printf 'repolens_dedupe_original_status: "status : old"\nstatus : edited\n' ;;
-    duplicate-backup) printf 'repolens_dedupe_original_status: "status : old"\nrepolens_dedupe_original_status: "status : other"\n' ;;
-    multiple-statuses) printf 'status : first\nstatus : second\n' ;;
-    block-status) printf 'status : |\n  preserve this block\n' ;;
-  esac >> "$FIXTURE/input.md"
-  printf -- '---\nEvidence: keep this\n' >> "$FIXTURE/input.md"
-  cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
-  rc=0
-  _local_dedupe_mark_file "$FIXTURE/input.md" $'status: duplicate\nduplicate_of: canonical.md' '' || rc=$?
-  check test "$rc" -ne 0
-  check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
-  check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+# Refuse invalid/conflicting saved data in both duplicate and canonical roles.
+for role in duplicate canonical; do
+  additions=''
+  [[ "$role" != duplicate ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
+  for invalid in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status multi-string-backup leading-nonstring-backup trailing-nonstring-backup; do
+    scenario="$role / $invalid"
+    printf -- '---\ntitle: Saved finding\nstatus: duplicate\n' > "$FIXTURE/input.md"
+    case "$invalid" in
+      invalid-backup) printf 'repolens_dedupe_original_status: {broken}\n' ;;
+      conflicting-status) printf 'repolens_dedupe_original_status: "status : old"\nstatus : edited\n' ;;
+      duplicate-backup) printf 'repolens_dedupe_original_status: "status : old"\nrepolens_dedupe_original_status: "status : other"\n' ;;
+      multiple-statuses) printf 'status : first\nstatus : second\n' ;;
+      block-status) printf 'status : |\n  preserve this block\n' ;;
+      multi-string-backup) printf 'repolens_dedupe_original_status: "status: one" "status: two"\n' ;;
+      leading-nonstring-backup) printf 'repolens_dedupe_original_status: 42 "status: old"\n' ;;
+      trailing-nonstring-backup) printf 'repolens_dedupe_original_status: "status: old" null\n' ;;
+    esac >> "$FIXTURE/input.md"
+    printf -- '---\nEvidence: keep this\n' >> "$FIXTURE/input.md"
+    cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
+    rc=0
+    _local_dedupe_mark_file "$FIXTURE/input.md" "$additions" '' || rc=$?
+    check test "$rc" -ne 0
+    check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
+    check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+  done
 done
 
 # An edit after the metadata scan must not be archived as the earlier value.

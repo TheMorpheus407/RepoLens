@@ -242,8 +242,9 @@ _local_dedupe_mark_file() {
     esac
   done <<< "$metadata"
   if [[ -n "$backup" ]]; then
+    # Require one JSON value; stream parsing could restore multiple status lines.
     # Invalid or conflicting backups fail without replacing the finding.
-    saved="$(jq -er 'select(type == "string")
+    saved="$(jq -ers 'select(length == 1) | .[0] | select(type == "string")
       | select(test("^[ \\t]*status[ \\t]*:") and (contains("\n") | not)
           and (contains("\u0000") | not))' <<< "$backup")" || return 1
     [[ -z "$original" || "$original" == "$saved" ]] || return 1
