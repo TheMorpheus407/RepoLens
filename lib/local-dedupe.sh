@@ -111,7 +111,7 @@ _local_dedupe_mark_file() {
         if (indent == root_indent) {
           if (text ~ /^also_reported_by:/) { skip_arb = 1; continue }
           if (text ~ /^status:[[:space:]]*["'\'']?duplicate/) continue
-          if (text ~ /^duplicate_of:/) continue
+          if (text ~ /^duplicate_of[[:space:]]*:/) continue
         }
         print line
       }
