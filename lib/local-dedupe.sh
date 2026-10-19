@@ -119,6 +119,49 @@ _local_dedupe_mark_file() {
       sub(/^[[:space:]]*/, "", text)
       return text ~ /^status[[:space:]]*:[[:space:]]*(duplicate|"duplicate"|'\''duplicate'\'')([[:space:]]+#.*|[[:space:]]*)$/
     }
+    # Anchors are node properties, including on children of flow collections.
+    # Moving any such definition can strand aliases elsewhere in frontmatter.
+    # Quoted strings, comments and ampersands inside plain scalars are data.
+    function anchored_status_line(text,    i, c, quote, depth, node_start, plain) {
+      sub(/^[[:space:]]*status[[:space:]]*:[[:space:]]*/, "", text)
+      node_start = 1
+      for (i = 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        if (quote != "") {
+          if (quote == "\"" && c == "\\") { i++; continue }
+          if (c == quote) {
+            if (quote == "'\''" && substr(text, i + 1, 1) == quote) { i++; continue }
+            quote = ""
+          }
+          continue
+        }
+        if (c ~ /[[:space:]]/) continue
+        if (c == "#" && (i == 1 || substr(text, i - 1, 1) ~ /[[:space:]]/)) return 0
+        if (node_start && c == "&") return 1
+        if (node_start && c == "?" && substr(text, i + 1, 1) ~ /[[:space:]]/) continue
+        if (node_start && c == "!") {
+          # Skip verbatim/shorthand/non-specific tags, retaining node position.
+          if (substr(text, i + 1, 1) == "<") {
+            while (i < length(text) && substr(text, i, 1) != ">") i++
+          } else {
+            while (i < length(text) && substr(text, i + 1, 1) !~ /[[:space:]\[\]{},]/) i++
+          }
+          continue
+        }
+        if (node_start && (c == "\"" || c == "'\''")) { quote = c; node_start = 0; plain = 0 }
+        else if (c == "[" || c == "{") { depth++; node_start = 1; plain = 0 }
+        else if (depth && (c == "," || (c == ":" &&
+                 (!plain || i == length(text) || substr(text, i + 1, 1) ~ /[[:space:]\[\]{},]/)))) {
+          node_start = 1; plain = 0
+        }
+        else if (c == "]" || c == "}") { depth--; node_start = 0; plain = 0 }
+        else {
+          node_start = 0; plain = 1
+          if (!depth) return 0
+        }
+      }
+      return 0
+    }
     # Reject scalar headers and unfinished quotes/flow collections whose value
     # needs further lines. Complete inline values remain losslessly restorable.
     function complete_status_line(text,    first, quote, stack, i, c, previous) {
@@ -196,7 +239,8 @@ _local_dedupe_mark_file() {
       if (metadata != ENVIRON["RL_EXPECTED_STATUS_METADATA"]) exit 1
       if (length(ENVIRON["RL_SAVED_STATUS"]) > 0 &&
           (!complete_status_line(ENVIRON["RL_SAVED_STATUS"]) ||
-           duplicate_status(ENVIRON["RL_SAVED_STATUS"]))) exit 1
+           duplicate_status(ENVIRON["RL_SAVED_STATUS"]) ||
+           anchored_status_line(ENVIRON["RL_SAVED_STATUS"]))) exit 1
       # The current root may have been reindented since status archival.
       # Keep the backup rather than restore its old line as nested/invalid YAML.
       if (length(ENVIRON["RL_STATUS_RESTORE"]) > 0) {
@@ -218,7 +262,10 @@ _local_dedupe_mark_file() {
         if (indent == root_indent) {
           if (text ~ /^also_reported_by:/) { skip_arb = 1; continue }
           if (duplicate_status(text)) continue
-          if (ENVIRON["RL_DUPLICATE_ROLE"] == "1" && text ~ /^status[[:space:]]*:/) continue
+          if (ENVIRON["RL_DUPLICATE_ROLE"] == "1" && text ~ /^status[[:space:]]*:/) {
+            if (anchored_status_line(text)) exit 1
+            continue
+          }
           if (text ~ /^repolens_dedupe_original_status[[:space:]]*:/) continue
           if (text ~ /^duplicate_of[[:space:]]*:/) continue
         }
@@ -304,14 +351,7 @@ _local_dedupe_mark_file() {
   if [[ "$fm_add" == status:\ duplicate$'\n'* || "$fm_add" == 'status: duplicate' ]]; then
     duplicate_role=1
   fi
-  # Anchors can be referenced elsewhere in the frontmatter. Archiving removes
-  # their definitions; restoring at the end puts definitions after aliases.
-  # Refuse relocation, including tagged scalar properties, but keep canonical
-  # status lines in their original position. Quoted/comment ampersands are data.
-  local anchored_status='^[[:blank:]]*status[[:blank:]]*:[[:blank:]]*(![^[:blank:]]*[[:blank:]]+)?&'
-  [[ ! "$saved" =~ $anchored_status ]] || return 1
   if (( duplicate_role )); then
-    [[ ! "$original" =~ $anchored_status ]] || return 1
     # Never create a saved line that the backup decoder cannot restore.
     [[ "$original" != *$'\r'* ]] || return 1
     if [[ -z "$backup" && -n "$original" ]]; then

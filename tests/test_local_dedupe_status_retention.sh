@@ -46,6 +46,13 @@ values=(
   '[needs, "validation"]'
   '{needs: "validation"}'
   '[[needs], {validation: pending}] # workflow'
+  '["&workflow", "&other"]'
+  '[needs &workflow, {phase: pending &workflow}]'
+  '[needs] # &workflow'
+  '{phase:&workflow pending}'
+  '[phase:&workflow pending]'
+  '[http://example/&workflow]'
+  '{"&workflow": "needs \"validation\""}'
 )
 for indent in '' '  '; do
   for padding in '' ' ' $'\t'; do
@@ -143,7 +150,16 @@ done
 # Moving an anchor into a quoted backup removes definitions used by aliases;
 # restoring it at the end would put the definition after those aliases.
 for indent in '' '  '; do
-  for value in '&workflow needs-validation' '! &workflow needs-validation' $'!\t&workflow needs-validation' '!!str &workflow needs-validation' '!<tag:yaml.org,2002:str> &workflow needs-validation'; do
+  for value in '&workflow needs-validation' '! &workflow needs-validation' $'!\t&workflow needs-validation' '!!str &workflow needs-validation' '!<tag:yaml.org,2002:str> &workflow needs-validation' \
+    '[&workflow needs-validation]' '{phase: &workflow needs-validation}' \
+    '[[needs, &workflow validation]]' '{phase: {state: &workflow pending}}' \
+    '[needs, ! &workflow validation]' '[needs, !!str &workflow validation]' \
+    '[needs, !<tag:yaml.org,2002:str> &workflow validation]' \
+    '{"phase":&workflow pending}' '[phase: &workflow pending]' \
+    '[&workflow "needs-validation"]' '{&workflow phase: pending}' \
+    '{? &workflow phase: pending}' '[? &workflow phase: pending]' \
+    '["quoted, &literal", &workflow pending]' \
+    "['quoted ''&literal', &workflow pending]"; do
     original="${indent}status : $value"
     for role in duplicate canonical; do
       scenario="anchored status / indent=${#indent} / $value / $role"

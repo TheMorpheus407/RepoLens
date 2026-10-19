@@ -146,7 +146,8 @@ consuming the backup. Nested metadata remains unchanged. Invalid or conflicting
 backups, multiple custom root statuses, unsupported multiline statuses (including
 root-aligned quoted/flow continuations and comment-only blocks), CR-bearing
 status lines that would need archiving, anchored statuses (including those with
-the non-specific `!` tag) that would need archiving or restoration, or status
+the non-specific `!` tag or anchors inside nested flow collections) that would
+need archiving or restoration, or status
 edits detected between the scan and rewrite leave that file intact and emit the
 existing best-effort warning.
 Block scalar headers and incomplete quoted/flow values are also rejected in
@@ -159,6 +160,8 @@ definitions before aliases. Quoted ampersands and ampersands in plain values or
 comments remain ordinary status data.
 Singletons retain their annotations; registry rebuilding still restores review
 eligibility when a saved duplicate link is no longer valid.
+The [status transition table](local-dedupe-status-transitions.md) specifies the
+role changes, intervening edits, refusal and retry behavior with a test per row.
 
 Because the registry is derived, several fields below are **added or derived by
 the builder** and are present in neither upstream source (notably `id`,
