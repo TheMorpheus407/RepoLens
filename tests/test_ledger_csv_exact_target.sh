@@ -23,6 +23,7 @@ source "$REPO/lib/ledger.sh"
 fixture="$(mktemp -d)"
 trap 'rm -rf -- "$fixture"' EXIT
 failures=0
+# Run one assertion and count failures without skipping later checks or summary.
 check() {
   local description="$1"
   shift
@@ -64,7 +65,7 @@ for kind in directory directory-link; do
       check "$kind/$content: symlink preserved" test -L "$LOG_BASE/final/findings.csv"
       rm -- "$LOG_BASE/final/findings.csv"
     fi
-    build_finding_registry probe ''
+    check "$kind/$content: repaired retry succeeds" build_finding_registry probe ''
     check "$kind/$content: retry publishes regular CSV" test -f "$LOG_BASE/final/findings.csv"
     check "$kind/$content: retry publishes exact row count" python3 -B - "$LOG_BASE/final/findings.csv" "$expected" <<'PYCHECK'
 import csv
@@ -77,6 +78,24 @@ if rows:
     assert rows[0]['title'] == 'Current finding', rows
 PYCHECK
   done
+done
+# File and dangling symlinks are replaced themselves; their referents stay intact.
+for kind in file-link dangling-link; do
+  LOG_BASE="$fixture/$kind"
+  mkdir -p "$LOG_BASE/final"
+  referent="$LOG_BASE/referent.csv"
+  if [[ "$kind" == file-link ]]; then
+    printf 'keep referent bytes\n' > "$referent"
+  fi
+  ln -s "$referent" "$LOG_BASE/final/findings.csv"
+  check "$kind: registry publishes CSV" build_finding_registry probe ''
+  check "$kind: CSV replaces symlink" test ! -L "$LOG_BASE/final/findings.csv"
+  check "$kind: CSV is a regular file" test -f "$LOG_BASE/final/findings.csv"
+  if [[ "$kind" == file-link ]]; then
+    check "$kind: referent bytes preserved" grep -Fxq 'keep referent bytes' "$referent"
+  else
+    check "$kind: dangling referent stays absent" test ! -e "$referent"
+  fi
 done
 printf 'Results: %s failed\n' "$failures"
 [[ "$failures" -eq 0 ]]
