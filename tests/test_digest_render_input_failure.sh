@@ -22,6 +22,10 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/lib/core.sh"
 # shellcheck source=/dev/null
 source "$ROOT/lib/rounds.sh"
+fail() {
+  builtin printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
 fixture="$(mktemp -d)"
 trap 'rm -rf -- "$fixture"' EXIT
 round="$fixture/round-1"
@@ -30,7 +34,8 @@ mkdir -p "$round/lens-outputs"
 long_path="$(builtin printf '%65536s' '')"
 long_path="src/${long_path// /x}.sh"
 builtin printf -- '---\ntitle: retained finding\nseverity: high\ndomain: security\nlens: injection\nsuspect_files: %s\n---\n## hypothesis\nRetained security evidence\n' "$long_path" > "$round/lens-outputs/finding.md"
-build_round_digest "$round"
+# Conditional calls keep errexit disabled inside the library, as in production.
+build_round_digest "$round" || fail 'baseline digest build failed'
 cp "$round/digest.md" "$fixture/before"
 
 saved_file_limit="$(ulimit -S -f)"
@@ -61,8 +66,8 @@ ulimit -S -f "$saved_file_limit"
 fault_armed=0
 builtin printf 'render-input: rc=%s\n' "$rc"
 cat "$fixture/stderr"
-test -f "$fixture/fault-reached"
-grep -q 'here-document' "$fixture/stderr"
+test -f "$fixture/fault-reached" || fail 'render-input fault was not reached'
+grep -q 'here-document' "$fixture/stderr" || fail 'missing here-string failure diagnostic'
 failures=0
 if [[ "$rc" -eq 0 ]]; then
   builtin printf 'FAIL: here-string failure must fail the digest build\n' >&2
@@ -72,9 +77,10 @@ if ! cmp "$fixture/before" "$round/digest.md"; then
   builtin printf 'FAIL: here-string failure must preserve the complete digest\n' >&2
   failures=$((failures + 1))
 fi
-test -z "$(find "$round" -name 'digest.md.tmp.*' -print)"
+staged_files="$(find "$round" -name 'digest.md.tmp.*' -print)" || fail 'staging inspection failed'
+test -z "$staged_files" || fail 'temporary digest was not removed'
 fault=none
-build_round_digest "$round"
-cmp "$fixture/before" "$round/digest.md"
-test "$failures" -eq 0
+build_round_digest "$round" || fail 'digest retry failed'
+cmp "$fixture/before" "$round/digest.md" || fail 'retry changed the saved digest'
+test "$failures" -eq 0 || fail 'render-input preservation assertions failed'
 builtin printf 'PASS: render-input failure preserves digest, cleans staging and permits retry.\n'
