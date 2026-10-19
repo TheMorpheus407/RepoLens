@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Retire stale triage reports after a successful empty non-local registry rebuild; preserve saved registry/reports after failures before current synthesis acceptance, retain accepted findings after filing/accounting failures, and restore the report set on catchable interruption during retirement (repolens-r15-p7-1).
+
 - Reject directory and directory-symlink CSV destinations with portable exact-path publication, propagate projection failure to the registry caller, and remove failed stages for a repaired retry (repolens-r15-p5-2).
 
 - Decode single-line double-quoted YAML escapes before publishing Generic titles, preserving terminal newlines and Unicode separators, excluding trailing comments, and retaining literal backslashes in other scalar styles. Keep admission metadata and digest/verifier identities unchanged, and retain prior deliveries if decoding fails (repolens-r15-p4-1).

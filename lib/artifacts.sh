@@ -46,6 +46,57 @@ except OSError:
 ' "$1" "$2"
 }
 
+# retire_empty_triage_reports <final_dir>
+# Snapshot the generated report set before removing any path. A failed removal
+# or returning HUP/INT/TERM handler restores the prior files, including symlinks.
+# Restoration failure retains the backup and prints its location for repair.
+# The last interruption check commits retirement; later signals do not undo it.
+# Optional, non-fatal to the run. Does not alter status or signal handlers.
+retire_empty_triage_reports() {
+  local final_dir="$1" backup report rc=0 restore_rc=0
+  local reports=(TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md)
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return 1
+  backup="$(mktemp -d "$final_dir/.triage-retire.XXXXXX")" || return 1
+  for report in "${reports[@]}"; do
+    if [[ -e "$final_dir/$report" || -L "$final_dir/$report" ]]; then
+      if [[ ! -f "$final_dir/$report" && ! -L "$final_dir/$report" ]] \
+          || ! cp -pP -- "$final_dir/$report" "$backup/$report"; then
+        rm -rf -- "$backup"
+        return 1
+      fi
+    fi
+  done
+  if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+    rm -rf -- "$backup"
+    return 1
+  fi
+  for report in "${reports[@]}"; do
+    rm -f -- "$final_dir/$report" || rc=1
+    if (( rc != 0 )) || [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rc=1
+      break
+    fi
+  done
+  # Include a signal delivered after the final removal, before commit.
+  [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || rc=1
+  if (( rc != 0 )); then
+    for report in "${reports[@]}"; do
+      # Removal never changes bytes at a path that remains present. In
+      # particular, do not replace an untouched symlink or obstruction.
+      if [[ ! -e "$final_dir/$report" && ! -L "$final_dir/$report" ]] \
+          && [[ -e "$backup/$report" || -L "$backup/$report" ]]; then
+        _artifacts_replace_report "$backup/$report" "$final_dir/$report" || restore_rc=1
+      fi
+    done
+    if (( restore_rc != 0 )); then
+      echo "Triage artifacts: restore failed; saved reports retained under $backup" >&2
+      return 1
+    fi
+  fi
+  rm -rf -- "$backup" || return 1
+  return "$rc"
+}
+
 # generate_todo_md <findings_jsonl> <out_file>
 #   Renders the "act on these now" list to <out_file> as Markdown, one entry per
 #   actionable finding showing severity, type, primary_location and (when present)
