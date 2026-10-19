@@ -134,32 +134,34 @@ def publish(plan, output, receipt, run_id):
         # An atomic, flushed intent record precedes every public mutation. It
         # binds exact pre/post bytes to this run and destination, not just an ID.
         _write_pending(pending, journal)
+        for i, (name, text) in enumerate(desired.items()):
+            path = checked_path(root, name)
+            if path.exists() and path.read_text() == text:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(stage / f"new-{i}", path)
+        for name in old.keys() - desired.keys():
+            checked_path(root, name).unlink(missing_ok=True)
+        os.replace(receipt_stage, receipt)
+        # Commit before removing backups, retaining their exact cleanup
+        # pointer until deletion finishes. Recovery must never roll back a
+        # terminal transaction whose backups may already be partly deleted.
+        journal["phase"] = "cleanup"
+        _write_pending(pending, journal)
+        _cleanup_pending(stage, receipt_stage, pending)
+    except BaseException:
+        # Catchable preparation faults must release private finding copies now,
+        # before a retry needs space for its input plan. Recovery also handles
+        # a signal as either intent record's atomic rename returns.
+        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         try:
-            for i, (name, text) in enumerate(desired.items()):
-                path = checked_path(root, name)
-                if path.exists() and path.read_text() == text:
-                    continue
-                path.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(stage / f"new-{i}", path)
-            for name in old.keys() - desired.keys():
-                checked_path(root, name).unlink(missing_ok=True)
-            os.replace(receipt_stage, receipt)
-            # Commit before removing backups, retaining their exact cleanup
-            # pointer until deletion finishes. Recovery must never roll back a
-            # terminal transaction whose backups may already be partly deleted.
-            journal["phase"] = "cleanup"
-            _write_pending(pending, journal)
-            _cleanup_pending(stage, receipt_stage, pending)
-        except BaseException:
-            blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
-            try:
-                _recover_pending(root, receipt, pending, run_id)
-            except (OSError, ValueError) as rollback_error:
-                keep_stage = True
-                print(f"Generic delivery rollback pending in {stage}: {rollback_error}", file=sys.stderr)
-            finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
-            raise
+            _recover_pending(root, receipt, pending, run_id)
+        except (OSError, ValueError) as rollback_error:
+            keep_stage = True
+            print(f"Generic delivery rollback pending in {stage}: {rollback_error}", file=sys.stderr)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+        raise
     finally:
         if receipt_stage is not None:
             receipt_stage.unlink(missing_ok=True)
