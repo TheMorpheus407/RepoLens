@@ -138,12 +138,17 @@ statuses remain unchanged. Before assigning duplicate status to a non-canonical
 finding, the pass retains its original status line (including indentation,
 spacing, quotes and comments) as a JSON-quoted YAML string in the reserved
 `repolens_dedupe_original_status` field. The backup must contain exactly one
-JSON string encoding a single status line. It writes one authoritative duplicate
-status, preserves the saved line on reruns, and restores it on canonical promotion,
+JSON string encoding a single status line without CR, LF or NUL bytes. It writes
+one authoritative duplicate status, preserves the saved line on reruns, and
+restores it on canonical promotion,
 consuming the backup. Nested metadata remains unchanged. Invalid or conflicting
-backups, multiple custom root statuses, unsupported block statuses, or status
-edits detected between the scan and rewrite leave that file intact and emit the
+backups, multiple custom root statuses, unsupported block statuses, anchored
+statuses that would need archiving or restoration, or status edits detected
+between the scan and rewrite leave that file intact and emit the
 existing best-effort warning.
+Canonical custom statuses stay in their original position, preserving anchor
+definitions before aliases. Quoted ampersands and ampersands in plain values or
+comments remain ordinary status data.
 Singletons retain their annotations; registry rebuilding still restores review
 eligibility when a saved duplicate link is no longer valid.
 

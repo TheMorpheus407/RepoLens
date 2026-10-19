@@ -30,7 +30,7 @@ check() {
 }
 for indent in '' '  '; do
   for padding in '' ' ' $'\t'; do
-    for value in duplicate_candidate duplicate_of '"duplicate pending"' "'needs-validation' # keep \\ and \"quotes\"" $'duplicate_pending # \u007f\u0085\u009f\u2028\u2029\ufffe\uffff'; do
+    for value in '"&workflow needs-validation"' "'&workflow needs-validation'" 'needs-validation # &workflow' 'needs-validation &workflow' duplicate_candidate duplicate_of '"duplicate pending"' "'needs-validation' # keep \\ and \"quotes\"" $'duplicate_pending # \u007f\u0085\u009f\u2028\u2029\ufffe\uffff'; do
       scenario="indent=${#indent} / padding=${#padding} / $value"
       original="${indent}status${padding}: $value"
       printf -- '---\n%stitle: Saved finding\n%s\n%sdetails:\n%s  status : duplicate\n---\nEvidence: src/state.sh:12\n' \
@@ -56,7 +56,7 @@ done
 for role in duplicate canonical; do
   additions=''
   [[ "$role" != duplicate ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
-  for invalid in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status multi-string-backup leading-nonstring-backup trailing-nonstring-backup; do
+  for invalid in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status multi-string-backup leading-nonstring-backup trailing-nonstring-backup cr-backup crlf-backup trailing-cr-backup; do
     scenario="$role / $invalid"
     printf -- '---\ntitle: Saved finding\nstatus: duplicate\n' > "$FIXTURE/input.md"
     case "$invalid" in
@@ -68,6 +68,9 @@ for role in duplicate canonical; do
       multi-string-backup) printf 'repolens_dedupe_original_status: "status: one" "status: two"\n' ;;
       leading-nonstring-backup) printf 'repolens_dedupe_original_status: 42 "status: old"\n' ;;
       trailing-nonstring-backup) printf 'repolens_dedupe_original_status: "status: old" null\n' ;;
+      cr-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: needs-validation\rstatus: duplicate"' ;;
+      crlf-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: needs-validation\r\nstatus: duplicate"' ;;
+      trailing-cr-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: needs-validation\r"' ;;
     esac >> "$FIXTURE/input.md"
     printf -- '---\nEvidence: keep this\n' >> "$FIXTURE/input.md"
     cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
@@ -76,6 +79,45 @@ for role in duplicate canonical; do
     check test "$rc" -ne 0
     check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
     check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+  done
+done
+
+# Moving an anchor into a quoted backup removes definitions used by aliases;
+# restoring it at the end would put the definition after those aliases.
+for indent in '' '  '; do
+  for value in '&workflow needs-validation' '!!str &workflow needs-validation' '!<tag:yaml.org,2002:str> &workflow needs-validation'; do
+    original="${indent}status : $value"
+    for role in duplicate canonical; do
+      scenario="anchored status / indent=${#indent} / $value / $role"
+      printf -- '---\n%stitle: Anchored finding\n%s\n%sdetails:\n%s  status: *workflow\n---\nEvidence: keep this\n' \
+        "$indent" "$original" "$indent" "$indent" > "$FIXTURE/input.md"
+      cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
+      rc=0
+      if [[ "$role" == duplicate ]]; then
+        _local_dedupe_mark_file "$FIXTURE/input.md" $'status: duplicate\nduplicate_of: canonical.md' '' || rc=$?
+        check test "$rc" -ne 0
+      else
+        # Canonical custom statuses stay in place, so their anchors are safe.
+        _local_dedupe_mark_file "$FIXTURE/input.md" '' '' || rc=$?
+        check test "$rc" -eq 0
+      fi
+      check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
+      check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+
+      # Refuse pre-existing anchored backups in either role as well.
+      scenario="anchored backup / indent=${#indent} / $value / $role"
+      backup="$(jq -nc --arg line "$original" '$line')"
+      printf -- '---\n%stitle: Anchored finding\n%sstatus: duplicate\n%srepolens_dedupe_original_status: %s\n%sdetails:\n%s  status: *workflow\n---\nEvidence: keep this\n' \
+        "$indent" "$indent" "$indent" "$backup" "$indent" "$indent" > "$FIXTURE/input.md"
+      cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
+      additions=''
+      [[ "$role" != duplicate ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
+      rc=0
+      _local_dedupe_mark_file "$FIXTURE/input.md" "$additions" '' || rc=$?
+      check test "$rc" -ne 0
+      check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
+      check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+    done
   done
 done
 

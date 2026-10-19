@@ -246,11 +246,21 @@ _local_dedupe_mark_file() {
     # Invalid or conflicting backups fail without replacing the finding.
     saved="$(jq -ers 'select(length == 1) | .[0] | select(type == "string")
       | select(test("^[ \\t]*status[ \\t]*:") and (contains("\n") | not)
+          and (contains("\r") | not)
           and (contains("\u0000") | not))' <<< "$backup")" || return 1
     [[ -z "$original" || "$original" == "$saved" ]] || return 1
   fi
   if [[ "$fm_add" == status:\ duplicate$'\n'* || "$fm_add" == 'status: duplicate' ]]; then
     duplicate_role=1
+  fi
+  # Anchors can be referenced elsewhere in the frontmatter. Archiving removes
+  # their definitions; restoring at the end puts definitions after aliases.
+  # Refuse relocation, including tagged scalar properties, but keep canonical
+  # status lines in their original position. Quoted/comment ampersands are data.
+  local anchored_status='^[[:blank:]]*status[[:blank:]]*:[[:blank:]]*(![^[:blank:]]+[[:blank:]]+)?&'
+  [[ ! "$saved" =~ $anchored_status ]] || return 1
+  if (( duplicate_role )); then
+    [[ ! "$original" =~ $anchored_status ]] || return 1
     if [[ -z "$backup" && -n "$original" ]]; then
       backup="$(jq -nr --arg line "$original" "$(_local_dedupe_yaml_string_filter)"'
         $line | yaml_string')" || return 1
