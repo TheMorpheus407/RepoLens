@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Journal Generic delivery preparation before copying finding content, so retries reclaim backups and staged projections left by process death (repolens-r15-p8-5).
+
 - Preserve the last complete round digest when final finding sorting or sorted-input redirection fails, including sort failures after producing output (repolens-r15-p7-3).
 
 - Replace spaced local contributor-provenance keys during dedupe, removing stale root contributors while preserving nested user metadata (repolens-r15-pr534-fn-2).

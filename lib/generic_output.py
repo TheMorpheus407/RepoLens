@@ -105,19 +105,24 @@ def publish(plan, output, receipt, run_id):
     receipt_stage = None
     keep_stage = False
     try:
-        states = {}
-        for i, (name, path) in enumerate(paths.items()):
-            before = _content_hash(path)
-            if before is not None:
-                shutil.copy2(path, stage / f"backup-{i}")
-            states[name] = {"before": before,
-                            "after": digest(desired[name]) if name in desired else None,
-                            "backup": f"backup-{i}"}
-        for i, (name, text) in enumerate(desired.items()):
-            (stage / f"new-{i}").write_text(text)
         fd, temporary = tempfile.mkstemp(prefix=".generic-receipt-", dir=receipt.parent)
         receipt_stage = Path(temporary)
         with os.fdopen(fd, "w") as stream:
+            # Preparation has no public mutations to roll back. Publish its
+            # cleanup pointer before copying or staging any finding content.
+            _write_pending(pending, {"root": str(root), "run_id": run_id,
+                                     "stage": str(stage), "phase": "preparing",
+                                     "receipt_stage": str(receipt_stage.resolve())})
+            states = {}
+            for i, (name, path) in enumerate(paths.items()):
+                before = _content_hash(path)
+                if before is not None:
+                    shutil.copy2(path, stage / f"backup-{i}")
+                states[name] = {"before": before,
+                                "after": digest(desired[name]) if name in desired else None,
+                                "backup": f"backup-{i}"}
+            for i, (name, text) in enumerate(desired.items()):
+                (stage / f"new-{i}").write_text(text)
             json.dump(identities, stream, sort_keys=True)
             stream.write("\n")
         if receipt.exists():
@@ -222,7 +227,7 @@ def _recover_pending(root, receipt, pending, run_id):
             or receipt_stage.is_symlink()):
         raise ValueError("invalid Generic recovery receipt staging path")
     phase = journal.get("phase", "rollback")  # Legacy intent records roll back.
-    if phase == "cleanup":
+    if phase in ("preparing", "cleanup"):
         _cleanup_pending(stage, receipt_stage, pending)
         return
     if phase != "rollback":
