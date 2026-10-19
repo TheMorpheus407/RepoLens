@@ -5697,7 +5697,7 @@ fi
 # is absent or empty (dry-run, single-round, or any run where the ledger did not
 # produce findings.jsonl): one info line, zero files written. Gating on `-s`
 # (exists AND non-empty) — not on generator return codes — keeps a present-but-empty
-# registry from leaking four placeholder files. A successful empty local rebuild
+# registry from leaking four placeholder files. A successful empty rebuild
 # removes older generated triage reports so a resume cannot retain stale tasks.
 # Each generator failure is non-fatal
 # (warn + continue), matching the verifier/synthesizer/human-review precedent; none
@@ -5725,7 +5725,7 @@ if [[ -s "$TRIAGE_FINDINGS" ]] && [[ "${REPOLENS_FINAL_STATE:-finished}" != inte
 else
   if [[ -f "$TRIAGE_FINDINGS" && ! -s "$TRIAGE_FINDINGS" \
       && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-      && $LOCAL_MODE && $_registry_ready; then
+      && $_registry_ready; then
     for _triage_empty_out in TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md; do
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
       rm -f -- "$LOG_BASE/final/$_triage_empty_out" \
