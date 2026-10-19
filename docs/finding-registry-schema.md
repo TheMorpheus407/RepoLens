@@ -97,13 +97,21 @@ Generic evidence from local dedupe/indexing. Default builder source selection is
 unchanged. Only generated, receipt-owned projection paths with matching leading
 frontmatter identities may be replaced or retired. A run/destination-bound pending
 publication record saves exact before/after content hashes and rollback copies.
-Before commit, resume restores an interrupted transaction before retrying saved
-evidence. Rollback refuses changed public content or nested symlinks, preserving
+A `preparing` record identifies private staging paths before finding content is
+copied. Resume reclaims interrupted preparation without changing public files;
+catchable preparation failures attempt cleanup before returning and retain the
+journal if cleanup fails. Before public mutation, a complete rollback record
+replaces preparation intent. Before commit, resume restores an interrupted
+transaction before retrying saved evidence. Rollback refuses changed public
+content or nested symlinks, preserving
 the pending record and backups for repair. After publication commits or rollback
 completes, a durable cleanup phase retains the exact owned staging paths until
 backup deletion finishes. Resume completes that cleanup without changing public
 files or scanning other runs' stages; unsafe journal paths still stop recovery.
-Legacy records without a phase remain rollback intents. This covers process
+Legacy records without a phase remain rollback intents. Before downgrading to a
+revision that predates `preparing`, resume with this revision or a newer one that
+supports that phase and let recovery complete. Older readers reject the unknown
+phase and leave its pending record and private copies intact. This covers process
 crashes; power-loss durability is not guaranteed.
 Failed requested Generic delivery keeps the previous registry and reports and
 fails the invocation with a nonzero exit and `generic-delivery-failed` reason.

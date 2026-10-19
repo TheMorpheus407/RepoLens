@@ -32,6 +32,12 @@ spec = importlib.util.spec_from_file_location("generic_output", Path(sys.argv[1]
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+# Pinned pre-preparing implementation; independent of git history availability.
+old_spec = importlib.util.spec_from_file_location(
+    "generic_output_eb34142", Path(sys.argv[1]) / "tests/fixtures/generic_output_eb34142.py")
+old_reader = importlib.util.module_from_spec(old_spec)
+old_spec.loader.exec_module(old_reader)
+
 def projections(root):
     """Capture public bytes without counting private backups or another stage."""
     return {p.relative_to(root): p.read_bytes() for p in (root / "generic").rglob("*.md")}
@@ -59,6 +65,21 @@ def case_cleanup(scenario):
         pid = os.fork()
         if pid == 0:
             real_unlink, real_rmtree, real_replace = Path.unlink, module.shutil.rmtree, module.os.replace
+            real_copy2, real_write_text = module.shutil.copy2, Path.write_text
+            def copy2(source, destination, *args, **kwargs):
+                """Kill after a real preparation backup, before public mutation."""
+                result = real_copy2(source, destination, *args, **kwargs)
+                name = Path(destination).name
+                if ((scenario == "prepare-backup" and name.startswith("backup-"))
+                        or (scenario == "prepare-receipt" and name == "receipt-before")):
+                    os.kill(os.getpid(), signal.SIGKILL)
+                return result
+            def write_text(path, *args, **kwargs):
+                """Kill after a real projection is staged during preparation."""
+                result = real_write_text(path, *args, **kwargs)
+                if scenario == "prepare-new" and path.name.startswith("new-"):
+                    os.kill(os.getpid(), signal.SIGKILL)
+                return result
             def unlink(path, *args, **kwargs):
                 """Terminate just after the pending record is actually removed."""
                 result = real_unlink(path, *args, **kwargs)
@@ -87,6 +108,7 @@ def case_cleanup(scenario):
                         os.kill(os.getpid(), signal.SIGKILL)
                 return result
             Path.unlink, module.shutil.rmtree, module.os.replace = unlink, rmtree, replace
+            module.shutil.copy2, Path.write_text = copy2, write_text
             try:
                 module.publish(plan, root, receipt, "run")
             except BaseException as error:
@@ -108,7 +130,8 @@ def case_cleanup(scenario):
             assert len(projections(root)) == 3
             print("PASS: Generic cleanup recovery legacy-intent")
             return
-        if scenario == "rollback-cleanup":
+        preparing = scenario.startswith("prepare-")
+        if preparing or scenario == "rollback-cleanup":
             assert interrupted_files == before_files, "rollback did not restore original files"
             assert interrupted_receipt == before_receipt, "rollback did not restore receipt"
         else:
@@ -117,7 +140,23 @@ def case_cleanup(scenario):
             assert all(data.endswith(plan[0]["body"].encode()) for data in interrupted_files.values())
         if scenario != "after-pending-unlink":
             assert pending.exists(), "cleanup lost its pending journal"
-            assert json.loads(pending.read_text()).get("phase") == "cleanup", "cleanup lacks terminal phase"
+            expected_phase = "preparing" if preparing else "cleanup"
+            assert json.loads(pending.read_text()).get("phase") == expected_phase, "wrong cleanup phase"
+        if preparing:
+            stage = Path(json.loads(pending.read_text())["stage"])
+            assert sum(p.stat().st_size for p in stage.glob("backup-*")) > 10000, "backup fault not reached"
+            # Downgrade must fail closed until a supported reader recovers.
+            # Include receipt staging, private copies and unrelated files.
+            before_downgrade = {p.relative_to(base): p.read_bytes()
+                                for p in base.rglob("*") if p.is_file()}
+            try:
+                old_reader.publish(plan, root, receipt, "run")
+            except ValueError as error:
+                assert str(error) == "invalid Generic recovery phase", error
+            else:
+                raise AssertionError("older reader accepted pending preparation")
+            assert {p.relative_to(base): p.read_bytes()
+                    for p in base.rglob("*") if p.is_file()} == before_downgrade, "downgrade changed saved state"
         if scenario == "after-stage-removal":
             assert not Path(json.loads(pending.read_text())["stage"]).exists(), "stage deletion did not complete"
         if scenario == "edited-after-commit":
@@ -167,6 +206,12 @@ def case_cleanup(scenario):
         assert set(root.glob(".generic-delivery-*")) == {foreign}, "orphaned owned backups"
         assert not list(base.glob(".generic-receipt-*")), "orphaned receipt staging"
         assert (foreign / "sentinel").read_text() == "another transaction\n"
+        if preparing:
+            # Once updated recovery finishes, older publication works again.
+            old_reader.publish(plan, root, receipt, "run")
+            assert len(projections(root)) == 3 and len(json.loads(receipt.read_text())) == 3
+            assert all(data.endswith(plan[0]["body"].encode()) for data in projections(root).values())
+            assert not pending.exists() and set(root.glob(".generic-delivery-*")) == {foreign}
         module.publish(plan, root, receipt, "run")
         published, published_receipt = projections(root), receipt.read_bytes()
         assert len(published) == 3 and len(json.loads(published_receipt)) == 3
@@ -179,6 +224,7 @@ def case_cleanup(scenario):
 failures = 0
 for scenario in ("after-pending-unlink", "before-cleanup", "partial-cleanup", "rollback-cleanup",
                  "after-stage-removal", "edited-after-commit",
+                 "prepare-backup", "prepare-new", "prepare-receipt",
                  "legacy-intent", "guard-run", "guard-root", "guard-phase", "guard-stage", "guard-receipt-stage"):
     try:
         case_cleanup(scenario)

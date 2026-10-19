@@ -105,19 +105,24 @@ def publish(plan, output, receipt, run_id):
     receipt_stage = None
     keep_stage = False
     try:
-        states = {}
-        for i, (name, path) in enumerate(paths.items()):
-            before = _content_hash(path)
-            if before is not None:
-                shutil.copy2(path, stage / f"backup-{i}")
-            states[name] = {"before": before,
-                            "after": digest(desired[name]) if name in desired else None,
-                            "backup": f"backup-{i}"}
-        for i, (name, text) in enumerate(desired.items()):
-            (stage / f"new-{i}").write_text(text)
         fd, temporary = tempfile.mkstemp(prefix=".generic-receipt-", dir=receipt.parent)
         receipt_stage = Path(temporary)
         with os.fdopen(fd, "w") as stream:
+            # Preparation has no public mutations to roll back. Publish its
+            # cleanup pointer before copying or staging any finding content.
+            _write_pending(pending, {"root": str(root), "run_id": run_id,
+                                     "stage": str(stage), "phase": "preparing",
+                                     "receipt_stage": str(receipt_stage.resolve())})
+            states = {}
+            for i, (name, path) in enumerate(paths.items()):
+                before = _content_hash(path)
+                if before is not None:
+                    shutil.copy2(path, stage / f"backup-{i}")
+                states[name] = {"before": before,
+                                "after": digest(desired[name]) if name in desired else None,
+                                "backup": f"backup-{i}"}
+            for i, (name, text) in enumerate(desired.items()):
+                (stage / f"new-{i}").write_text(text)
             json.dump(identities, stream, sort_keys=True)
             stream.write("\n")
         if receipt.exists():
@@ -129,32 +134,34 @@ def publish(plan, output, receipt, run_id):
         # An atomic, flushed intent record precedes every public mutation. It
         # binds exact pre/post bytes to this run and destination, not just an ID.
         _write_pending(pending, journal)
+        for i, (name, text) in enumerate(desired.items()):
+            path = checked_path(root, name)
+            if path.exists() and path.read_text() == text:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(stage / f"new-{i}", path)
+        for name in old.keys() - desired.keys():
+            checked_path(root, name).unlink(missing_ok=True)
+        os.replace(receipt_stage, receipt)
+        # Commit before removing backups, retaining their exact cleanup
+        # pointer until deletion finishes. Recovery must never roll back a
+        # terminal transaction whose backups may already be partly deleted.
+        journal["phase"] = "cleanup"
+        _write_pending(pending, journal)
+        _cleanup_pending(stage, receipt_stage, pending)
+    except BaseException:
+        # Catchable preparation faults must release private finding copies now,
+        # before a retry needs space for its input plan. Recovery also handles
+        # a signal as either intent record's atomic rename returns.
+        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
         try:
-            for i, (name, text) in enumerate(desired.items()):
-                path = checked_path(root, name)
-                if path.exists() and path.read_text() == text:
-                    continue
-                path.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(stage / f"new-{i}", path)
-            for name in old.keys() - desired.keys():
-                checked_path(root, name).unlink(missing_ok=True)
-            os.replace(receipt_stage, receipt)
-            # Commit before removing backups, retaining their exact cleanup
-            # pointer until deletion finishes. Recovery must never roll back a
-            # terminal transaction whose backups may already be partly deleted.
-            journal["phase"] = "cleanup"
-            _write_pending(pending, journal)
-            _cleanup_pending(stage, receipt_stage, pending)
-        except BaseException:
-            blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
-            try:
-                _recover_pending(root, receipt, pending, run_id)
-            except (OSError, ValueError) as rollback_error:
-                keep_stage = True
-                print(f"Generic delivery rollback pending in {stage}: {rollback_error}", file=sys.stderr)
-            finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
-            raise
+            _recover_pending(root, receipt, pending, run_id)
+        except (OSError, ValueError) as rollback_error:
+            keep_stage = True
+            print(f"Generic delivery rollback pending in {stage}: {rollback_error}", file=sys.stderr)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+        raise
     finally:
         if receipt_stage is not None:
             receipt_stage.unlink(missing_ok=True)
@@ -222,7 +229,7 @@ def _recover_pending(root, receipt, pending, run_id):
             or receipt_stage.is_symlink()):
         raise ValueError("invalid Generic recovery receipt staging path")
     phase = journal.get("phase", "rollback")  # Legacy intent records roll back.
-    if phase == "cleanup":
+    if phase in ("preparing", "cleanup"):
         _cleanup_pending(stage, receipt_stage, pending)
         return
     if phase != "rollback":
