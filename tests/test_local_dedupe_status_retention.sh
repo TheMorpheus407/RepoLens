@@ -52,6 +52,8 @@ values=(
   '{phase:&workflow pending}'
   '[phase:&workflow pending]'
   '[http://example/&workflow]'
+  '?&workflow'
+  '[?ordinary &workflow]'
   '{"&workflow": "needs \"validation\""}'
 )
 for indent in '' '  '; do
@@ -158,6 +160,7 @@ for indent in '' '  '; do
     '{"phase":&workflow pending}' '[phase: &workflow pending]' \
     '[&workflow "needs-validation"]' '{&workflow phase: pending}' \
     '{? &workflow phase: pending}' '[? &workflow phase: pending]' \
+    '{?&workflow phase: pending}' '[?&workflow phase: pending]' \
     '["quoted, &literal", &workflow pending]' \
     "['quoted ''&literal', &workflow pending]"; do
     original="${indent}status : $value"

@@ -138,7 +138,8 @@ _local_dedupe_mark_file() {
         if (c ~ /[[:space:]]/) continue
         if (c == "#" && (i == 1 || substr(text, i - 1, 1) ~ /[[:space:]]/)) return 0
         if (node_start && c == "&") return 1
-        if (node_start && c == "?" && substr(text, i + 1, 1) ~ /[[:space:]]/) continue
+        # In flow collections an explicit key may start ?&anchor without a gap.
+        if (depth && node_start && c == "?") continue
         if (node_start && c == "!") {
           # Skip verbatim/shorthand/non-specific tags, retaining node position.
           if (substr(text, i + 1, 1) == "<") {

@@ -25,7 +25,7 @@ covers status behavior for group members, plus singleton and stale-link handling
 | T09 | Archive → reintroduce the identical saved custom line → D → C | Accept the matching data and restore one original status. |
 | T10 | Archive → change root indentation → D → C | D retains the backup; C refuses obsolete indentation without consuming it. |
 | T11 | Archive → change indentation → refused C → repair indentation → C | Restore the original line after repair. |
-| T12 | Status defines anchors (direct, tagged or in flow nodes) → C → D → D → C | Keep canonical definitions before their aliases; refuse relocation on both D attempts; C remains safe. |
+| T12 | Status defines anchors (direct, tagged or in flow nodes, including compact explicit keys) → C → D → D → C | Keep canonical definitions before their aliases; refuse relocation on both D attempts; C remains safe. |
 | T13 | Unsupported multiline/block/unfinished status → D → C | Reject each operation without changing the file. |
 | T14 | Invalid, conflicting, multiline, managed-duplicate or anchored backup → D → C | Reject each operation without consuming or publishing saved data. |
 | T15 | CR-bearing original status → C or D | Keep a canonical line in place; refuse creation of an unrestorable backup on D. |
