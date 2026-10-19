@@ -55,6 +55,11 @@ awk() {
       printf 'snapshot remains readable after chmod; injecting reader failure\n' >&2
       return 2
     fi
+    if [[ "$fail_reader" == duplicate_receipt && "${FUNCNAME[1]:-}" == _ledger_local_duplicate_receipt ]]; then
+      : > "$FIXTURE/receipt-reader-reached"
+      [[ "$partial" != true ]] || command awk "$@"
+      return 2
+    fi
     if [[ "$fail_reader" == frontmatter && "${1:-}" != -v ]] \
         || [[ "${1:-}" == -v && "${2:-}" == "key=$fail_reader" ]] \
         || [[ "$fail_reader" == generic_title && "${2:-}" == key=title \
@@ -105,6 +110,25 @@ done
 fail_reader=none
 build_finding_registry fixture "$FIXTURE/findings"
 check 'repaired Generic reread succeeds unchanged' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+# A receipt reader failure is fatal even after emitting a valid duplicate mark.
+# Use real owned content; the injected failure is confined to its awk reader.
+printf -- '---\ntitle: Saved authorization finding\nseverity: high\ndomain: security\nlens: injection\nstatus: reviewed\nduplicate_of: missing.md\n---\nEvidence\n<!-- repolens-dedupe:begin -->\n<!-- repolens-dedupe:duplicate -->\n<!-- repolens-dedupe:end -->\n' > "$FIXTURE/findings/001.md"
+build_finding_registry fixture "$FIXTURE/findings"
+cp "$LOG_BASE/final/findings.jsonl" "$FIXTURE/before.jsonl"
+cp "$LOG_BASE/final/findings.csv" "$FIXTURE/before.csv"
+fail_reader=duplicate_receipt
+for partial in false true; do
+  rm -f "$FIXTURE/receipt-reader-reached"
+  rc=0
+  build_finding_registry fixture "$FIXTURE/findings" > "$FIXTURE/rebuild.log" 2>&1 || rc=$?
+  check 'receipt fault was reached' test -f "$FIXTURE/receipt-reader-reached"
+  check "receipt reader (partial=$partial) fails rebuilding" test "$rc" -ne 0
+  check 'receipt error preserves JSONL' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+  check 'receipt error preserves CSV' cmp -s "$FIXTURE/before.csv" "$LOG_BASE/final/findings.csv"
+done
+fail_reader=none
+build_finding_registry fixture "$FIXTURE/findings"
+check 'repaired receipt reader succeeds unchanged' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
 # Empty and malformed-only trees still produce successful empty registries.
 rm "$FIXTURE/findings/001.md" "$FIXTURE/findings/002.md"
 printf 'ordinary notes without frontmatter\n' > "$FIXTURE/findings/notes.md"

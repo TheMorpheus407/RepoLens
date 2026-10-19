@@ -44,7 +44,27 @@ ${target:+duplicate_of: $target}
 Shared state access at $citation needs synchronization.
 EOF
 }
-for scenario in missing missing-link invalid filtered self chain cycle outside failed-dedupe valid; do
+# Append a complete owned receipt; malformed variants exercise ownership guards.
+receipt() {
+  local path="$1" style="$2" target="${3:-security/probe/002.md}"
+  if [[ "$style" == outside ]]; then
+    printf '\n<!-- repolens-dedupe:duplicate -->\n' >> "$path"
+    return
+  fi
+  {
+    printf '\n<!-- repolens-dedupe:begin -->\n'
+    case "$style" in
+      typed|incomplete) printf '<!-- repolens-dedupe:duplicate -->\n' ;;
+      legacy) printf '> Duplicate of `%s` — see the canonical finding for the full details.\n' "$target" ;;
+      canonical) printf '> Canonical finding — other contributors follow.\n' ;;
+      malformed) printf '<!-- repolens-dedupe:duplicate --> extra\n' ;;
+    esac
+    if [[ "$style" != incomplete ]]; then printf '<!-- repolens-dedupe:end -->\n'; fi
+  } >> "$path"
+}
+for scenario in missing missing-link invalid filtered self chain cycle outside failed-dedupe valid \
+    receipt-typed receipt-legacy receipt-bare receipt-canonical receipt-incomplete receipt-outside \
+    receipt-malformed receipt-missing-link receipt-chain receipt-cycle receipt-missing receipt-unrelated receipt-self; do
   LOG_BASE="$FIXTURE/$scenario/logs/probe"
   OUTPUT_DIR="$FIXTURE/$scenario/output"
   mkdir -p "$OUTPUT_DIR/security/probe"
@@ -89,6 +109,40 @@ for scenario in missing missing-link invalid filtered self chain cycle outside f
         >/dev/null 2>&1 || rc=$?
       check test "$rc" -eq 1 ;;
   esac
+  if [[ "$scenario" == receipt-* ]]; then
+    style="${scenario#receipt-}"
+    write_finding "$a" probe-a reviewed security/probe/002.md
+    write_finding "$b" probe-b new
+    expected_records=2 expected_new=2 expected_duplicates=0
+    case "$style" in
+      typed|legacy)
+        receipt "$a" "$style"
+        expected_new=1 expected_duplicates=1 ;;
+      chain)
+        receipt "$a" typed
+        write_finding "$b" probe-b duplicate security/probe/003.md
+        write_finding "$c" probe-c new
+        expected_records=3 expected_new=2 expected_duplicates=1 ;;
+      cycle)
+        receipt "$a" typed
+        write_finding "$b" probe-b duplicate security/probe/001.md ;;
+      missing-link)
+        write_finding "$a" probe-a reviewed
+        receipt "$a" typed ;;
+      missing)
+        receipt "$a" typed
+        rm "$b"
+        expected_records=1 expected_new=1 ;;
+      unrelated)
+        receipt "$a" typed
+        sed -i 's/title:.*/title: Cross-site scripting through template rendering/' "$b" ;;
+      self)
+        write_finding "$a" probe-a reviewed security/probe/001.md
+        receipt "$a" typed ;;
+      bare) : ;;
+      *) receipt "$a" "$style" ;;
+    esac
+  fi
   if [[ "$scenario" == missing ]]; then
     # Successful singleton dedupe leaves the stale raw mark untouched.
     dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
@@ -101,14 +155,14 @@ for scenario in missing missing-link invalid filtered self chain cycle outside f
     'length == $n and (map(select(.status == "new")) | length) == $actions
       and (map(select(.status == "duplicate")) | length) == $duplicates
       and all(has("__local_duplicate_of") | not)' "$findings"
-  if [[ "$scenario" == valid || "$scenario" == chain ]]; then
+  if (( expected_duplicates )); then
     check jq -se 'map(select(has("also_reported_by"))) | length == 1 and (.[0].also_reported_by | length) == 1' "$findings"
   else
     check jq -se 'all(has("also_reported_by") | not)' "$findings"
   fi
   render_human_review_digest probe
   generate_todo_md "$findings" "$LOG_BASE/final/TODO.md"
-  check test "$(grep -cE '^### .*Unsafe access to shared state' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq "$expected_new"
+  check test "$(grep -cE '^### ' "$LOG_BASE/final/HUMAN_REVIEW.md" || true)" -eq "$expected_new"
   check grep -qE 'Unsafe access to shared state' "$LOG_BASE/final/TODO.md"
   check test "$before" = "$(sha256sum "$a")"
   registry_before="$(sha256sum "$findings")"

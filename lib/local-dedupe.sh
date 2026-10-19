@@ -33,9 +33,11 @@
 # IN PLACE and NEVER deleted or moved. Paths stay stable so markdown_path links
 # (and any future build_finding_registry run) don't break and a re-run's recursive
 # find never double-counts a relocated file. For each duplicate group of size >= 2:
-#   - each NON-canonical file gains `status: duplicate` + a `duplicate_of:` link
+#   - each NON-canonical file gains `status: duplicate` when no custom status
+#     exists, plus a `duplicate_of:` link
 #     (canonical path, relative to <output_dir>) in its YAML frontmatter, plus a
-#     short body note;
+#     typed, sentinel-wrapped body note. A custom root status stays in place;
+#     the registry derives duplicate state from the receipt and validated link;
 #   - the CANONICAL file gains a sorted `also_reported_by:` frontmatter list
 #     ({lens,domain,markdown_path} per contributor) plus a short body note; it is
 #     NOT itself marked a duplicate (absence is the safe distinguisher, mirroring
@@ -114,12 +116,16 @@ _local_dedupe_mark_file() {
           # Newly supported spaced keys match complete managed scalar values.
           if (text ~ /^status[[:space:]]+:[[:space:]]*(duplicate|"duplicate"|\047duplicate\047)([[:space:]]+#.*)?[[:space:]]*$/) continue
           if (text ~ /^duplicate_of[[:space:]]*:/) continue
+          if (text ~ /^status[[:space:]]*:/) has_custom_status = 1
         }
         print line
       }
       if (length(fm_add) > 0) {
         count = split(fm_add, additions, "\n")
-        for (i = 1; i <= count; i++) print root_prefix additions[i]
+        for (i = 1; i <= count; i++) {
+          if (has_custom_status && additions[i] == "status: duplicate") continue
+          print root_prefix additions[i]
+        }
       }
     }
     {
@@ -311,7 +317,7 @@ dedupe_local_markdown() {
       '[ .member_indices[] | select(. != $c) ]' <<<"$group")" || continue
     [[ "$(jq 'length' <<<"$contrib_idx_json")" -ge 1 ]] || continue
 
-    # 4a. Mark each non-canonical file: status: duplicate + duplicate_of link.
+    # 4a. Mark each non-canonical file, retaining custom status metadata.
     while IFS= read -r m; do
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
       [[ -n "$m" ]] || continue
@@ -319,7 +325,7 @@ dedupe_local_markdown() {
       [[ -n "$dup_md" && -f "$dup_md" ]] || continue
       if ! _local_dedupe_mark_file "$dup_md" \
         "$(printf 'status: duplicate\nduplicate_of: %s' "$canon_yaml")" \
-        "> Duplicate of \`$canon_rel\` — see the canonical finding for the full details."; then
+        "$(printf '<!-- repolens-dedupe:duplicate -->\n> Duplicate of `%s` — see the canonical finding for the full details.' "$canon_rel")"; then
         echo "dedupe_local_markdown: failed to mark duplicate $dup_md" >&2
       fi
     done < <(jq -r '.[]' <<<"$contrib_idx_json")

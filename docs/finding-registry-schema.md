@@ -31,9 +31,14 @@ It is built from the existing finding outputs; it does not replace them.
 - **Other `--local` runs** write `NNN-<slug>.md` markdown files with YAML frontmatter
   (`lib/template.sh`, LOCAL MODE OVERRIDE block, ~line 521). The builder reads
   that frontmatter and emits one normalized record per file. It preserves local
-  dedupe's `status: duplicate` marks only when their direct relative
-  `duplicate_of` link identifies a different parsed record with a raw
-  non-duplicate status in the same current deterministic group. The builder
+  dedupe's legacy `status: duplicate` marks or complete owned duplicate body
+  receipts only when their direct relative `duplicate_of` link identifies a
+  different parsed record without either duplicate representation in the same
+  current deterministic group. Dedupe preserves a custom root `status` in place
+  and adds no second status key. New receipts carry the invisible
+  `<!-- repolens-dedupe:duplicate -->` marker inside the existing begin/end block;
+  complete exact legacy duplicate notes are also supported. Canonical notes,
+  incomplete blocks and unmarked links cannot establish duplicate ownership. The builder
   reuses current similarity thresholds and transitive connected components.
   Missing, filtered, invalid or now-unrelated canonicals (including after title
   edits or threshold changes), self-links, chains and cycles restore records to
