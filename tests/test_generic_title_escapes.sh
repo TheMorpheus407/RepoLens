@@ -30,6 +30,18 @@ source "$REPO/lib/summary.sh"
 set -euo pipefail
 FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
+decoder_fault=false
+# Inject partial output plus an operational error only in the scalar decoder.
+# shellcheck disable=SC2329 # Called indirectly by the sourced scalar helper.
+python3() {
+  if [[ "$decoder_fault" == true && "${1:-}" == -c && "${2:-}" == *'frontmatter scalar decode failed:'* ]]; then
+    touch "$FIXTURE/decoder-fault-reached"
+    printf 'partial'
+    return 74
+  fi
+  command python3 "$@"
+}
+
 # Independent expected strings exercise syntax without requiring a YAML package.
 command python3 - "$FIXTURE" <<'PYCASES'
 from pathlib import Path
@@ -106,16 +118,7 @@ for invalid in '"bad\q"' '"bad\0"' '"bad\uD800"'; do
   check test "$(sha256sum < "$receipt")" = "$receipt_hash"
   check test "$(sha256sum < "$projection")" = "$projection_hash"
 done
-# Inject partial output plus an operational error only in the scalar decoder.
-# shellcheck disable=SC2329 # Called indirectly by the sourced scalar helper.
-python3() {
-  if [[ "${1:-}" == -c && "${2:-}" == *'frontmatter scalar decode failed:'* ]]; then
-    touch "$FIXTURE/decoder-fault-reached"
-    printf 'partial'
-    return 74
-  fi
-  command python3 "$@"
-}
+decoder_fault=true
 printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\ntitle: %s\n---\n## hypothesis\nLogin fails\n' "$(cat "$FIXTURE/00/raw-title")" > "$raw"
 rc=0; export_generic_local_findings "$OUTPUT_DIR" || rc=$?
 check test -f "$FIXTURE/decoder-fault-reached"
