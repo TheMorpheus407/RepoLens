@@ -138,7 +138,11 @@ for fault in final-sort-empty final-sort-after-output; do
     builtin printf 'FAIL: %s must preserve the complete digest\n' "$fault" >&2
     final_sort_failures=$((final_sort_failures + 1))
   fi
-  test -z "$(command find "$round" -name 'digest.md.tmp.*' -print)"
+  staged_files="$(command find "$round" -name 'digest.md.tmp.*' -print)" || {
+    builtin printf 'FAIL: staging inspection failed\n' >&2
+    exit 1
+  }
+  test -z "$staged_files"
   fault=none
   build_round_digest "$round"
   cmp "$fixture/before" "$round/digest.md"
