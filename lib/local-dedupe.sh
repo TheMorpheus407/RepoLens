@@ -109,7 +109,7 @@ _local_dedupe_mark_file() {
         }
         text = substr(line, indent + 1)
         if (indent == root_indent) {
-          if (text ~ /^also_reported_by:/) { skip_arb = 1; continue }
+          if (text ~ /^also_reported_by[[:space:]]*:/) { skip_arb = 1; continue }
           if (text ~ /^status:[[:space:]]*["'\'']?duplicate/) continue
           if (text ~ /^duplicate_of[[:space:]]*:/) continue
         }
