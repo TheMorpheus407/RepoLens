@@ -57,8 +57,10 @@ Local dedupe preserves a displaced custom root `status` scalar in the reserved
 complete original line, including indentation, spacing, quotes and comments.
 The noncanonical finding then has one authoritative `status: duplicate` and
 one current `duplicate_of` link. Exact managed `duplicate` scalars are never
-archived. Canonical custom statuses remain unchanged. On promotion or group
-dissolution, dedupe restores the original entry and removes the archive and
+archived. Canonical custom statuses remain unchanged. Validation applies only
+to root status entries; nested status metadata and status-shaped text inside
+indented block scalars remain untouched and do not prevent dedupe or restoration.
+On promotion or group dissolution, dedupe restores the original entry and removes the archive and
 managed marks, including when no duplicate groups remain. Repeated dedupe keeps
 the archive unchanged. Incompatible archives, subsequent custom-status edits
 and multiline custom status values (including plain folded values beginning

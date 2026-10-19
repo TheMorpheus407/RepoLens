@@ -50,12 +50,11 @@ def preserve_status(text, mode):
     end = lines.index("---", 1)
     mappings = [(i, KEY.match(lines[i])) for i in range(1, end)]
     mappings = [(i, match) for i, match in mappings if match]
-    # Validate before inferring root indentation: a quoted continuation at
-    # column zero can resemble a root key and hide an indented status entry.
-    for i, match in mappings:
-        if match[2].rstrip() == "status":
-            validate_status_line(lines[i])
-    root_indent = min((len(match[1]) for _, match in mappings), default=0)
+    # The first mapping establishes the YAML root indentation. Taking the
+    # minimum over later lines lets quoted continuations resembling root keys
+    # hide an indented status. Deeper status-shaped lines belong to nested
+    # metadata or scalar content and must not be validated as root entries.
+    root_indent = len(mappings[0][1][1]) if mappings else 0
     root = [(i, match) for i, match in mappings if len(match[1]) == root_indent]
     statuses = [i for i, match in root if match[2].rstrip() == "status"]
     archives = [i for i, match in root if match[2].rstrip() == ARCHIVE]
@@ -64,6 +63,7 @@ def preserve_status(text, mode):
     # A plain scalar such as `duplicate\n  pending` is a custom folded value;
     # removing just the first line would attach its continuation to another key.
     for index in statuses:
+        validate_status_line(lines[index])
         value = lines[index].split(":", 1)[1].lstrip()
         next_root = next((i for i, _ in root if i > index), end)
         if value.startswith(("|", ">")) or any(
