@@ -41,7 +41,7 @@ lens: probe-$1
 Evidence for $2 at src/state.sh:12.
 EOF
 }
-for scenario in edited-duplicate edited-canonical threshold valid transitive; do
+for scenario in edited-duplicate edited-canonical threshold valid transitive spaced-link tabbed-link; do
   LOG_BASE="$FIXTURE/$scenario/logs/probe"
   OUTPUT_DIR="$FIXTURE/$scenario/output"
   mkdir -p "$OUTPUT_DIR"
@@ -58,13 +58,25 @@ for scenario in edited-duplicate edited-canonical threshold valid transitive; do
     expected_duplicates=2
   fi
   dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
+  if [[ "$scenario" == spaced-link || "$scenario" == tabbed-link ]]; then
+    # Valid YAML spacing must not retain a retired link before the new one.
+    padding=' '
+    [[ "$scenario" != tabbed-link ]] || padding=$'\t'
+    sed -i "s/^duplicate_of:.*/duplicate_of${padding}: retired-canonical.md/" "$OUTPUT_DIR/a.md"
+    dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
+    check test "$(grep -cE '^duplicate_of[[:space:]]*:' "$OUTPUT_DIR/a.md")" -eq 1
+    check grep -qE '^duplicate_of: b.md$' "$OUTPUT_DIR/a.md"
+    before_dedupe="$(sha256sum "$OUTPUT_DIR/"*.md)"
+    dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
+    check test "$before_dedupe" = "$(sha256sum "$OUTPUT_DIR/"*.md)"
+  fi
   check grep -qE '^status: duplicate$' "$OUTPUT_DIR/a.md"
   case "$scenario" in
     edited-duplicate) sed -i 's/^title:.*/title: Credentials exposed through request logs/' "$OUTPUT_DIR/a.md" ;;
     edited-canonical) sed -i 's/^title:.*/title: Credentials exposed through request logs/' "$OUTPUT_DIR/b.md" ;;
     threshold) export DEDUPE_TITLE_SIM_PRIMARY=10001 DEDUPE_TITLE_SIM_SECONDARY=10001 ;;
   esac
-  if [[ "$scenario" != valid && "$scenario" != transitive ]]; then
+  if [[ "$scenario" == edited-* || "$scenario" == threshold ]]; then
     expected_new=2 expected_duplicates=0
     # Successful no-group dedupe intentionally preserves singleton markdown.
     dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
