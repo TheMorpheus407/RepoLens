@@ -116,6 +116,7 @@ _local_dedupe_mark_file() {
     # owned keys. A nested mapping may precede later canonical root fields.
     function duplicate_status(text) {
       # Own only the complete scalar, with matching quotes if present.
+      sub(/^[[:space:]]*/, "", text)
       return text ~ /^status[[:space:]]*:[[:space:]]*(duplicate|"duplicate"|'\''duplicate'\'')([[:space:]]+#.*|[[:space:]]*)$/
     }
     # Reject scalar headers and unfinished quotes/flow collections whose value
@@ -194,7 +195,14 @@ _local_dedupe_mark_file() {
       # A status edit between passes must not be replaced by a stale backup.
       if (metadata != ENVIRON["RL_EXPECTED_STATUS_METADATA"]) exit 1
       if (length(ENVIRON["RL_SAVED_STATUS"]) > 0 &&
-          !complete_status_line(ENVIRON["RL_SAVED_STATUS"])) exit 1
+          (!complete_status_line(ENVIRON["RL_SAVED_STATUS"]) ||
+           duplicate_status(ENVIRON["RL_SAVED_STATUS"]))) exit 1
+      # The current root may have been reindented since status archival.
+      # Keep the backup rather than restore its old line as nested/invalid YAML.
+      if (length(ENVIRON["RL_STATUS_RESTORE"]) > 0) {
+        match(ENVIRON["RL_STATUS_RESTORE"], /^[[:space:]]*/)
+        if (RLENGTH != root_indent) exit 1
+      }
       for (i = 1; i <= nf; i++) {
         line = frontmatter[i]
         match(line, /^[[:space:]]*/)

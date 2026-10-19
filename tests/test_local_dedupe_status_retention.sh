@@ -71,11 +71,42 @@ for indent in '' '  '; do
   done
 done
 
+# Reindenting current frontmatter must not restore a saved status at its old
+# depth. Keep the backup intact so restoring the original layout allows retry.
+for layout in dedent indent deepen shallow; do
+  case "$layout" in
+    dedent) old_indent='  '; new_indent='' ;;
+    indent) old_indent=''; new_indent='  ' ;;
+    deepen) old_indent='  '; new_indent='    ' ;;
+    shallow) old_indent='    '; new_indent='  ' ;;
+  esac
+  for padding in '' ' ' $'\t'; do
+    scenario="reindented saved status / $layout / padding=${#padding}"
+    printf -- '---\n%stitle: Saved finding\n%sseverity: high\n%sstatus%s: needs-validation # retain\n---\nEvidence: keep this\n' \
+      "$old_indent" "$old_indent" "$old_indent" "$padding" > "$FIXTURE/input.md"
+    cp "$FIXTURE/input.md" "$FIXTURE/restored.md"
+    check _local_dedupe_mark_file "$FIXTURE/input.md" $'status: duplicate\nduplicate_of: canonical.md' ''
+    sed -i "2,/^---$/ { /^---$/! s/^${old_indent}/${new_indent}/; }" "$FIXTURE/input.md"
+    cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
+    # Repeated promotion attempts must refuse without consuming saved data.
+    for attempt in first rerun; do
+      rc=0
+      _local_dedupe_mark_file "$FIXTURE/input.md" '' '' || rc=$?
+      check test "$rc" -ne 0
+      check cmp -s "$FIXTURE/expected.md" "$FIXTURE/input.md"
+      check test ! -e "$FIXTURE/input.md.rldedupe.$$"
+    done
+    sed -i "2,/^---$/ { /^---$/! s/^${new_indent}/${old_indent}/; }" "$FIXTURE/input.md"
+    check _local_dedupe_mark_file "$FIXTURE/input.md" '' ''
+    check cmp -s "$FIXTURE/restored.md" "$FIXTURE/input.md"
+  done
+done
+
 # Refuse invalid/conflicting saved data in both duplicate and canonical roles.
 for role in duplicate canonical; do
   additions=''
   [[ "$role" != duplicate ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
-  for invalid in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status multi-string-backup leading-nonstring-backup trailing-nonstring-backup cr-backup crlf-backup trailing-cr-backup open-double-backup open-single-backup block-header-backup open-flow-backup; do
+  for invalid in invalid-backup conflicting-status duplicate-backup multiple-statuses block-status multi-string-backup leading-nonstring-backup trailing-nonstring-backup cr-backup crlf-backup trailing-cr-backup open-double-backup open-single-backup block-header-backup open-flow-backup managed-backup quoted-managed-backup single-quoted-managed-backup commented-managed-backup; do
     scenario="$role / $invalid"
     printf -- '---\ntitle: Saved finding\nstatus: duplicate\n' > "$FIXTURE/input.md"
     case "$invalid" in
@@ -94,6 +125,10 @@ for role in duplicate canonical; do
       open-single-backup) printf '%s\n' "repolens_dedupe_original_status: \"status: 'needs\"" ;;
       block-header-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: |"' ;;
       open-flow-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: [needs,"' ;;
+      managed-backup) printf '%s\n' 'repolens_dedupe_original_status: "status : duplicate"' ;;
+      quoted-managed-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: \"duplicate\""' ;;
+      single-quoted-managed-backup) printf '%s\n' "repolens_dedupe_original_status: \"status: 'duplicate'\"" ;;
+      commented-managed-backup) printf '%s\n' 'repolens_dedupe_original_status: "status: duplicate # archived mark"' ;;
     esac >> "$FIXTURE/input.md"
     printf -- '---\nEvidence: keep this\n' >> "$FIXTURE/input.md"
     cp "$FIXTURE/input.md" "$FIXTURE/expected.md"
