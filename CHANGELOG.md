@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Remove spaced duplicate status keys when local dedupe promotes a previous duplicate to canonical, preserving one actionable finding after registry rebuilding; match complete duplicate values and reversibly archive displaced custom statuses so they cannot shadow duplicate suppression (repolens-r15-pr534-fn-1).
 
-- Preserve multiline local statuses during dedupe, including quoted continuations that resemble root keys, so folded continuations cannot corrupt adjacent finding metadata.
+- Preserve multiline local statuses during dedupe, including indented or tagged/anchored quoted continuations that resemble root keys, so folded continuations cannot corrupt adjacent finding metadata. Preserve unsupported YAML status properties, aliases and collections, including archived entries, instead of breaking references or publishing partial values.
 
 - Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).
 

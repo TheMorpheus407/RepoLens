@@ -114,6 +114,129 @@ for quote in '"' "'"; do
     check cmp -s "$output/$role.md" "$FIXTURE/expected.md"
   done
 done
+# YAML node properties hide the opening quote; anchors can also be referenced
+# elsewhere. Unsupported forms must never move into an opaque archive string.
+for value in '&state "duplicate' '!!str "duplicate' "!local 'duplicate" \
+    '!<tag:yaml.org,2002:str> "duplicate' '!!str &state "duplicate' \
+    '&state !!str "duplicate'; do
+  for mode in canonical duplicate; do
+    scenario="prefixed-multiline/$value/$mode"
+    file="$FIXTURE/prefixed.md"
+    quote='"'
+    [[ "$value" != "!local 'duplicate" ]] || quote="'"
+    printf '%s\n' --- 'title: Shared state' "status : $value" \
+      "pending: confirmation${quote}" 'severity: high' --- body > "$file" || exit 1
+    cp "$file" "$FIXTURE/expected.md" || exit 1
+    addition=''
+    [[ "$mode" != duplicate ]] || addition=$'status: duplicate\nduplicate_of: canonical.md'
+    rc=0
+    _local_dedupe_mark_file "$file" "$addition" note > "$FIXTURE/rewrite.log" 2>&1 || rc=$?
+    check test "$rc" -ne 0
+    check grep -q 'preserving' "$FIXTURE/rewrite.log"
+    check cmp -s "$file" "$FIXTURE/expected.md"
+    check test "$(find "$FIXTURE" -name '*.rldedupe.*' | wc -l)" -eq 0
+  done
+done
+# A mapping-shaped continuation at column zero must not hide an indented root
+# status from validation by changing the apparent root indentation.
+for value in '"duplicate' "'duplicate"; do
+  for mode in canonical duplicate; do
+    scenario="indented-quoted/$value/$mode"
+    file="$FIXTURE/indented-quoted.md"
+    quote="${value:0:1}"
+    printf '%s\n' --- '  title: Shared state' "  status: $value" \
+      "pending: confirmation${quote}" '  severity: high' --- body > "$file" || exit 1
+    cp "$file" "$FIXTURE/expected.md" || exit 1
+    addition=''
+    [[ "$mode" != duplicate ]] || addition=$'status: duplicate\nduplicate_of: canonical.md'
+    rc=0
+    _local_dedupe_mark_file "$file" "$addition" note > "$FIXTURE/rewrite.log" 2>&1 || rc=$?
+    check test "$rc" -ne 0
+    check grep -q 'not a single-line scalar' "$FIXTURE/rewrite.log"
+    check cmp -s "$file" "$FIXTURE/expected.md"
+    check test "$(find "$FIXTURE" -name '*.rldedupe.*' | wc -l)" -eq 0
+  done
+done
+# Anchors may be referenced by aliases elsewhere even on a single line. Tags
+# and aliases also remain outside the scalar-preservation contract. Test both
+# live entries and legacy archives so restoration cannot publish invalid YAML.
+for value in '&state duplicate-pending' '!!str duplicate-pending' '*state' \
+    '[duplicate,' '{state: duplicate,'; do
+  for mode in canonical duplicate restore-only; do
+    scenario="unsupported/$value/$mode"
+    file="$FIXTURE/unsupported.md"
+    original="status: $value"
+    {
+      printf '%s\n' --- 'title: Shared state'
+      [[ "$value" != '*state' ]] || printf '%s\n' 'source_status: &state pending'
+      if [[ "$mode" == restore-only ]]; then
+        archive="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$original")" || exit 1
+        printf '%s\n' "repolens_dedupe_original_status: $archive" 'status: duplicate' 'duplicate_of: canonical.md'
+      else
+        printf '%s\n' "$original"
+      fi
+      [[ "$value" != '&state duplicate-pending' ]] || printf '%s\n' 'previous_status: *state'
+      [[ "$value" != '[duplicate,' ]] || printf '%s\n' 'pending: confirmation]'
+      [[ "$value" != '{state: duplicate,' ]] || printf '%s\n' 'pending: confirmation}'
+      printf '%s\n' 'severity: high' --- body
+    } > "$file" || exit 1
+    cp "$file" "$FIXTURE/expected.md" || exit 1
+    addition=''
+    [[ "$mode" != duplicate ]] || addition=$'status: duplicate\nduplicate_of: canonical.md'
+    rc=0
+    _local_dedupe_mark_file "$file" "$addition" note "$mode" > "$FIXTURE/rewrite.log" 2>&1 || rc=$?
+    check test "$rc" -ne 0
+    check grep -q 'preserving' "$FIXTURE/rewrite.log"
+    check cmp -s "$file" "$FIXTURE/expected.md"
+    check test "$(find "$FIXTURE" -name '*.rldedupe.*' | wc -l)" -eq 0
+  done
+done
+# Exercise prefixed multiline, anchor-reference and alias preservation through
+# actual grouping, repetition and the read-only registry in both rewrite roles.
+for value in '&state "duplicate' '!!str "duplicate' '&state duplicate-pending' '*state'; do
+  for role in canonical duplicate; do
+    scenario="grouped-properties/$value/$role"
+    output="$FIXTURE/property-group"
+    mkdir -p "$output" || exit 1
+    for name in canonical duplicate; do
+      severity=high
+      [[ "$name" != canonical ]] || severity=critical
+      {
+        printf '%s\n' --- 'title: Unsafe access to shared state'
+        [[ "$value" != '*state' ]] || printf '%s\n' 'source_status: &state pending'
+        if [[ "$name" == "$role" ]]; then
+          printf '%s\n' "status : $value"
+          [[ "$value" != *'"duplicate' ]] || printf '%s\n' 'pending: confirmation"'
+          [[ "$value" != '&state duplicate-pending' ]] || printf '%s\n' 'previous_status: *state'
+        fi
+        printf '%s\n' "severity: $severity" 'domain: security' "lens: probe-$name" --- body
+      } > "$output/$name.md" || exit 1
+    done
+    cp "$output/$role.md" "$FIXTURE/expected.md" || exit 1
+    check dedupe_local_markdown "$output"
+    check cmp -s "$output/$role.md" "$FIXTURE/expected.md"
+    check dedupe_local_markdown "$output"
+    check cmp -s "$output/$role.md" "$FIXTURE/expected.md"
+    check build_findings_jsonl_from_local "$output" "$FIXTURE/property-registry.jsonl"
+    # A rejected duplicate rewrite remains actionable; canonical preservation
+    # still allows the other ordinary file to receive validated suppression.
+    expected_new=1
+    [[ "$role" != duplicate ]] || expected_new=2
+    check jq -se --argjson n "$expected_new" \
+      'length == 2 and ([.[] | select(.status == "new")] | length) == $n' "$FIXTURE/property-registry.jsonl"
+  done
+done
+# Quoted literal indicators have no YAML property/alias semantics and remain
+# supported, including exact archival and restoration of the original entry.
+for value in '"!literal"' "'&literal'" '"*literal"'; do
+  scenario="literal/$value"
+  file="$FIXTURE/literal.md"
+  printf '%s\n' --- 'title: Shared state' "status: $value" --- body > "$file" || exit 1
+  cp "$file" "$FIXTURE/expected.md" || exit 1
+  check _local_dedupe_mark_file "$file" $'status: duplicate\nduplicate_of: canonical.md' note
+  check _local_dedupe_mark_file "$file" '' ''
+  check cmp -s "$file" "$FIXTURE/expected.md"
+done
 # Blank lines and comments after a complete scalar do not extend its value.
 scenario=single-line-with-comments
 file="$FIXTURE/comments.md"

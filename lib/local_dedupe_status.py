@@ -28,6 +28,16 @@ MANAGED = re.compile(r"^status\s*:\s*(duplicate|\"duplicate\"|'duplicate')(\s+#.
 QUOTED = re.compile(r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?\s*""")
 
 
+def validate_status_line(line):
+    """Refuse forms whose boundaries or references cannot survive line surgery."""
+    value = line.split(":", 1)[1].lstrip()
+    if value.startswith(("!", "&", "*")):
+        raise ValueError("unsupported YAML tag, anchor or alias in status")
+    if (value.startswith(("[", "{"))
+            or (value.startswith(('"', "'")) and not QUOTED.fullmatch(value))):
+        raise ValueError("custom status is not a single-line scalar")
+
+
 def preserve_status(text, mode):
     """Return lossless status surgery, or refuse ambiguous/user-edited metadata.
 
@@ -40,6 +50,11 @@ def preserve_status(text, mode):
     end = lines.index("---", 1)
     mappings = [(i, KEY.match(lines[i])) for i in range(1, end)]
     mappings = [(i, match) for i, match in mappings if match]
+    # Validate before inferring root indentation: a quoted continuation at
+    # column zero can resemble a root key and hide an indented status entry.
+    for i, match in mappings:
+        if match[2].rstrip() == "status":
+            validate_status_line(lines[i])
     root_indent = min((len(match[1]) for _, match in mappings), default=0)
     root = [(i, match) for i, match in mappings if len(match[1]) == root_indent]
     statuses = [i for i, match in root if match[2].rstrip() == "status"]
@@ -50,11 +65,6 @@ def preserve_status(text, mode):
     # removing just the first line would attach its continuation to another key.
     for index in statuses:
         value = lines[index].split(":", 1)[1].lstrip()
-        # Quoted continuations may be unindented and resemble root mappings.
-        # Require a complete first-line scalar before trusting next_root;
-        # escaped double quotes and doubled single quotes do not close it.
-        if value.startswith(('"', "'")) and not QUOTED.fullmatch(value):
-            raise ValueError("custom status is not a single-line scalar")
         next_root = next((i for i, _ in root if i > index), end)
         if value.startswith(("|", ">")) or any(
             line.strip() and not line.lstrip().startswith("#")
@@ -78,6 +88,7 @@ def preserve_status(text, mode):
                 or not STATUS.match(original[root_indent:])
                 or MANAGED.fullmatch(original[root_indent:])):
             raise ValueError("incompatible status archive")
+        validate_status_line(original)
         if mode != "duplicate":
             lines[index] = original
             del lines[statuses[0]]
