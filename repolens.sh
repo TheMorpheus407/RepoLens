@@ -5441,9 +5441,11 @@ fi
 # Multi-round runs finish by consolidating round findings into a schema-checked
 # manifest under logs/<run-id>/final/manifest.json. Single-round runs keep the
 # legacy direct-filing/local-output behavior.
+_current_manifest_accepted=false
 if [[ "$RUN_ROUNDS_RC" -eq 0 && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] && { [[ "$MODE" == "bugreport" && "${ROUNDS:-1}" -gt 1 ]] || { [[ "$MODE" == "branch-review" ]] && ! $LOCAL_MODE; }; }; then
   log_info "Synthesizer: consolidating multi-round findings"
   if run_synthesizer "$RUN_ID"; then
+    _current_manifest_accepted=true
     log_info "Synthesizer: manifest.json promoted"
     # A returning parallel signal trap may have fired during synthesis.
     if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] && ! $LOCAL_MODE; then
@@ -5599,9 +5601,13 @@ fi
 # triage precedent: the registry is a convenience index, not a gate, so a failure
 # warns and never flips the run's final state or return code.
 # Saved registries remain on failure, but consumers need this attempt's rebuild.
+# A failed pre-synthesis retry may retain an older manifest. Only a successful
+# attempt or current acceptance authorizes rebuilding; filing/accounting failures
+# after acceptance must still expose the current findings.
 _registry_ready=false
 if [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
-    && ! $LOCAL_MODE && [[ -f "$LOG_BASE/final/manifest.json" ]]; then
+    && ! $LOCAL_MODE && [[ -f "$LOG_BASE/final/manifest.json" ]] \
+    && { ${_current_manifest_accepted:-false} || [[ "${RUN_ROUNDS_RC:-0}" -eq 0 ]]; }; then
   if build_finding_registry "$RUN_ID"; then
     _registry_ready=true
     log_info "Finding registry: findings.jsonl + findings.csv written"
@@ -5726,12 +5732,8 @@ else
   if [[ -f "$TRIAGE_FINDINGS" && ! -s "$TRIAGE_FINDINGS" \
       && "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] \
       && $_registry_ready; then
-    for _triage_empty_out in TODO.md SUMMARY.md NEEDS_REVIEW.md DUPLICATES.md; do
-      [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || break
-      rm -f -- "$LOG_BASE/final/$_triage_empty_out" \
-        || log_warn "Triage artifact: failed to remove stale $_triage_empty_out"
-    done
-    unset _triage_empty_out
+    retire_empty_triage_reports "$LOG_BASE/final" \
+      || log_warn "Triage artifacts: retirement did not complete"
   fi
   log_info "Triage artifacts: interrupted, unavailable current registry or no findings at $TRIAGE_FINDINGS; skipping"
 fi

@@ -140,7 +140,7 @@ non-stable grouping handle) with the registry `id` (content-derived, stable).
 
 **Empty run:** an authoritative empty manifest is `[]`; the corresponding registry
 is an **empty `findings.jsonl`** (zero lines) plus a **header-only `findings.csv`**.
-After a successful empty local rebuild, finalization removes stale `TODO.md`,
+After a successful empty local or non-local rebuild, finalization removes stale `TODO.md`,
 `SUMMARY.md`, `NEEDS_REVIEW.md` and `DUPLICATES.md`. Failed or interrupted rebuilds
 retain existing reports. Failed traversal or an unreadable local finding also
 preserves the prior registry, CSV and reports. This also applies when enumeration
@@ -150,6 +150,15 @@ appending staged manifest or local records. A nonzero status, including after
 partial output, discards the candidate before replacing JSONL or CSV. Concurrent
 truncation that leaves valid JSONL and a successful `cat` exit is not detected.
 A repaired retry rebuilds the artifacts from the current findings.
+
+Non-local retries that fail before current synthesis acceptance preserve the
+saved registry and reports, including when an older manifest remains. Once a
+current manifest is accepted, later filing or accounting failures still allow
+its findings to refresh reports. Empty-report retirement snapshots all four
+reports before removal; a removal failure or catchable HUP/INT/TERM before the
+retirement commit restores removed paths and retains interruption status. If
+restoration fails, a warning identifies the backup directory for repair. This
+rollback covers returning signal handlers, without crash or power-loss recovery.
 
 Triage and human-review rendering in both local and non-local runs requires a
 successful registry rebuild in the current invocation. A saved registry remains
