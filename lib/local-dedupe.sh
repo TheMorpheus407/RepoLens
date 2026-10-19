@@ -40,7 +40,9 @@
 #     ({lens,domain,markdown_path} per contributor) plus a short body note; it is
 #     NOT itself marked a duplicate (absence is the safe distinguisher, mirroring
 #     lib/synthesize.sh::_synthesize_mark_duplicates).
-# Singletons and files without a valid frontmatter block are left byte-identical.
+# Singletons without a displaced status and invalid frontmatter stay unchanged.
+# Custom statuses displaced by duplicate marking are archived losslessly and
+# restored on canonical promotion or departure from their deterministic group.
 #
 # IDEMPOTENT: the pass OWNS the fields/notes it writes. On every run it strips the
 # pass-owned frontmatter keys (status:duplicate, duplicate_of, also_reported_by)
@@ -50,7 +52,7 @@
 # so a re-run over an already-deduped tree is byte-identical.
 #
 # Sourced, never executed directly. No model is invoked anywhere in this file
-# (project hard rule + issue AC6): the pass is pure bash + jq + awk.
+# (project hard rule + issue AC6): the pass uses bash, jq, awk and Python 3.
 set -uo pipefail
 
 # _local_dedupe_lib_dir
@@ -79,10 +81,22 @@ _local_dedupe_lib_dir() {
 #   members reach here, and those come from build_findings_jsonl_from_local which
 #   requires one). Recheck delimiters while marking in case the file changed
 #   since ingestion; incomplete input fails without replacing the original.
+#   Custom root statuses displaced by duplicate marking are JSON-archived by
+#   local_dedupe_status.py; canonical writes restore them. The optional fourth
+#   argument restore-only skips files without an archive, for singleton cleanup.
+#   Conflicting edits/archives fail without changing the file.
 #   Writes atomically (tmp + mv). No model invoked.
 _local_dedupe_mark_file() {
   local file="$1" fm_add="$2" note="$3"
   local tmp="${file}.rldedupe.$$"
+  local status_tmp="${tmp}.status" mode="${4:-canonical}" rc=0
+  [[ "$fm_add" != $'status: duplicate\n'* ]] || mode=duplicate
+  python3 "$(_local_dedupe_lib_dir)/local_dedupe_status.py" "$file" "$mode" > "$status_tmp" || rc=$?
+  if (( rc != 0 )); then
+    rm -f "$status_tmp"
+    [[ "$mode" == restore-only && "$rc" == 3 ]] && return 0
+    return 1
+  fi
 
   RL_FM_ADD="$fm_add" RL_NOTE="$note" awk '
     BEGIN {
@@ -166,7 +180,8 @@ _local_dedupe_mark_file() {
         print "<!-- repolens-dedupe:end -->"
       }
     }
-  ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  ' "$status_tmp" > "$tmp" || { rm -f "$tmp" "$status_tmp"; return 1; }
+  rm -f "$status_tmp"
 
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
@@ -266,6 +281,24 @@ dedupe_local_markdown() {
     rm -rf "$tmpdir"
     return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
   fi
+
+  # A displaced status must also be restored when edits/thresholds dissolve its
+  # group. Only current parsed nonmembers with an archive need a rewrite.
+  local members_json singleton
+  members_json="$(jq -sc '[.[].member_indices[]]' <<< "$groups_jsonl")" || { rm -rf "$tmpdir"; return 1; }
+  while IFS= read -r -d '' singleton; do
+    if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
+      rm -rf "$tmpdir"
+      return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
+    fi
+    if grep -qE '^[[:space:]]*repolens_dedupe_original_status[[:space:]]*:' "$singleton"; then
+      if ! _local_dedupe_mark_file "$singleton" '' '' restore-only; then
+        echo "dedupe_local_markdown: failed to restore custom status $singleton" >&2
+      fi
+    fi
+  done < <(jq -j --argjson members "$members_json" '
+    to_entries[] | select(.key as $i | $members | index($i) == null)
+    | .value.markdown_path, "\u0000"' "$manifest")
 
   if [[ -z "$groups_jsonl" ]]; then
     echo "dedupe_local_markdown: no duplicate findings under $output_dir" >&2

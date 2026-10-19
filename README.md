@@ -1060,6 +1060,8 @@ Triage reports are generated before the opted-in digest so it can link the avail
 
 Local duplicate marks require a direct link to a different, parsed non-duplicate finding in the same current deterministic group. Grouping uses the current output tree and similarity thresholds, including transitive matches. When that canonical is missing, filtered, invalid or no longer grouped with the finding after edits or threshold changes, the registry restores the finding to `new` for review. Self-links, chains and cycles cannot validate duplicate marks. The original markdown annotations remain as evidence.
 
+When local dedupe displaces a custom single-line status, it preserves the complete original entry in `repolens_dedupe_original_status` and writes one authoritative duplicate status. Promotion or departure from the group restores that entry automatically, even when no groups remain. Conflicting user edits, incompatible archives and multiline status values warn and preserve the affected file for repair. See [the registry schema](docs/finding-registry-schema.md) for the metadata contract.
+
 ## Post-audit validation
 
 Cheap models (a local LLM, MiniMax via `opencode`, and similar) can scan a large repo affordably, but they emit a lot of false positives. `--validate` splits the work: run the heavy `DONE×3` lens scan with a cheap **"Radar"** agent, then pay a flagship **"Filter"** agent only for a fast pass that re-reads the cited code and drops the false positives — instead of running the whole expensive scan on the flagship.

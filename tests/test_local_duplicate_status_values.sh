@@ -18,9 +18,12 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
-# shellcheck source=/dev/null
-source "$REPO/lib/local-dedupe.sh"
+for lib in local-dedupe ledger human_review artifacts; do
+  # shellcheck source=/dev/null
+  source "$REPO/lib/$lib.sh"
+done
 failed=0 checks=0
+# Run an assertion and count failures without ending the remaining scenarios.
 check() {
   checks=$((checks + 1))
   if ! "$@" >/dev/null 2>&1; then
@@ -33,8 +36,11 @@ for padding in '' ' ' $'\t'; do
       'duplicate # managed' '"duplicate" # managed' "'duplicate' # managed"; do
     scenario="managed/$padding/$value"
     printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/managed.md"
-    _local_dedupe_mark_file "$FIXTURE/managed.md" '' ''
+    check _local_dedupe_mark_file "$FIXTURE/managed.md" '' ''
     check test "$(grep -cE '^status[[:space:]]*:' "$FIXTURE/managed.md" || true)" -eq 0
+    printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/managed.md"
+    check _local_dedupe_mark_file "$FIXTURE/managed.md" $'status: duplicate\nduplicate_of: canonical.md' note
+    check test -z "$(_ledger_frontmatter_scalar "$FIXTURE/managed.md" repolens_dedupe_original_status)"
   done
   for value in duplicate-pending duplicate_pending 'duplicate pending' 'duplicate#literal' \
       '"duplicate-pending"' "'duplicate-pending'" '"duplicate pending"' "'duplicate pending'" \
@@ -43,7 +49,7 @@ for padding in '' ' ' $'\t'; do
     scenario="foreign/$padding/$value"
     printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/foreign.md"
     cp "$FIXTURE/foreign.md" "$FIXTURE/expected.md"
-    _local_dedupe_mark_file "$FIXTURE/foreign.md" '' ''
+    check _local_dedupe_mark_file "$FIXTURE/foreign.md" '' ''
     check cmp -s "$FIXTURE/foreign.md" "$FIXTURE/expected.md"
   done
 done
@@ -60,11 +66,11 @@ for padding in ' ' $'\t'; do
       'domain: security' "lens: probe-$name" --- body > "$output/$name.md"
   done
   sed -i "/^severity:/a status$padding: \"duplicate-pending\"" "$output/canonical.md"
-  dedupe_local_markdown "$output" >/dev/null 2>&1
+  check dedupe_local_markdown "$output"
   check grep -qxF "status$padding: \"duplicate-pending\"" "$output/canonical.md"
   check grep -qxF 'status: duplicate' "$output/duplicate.md"
   before="$(sha256sum "$output/"*.md)"
-  dedupe_local_markdown "$output" >/dev/null 2>&1
+  check dedupe_local_markdown "$output"
   check test "$before" = "$(sha256sum "$output/"*.md)"
 done
 printf 'Local duplicate status values: %s checks, %s failures.\n' "$checks" "$failed"

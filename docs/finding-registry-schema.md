@@ -52,6 +52,19 @@ It is built from the existing finding outputs; it does not replace them.
   dedupe warns and leaves that file byte-identical instead of publishing a
   partial rewrite.
 
+Local dedupe preserves a displaced custom root `status` scalar in the reserved
+`repolens_dedupe_original_status` key as a JSON-encoded string containing the
+complete original line, including indentation, spacing, quotes and comments.
+The noncanonical finding then has one authoritative `status: duplicate` and
+one current `duplicate_of` link. Exact managed `duplicate` scalars are never
+archived. Canonical custom statuses remain unchanged. On promotion or group
+dissolution, dedupe restores the original entry and removes the archive and
+managed marks, including when no duplicate groups remain. Repeated dedupe keeps
+the archive unchanged. Incompatible archives, subsequent custom-status edits
+and multiline custom status values warn and leave the affected file unchanged;
+other files retain the existing best-effort dedupe behavior. Registry ingestion
+only reads these files and still validates duplicate links before suppression.
+
 For explicit-local bugreports, eligible ordinary destination files reserve the
 shared `--max-issues` capacity, including files from earlier runs and files
 written before an interrupted lens saved its summary. Ordinary capacity requires
