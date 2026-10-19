@@ -27,6 +27,7 @@ source "$REPO/lib/artifacts.sh"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 failed=0 checks=0
+# Count step failures while allowing later cases and the final summary to run.
 check() {
   checks=$((checks + 1))
   if ! "$@" >/dev/null 2>&1; then
@@ -132,5 +133,40 @@ sed -i 's/^title:.*/title: Insecure database connection defaults/' "$output/1-a.
 check build_finding_registry probe "$output"
 check jq -se '(map(select(.status == "new")) | length) == 4
   and (map(select(.status == "duplicate")) | length) == 2' "$LOG_BASE/final/findings.jsonl"
+
+# Embedded quotes in flow plain scalars must not prevent real group updates.
+for value in '[pending, needs "manual review]' '{phase: needs '\''manual review}'; do
+  scenario="grouped flow plain quotes / $value"
+  output="$FIXTURE/flow-output"
+  mkdir -p "$output"
+  printf -- '---\ntitle: Unsafe access to shared state\nseverity: high\nlens: probe-a\nstatus : %s\n---\nEvidence: src/state.sh:12\n' "$value" > "$output/a.md"
+  printf -- '---\ntitle: Unsafe access to shared state\nseverity: critical\nlens: probe-b\n---\nEvidence: src/state.sh:12\n' > "$output/b.md"
+  for role in duplicate canonical; do
+    if [[ "$role" == canonical ]]; then
+      sed -i 's/^severity: high$/severity: critical/' "$output/a.md"
+      sed -i 's/^severity: critical$/severity: high/' "$output/b.md"
+    fi
+    check dedupe_local_markdown "$output"
+    if [[ "$role" == duplicate ]]; then
+      check grep -qxF 'status: duplicate' "$output/a.md"
+      backup="$(sed -n 's/^repolens_dedupe_original_status: //p' "$output/a.md")"
+      check test "$(jq -r . <<< "$backup")" = "status : $value"
+    else
+      check grep -qxF "status : $value" "$output/a.md"
+      check test "$(grep -c '^repolens_dedupe_original_status:' "$output/a.md" || true)" -eq 0
+    fi
+    before="$(sha256sum "$output/"*.md)"
+    check dedupe_local_markdown "$output"
+    check test "$before" = "$(sha256sum "$output/"*.md)"
+    LOG_BASE="$FIXTURE/flow-logs/probe"
+    check build_finding_registry probe "$output"
+    check jq -se 'length == 2 and (map(.status) | sort) == ["duplicate", "new"]' "$LOG_BASE/final/findings.jsonl"
+    check render_human_review_digest probe
+    check generate_todo_md "$LOG_BASE/final/findings.jsonl" "$LOG_BASE/final/TODO.md"
+    check test "$(grep -c '^### ' "$LOG_BASE/final/HUMAN_REVIEW.md")" -eq 1
+    check test "$(grep -c ',"new",' "$LOG_BASE/final/findings.csv")" -eq 1
+    check test "$(grep -c '^## ' "$LOG_BASE/final/TODO.md")" -eq 1
+  done
+done
 printf 'Local dedupe status values: %s checks, %s failures.\n' "$checks" "$failed"
 (( failed == 0 ))

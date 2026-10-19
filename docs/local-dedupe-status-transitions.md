@@ -18,7 +18,7 @@ covers status behavior for group members, plus singleton and stale-link handling
 | T02 | Custom status → C → D | Archive the exact line once; write one authoritative duplicate status. |
 | T03 | Custom status → D → D | Keep the same backup and byte-identical duplicate document. |
 | T04 | Custom status → D → C | Restore the exact status line and consume the backup. |
-| T05 | Custom status → D → C → D → D → C → C | Each swap restores or archives once; repeated roles remain identical. |
+| T05 | Custom status → C → D → C → D → D → C → C, including quotes in flow plain scalars | Each swap restores or archives once; repeated roles remain identical. |
 | T06 | No status → C → D → D → C | Generate no custom backup; final canonical has no status. |
 | T07 | Spaced/tabbed exact managed duplicate → C or D | C removes the mark; D replaces it with one duplicate status; never archive it. |
 | T08 | Archive → replace generated status with conflicting custom status → D → C | Reject both calls and retain all bytes, including the backup. |

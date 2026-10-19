@@ -21,6 +21,7 @@ source "$REPO/lib/local-dedupe.sh"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 checks=0 failed=0
+# Count step failures while allowing later cases and the final summary to run.
 check() {
   checks=$((checks + 1))
   if ! "$@" >/dev/null 2>&1; then
@@ -32,6 +33,7 @@ check() {
 fixture() {
   printf -- '---\ntitle: Saved finding\nseverity: high\ndetails:\n  retained: yes\n%s---\nEvidence: keep this\n' "$1" > "$FIXTURE/input.md"
 }
+# Request the canonical or duplicate role through the production marker.
 mark() {
   local additions=''
   [[ "$1" != D ]] || additions=$'status: duplicate\nduplicate_of: canonical.md'
@@ -75,8 +77,12 @@ for scenario in T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 
       check cmp -s "$FIXTURE/original.md" "$FIXTURE/input.md"
       ;;
     T05)
-      for role in D C D D C C; do check mark "$role"; done
-      check cmp -s "$FIXTURE/original.md" "$FIXTURE/input.md"
+      for value in 'needs-validation # retain' '[pending, needs "manual review]' '{phase: needs '\''manual review}'; do
+        fixture "status : $value"$'\n'
+        cp "$FIXTURE/input.md" "$FIXTURE/original.md"
+        for role in C D C D D C C; do check mark "$role"; done
+        check cmp -s "$FIXTURE/original.md" "$FIXTURE/input.md"
+      done
       ;;
     T06)
       fixture ''

@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   Leave unsupported multiline statuses intact, including root-aligned quoted/flow continuations and comment-only blocks, and reject incomplete saved values before restoration.
   Preserve files and saved statuses when promotion would restore obsolete root indentation after a frontmatter edit.
   Reject saved backups of the managed duplicate status instead of restoring a misleading mark during promotion.
+  Accept complete flow statuses containing quotes inside plain scalars so valid findings still receive duplicate updates and restore their original status on promotion.
 
 - Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).
 

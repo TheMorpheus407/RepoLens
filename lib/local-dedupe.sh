@@ -165,7 +165,7 @@ _local_dedupe_mark_file() {
     }
     # Reject scalar headers and unfinished quotes/flow collections whose value
     # needs further lines. Complete inline values remain losslessly restorable.
-    function complete_status_line(text,    first, quote, stack, i, c, previous) {
+    function complete_status_line(text,    first, quote, stack, i, c, previous, node_start, plain) {
       sub(/^[[:space:]]*status[[:space:]]*:[[:space:]]*/, "", text)
       # Node properties may precede quoted, block or flow values.
       while (sub(/^(!<[^>]*>|![^[:space:]]*|&[^[:space:]]+)[[:space:]]+/, "", text)) {}
@@ -173,6 +173,7 @@ _local_dedupe_mark_file() {
       # Even empty blocks have content/indentation semantics beyond this line.
       if (first == "|" || first == ">") return 0
       if (first != "\"" && first != "'\''" && first != "[" && first != "{") return 1
+      node_start = 1
       for (i = 1; i <= length(text); i++) {
         c = substr(text, i, 1)
         if (quote != "") {
@@ -184,13 +185,30 @@ _local_dedupe_mark_file() {
         } else {
           previous = i > 1 ? substr(text, i - 1, 1) : " "
           if (c == "#" && previous ~ /[[:space:]]/) return 0
-          if ((c == "\"" || c == "'\''") && previous ~ /[[:space:]\[{:,]/) quote = c
-          else if (c == "[" || c == "{") stack = stack c
+          if (c ~ /[[:space:]]/) continue
+          if (stack != "" && node_start && c == "?") continue
+          if (node_start && (c == "!" || c == "&")) {
+            if (c == "!" && substr(text, i + 1, 1) == "<") {
+              while (i < length(text) && substr(text, i, 1) != ">") i++
+            } else {
+              while (i < length(text) && substr(text, i + 1, 1) !~ /[[:space:]\[\]{},]/) i++
+            }
+            continue
+          }
+          # Quotes only open nodes; whitespace within a plain scalar does not.
+          if (node_start && (c == "\"" || c == "'\''")) { quote = c; node_start = 0; plain = 0 }
+          else if (c == "[" || c == "{") { stack = stack c; node_start = 1; plain = 0 }
+          else if (stack != "" && (c == "," || (c == ":" &&
+                   (!plain || i == length(text) || substr(text, i + 1, 1) ~ /[[:space:]\[\]{},]/)))) {
+            node_start = 1; plain = 0
+          }
           else if (c == "]" || c == "}") {
             if ((c == "]" && substr(stack, length(stack)) != "[") ||
                 (c == "}" && substr(stack, length(stack)) != "{")) return 0
             stack = substr(stack, 1, length(stack) - 1)
+            node_start = 0; plain = 0
           }
+          else { node_start = 0; plain = 1 }
         }
         # A closed quoted scalar or outer flow collection must end this line.
         if (quote == "" && stack == "")

@@ -21,6 +21,7 @@ source "$REPO/lib/local-dedupe.sh"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 checks=0 failed=0
+# Count step failures while allowing later cases and the final summary to run.
 check() {
   checks=$((checks + 1))
   if ! "$@" >/dev/null 2>&1; then
@@ -55,6 +56,17 @@ values=(
   '?&workflow'
   '[?ordinary &workflow]'
   '{"&workflow": "needs \"validation\""}'
+  # Quotes inside a flow plain scalar are data, even after whitespace/colon.
+  '[pending, needs "manual review]'
+  "[pending, needs 'manual review]"
+  '{phase: needs "manual review}'
+  '{needs "manual review: pending}'
+  '[phase:"manual review]'
+  '[?needs "manual review: pending]'
+  '[! needs "manual review]'
+  '[!!str needs "manual review]'
+  '[needs "manual review, {phase: [pending, needs '\''approval]}]'
+  '[needs "manual review, "quoted"]'
 )
 for indent in '' '  '; do
   for padding in '' ' ' $'\t'; do

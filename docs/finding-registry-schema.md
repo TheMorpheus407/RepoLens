@@ -158,6 +158,9 @@ indentation allows the saved status to be restored on retry.
 Canonical custom statuses stay in their original position, preserving anchor
 definitions before aliases. Quoted ampersands and ampersands in plain values or
 comments remain ordinary status data.
+Complete flow values remain supported when their plain scalars contain quotes,
+such as `status: [pending, needs "manual review]`; only quotes starting a node
+introduce a quoted scalar.
 Singletons retain their annotations; registry rebuilding still restores review
 eligibility when a saved duplicate link is no longer valid.
 The [status transition table](local-dedupe-status-transitions.md) specifies the
