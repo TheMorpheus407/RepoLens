@@ -24,6 +24,8 @@ source "$REPO/lib/ledger.sh"
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 passed=0 failed=0
+# check <description> <command> [args...]
+# Run an assertion, count its result, and report failures without ending the suite.
 check() {
   local description="$1"; shift
   if "$@"; then passed=$((passed + 1));
