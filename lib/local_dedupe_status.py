@@ -43,6 +43,18 @@ def preserve_status(text, mode):
     root = [(i, match) for i, match in mappings if len(match[1]) == root_indent]
     statuses = [i for i, match in root if match[2].rstrip() == "status"]
     archives = [i for i, match in root if match[2].rstrip() == ARCHIVE]
+
+    # Inspect the complete entry before classifying its first line as managed.
+    # A plain scalar such as `duplicate\n  pending` is a custom folded value;
+    # removing just the first line would attach its continuation to another key.
+    for index in statuses:
+        value = lines[index].split(":", 1)[1].lstrip()
+        next_root = next((i for i, _ in root if i > index), end)
+        if value.startswith(("|", ">")) or any(
+            line.strip() and not line.lstrip().startswith("#")
+            for line in lines[index + 1:next_root]
+        ):
+            raise ValueError("custom status is not a single-line scalar")
     custom = [i for i in statuses if not MANAGED.fullmatch(lines[i].lstrip())]
 
     if archives:
@@ -69,14 +81,6 @@ def preserve_status(text, mode):
         if len(custom) != 1 or len(statuses) > 2:
             raise ValueError("multiple custom status entries")
         index = custom[0]
-        # A single-line archive cannot safely represent a nested/block value.
-        value = lines[index].split(":", 1)[1].lstrip()
-        next_root = next((i for i, _ in root if i > index), end)
-        if value.startswith(("|", ">")) or any(
-            line.strip() and not line.lstrip().startswith("#")
-            for line in lines[index + 1:next_root]
-        ):
-            raise ValueError("custom status is not a single-line scalar")
         prefix = lines[index][:root_indent]
         lines[index] = prefix + ARCHIVE + ": " + json.dumps(lines[index], ensure_ascii=True)
     return "\n".join(lines)
