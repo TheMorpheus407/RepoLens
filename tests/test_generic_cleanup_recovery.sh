@@ -32,6 +32,12 @@ spec = importlib.util.spec_from_file_location("generic_output", Path(sys.argv[1]
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+# Pinned pre-preparing implementation; independent of git history availability.
+old_spec = importlib.util.spec_from_file_location(
+    "generic_output_eb34142", Path(sys.argv[1]) / "tests/fixtures/generic_output_eb34142.py")
+old_reader = importlib.util.module_from_spec(old_spec)
+old_spec.loader.exec_module(old_reader)
+
 def projections(root):
     """Capture public bytes without counting private backups or another stage."""
     return {p.relative_to(root): p.read_bytes() for p in (root / "generic").rglob("*.md")}
@@ -139,6 +145,18 @@ def case_cleanup(scenario):
         if preparing:
             stage = Path(json.loads(pending.read_text())["stage"])
             assert sum(p.stat().st_size for p in stage.glob("backup-*")) > 10000, "backup fault not reached"
+            # Downgrade must fail closed until a supported reader recovers.
+            # Include receipt staging, private copies and unrelated files.
+            before_downgrade = {p.relative_to(base): p.read_bytes()
+                                for p in base.rglob("*") if p.is_file()}
+            try:
+                old_reader.publish(plan, root, receipt, "run")
+            except ValueError as error:
+                assert str(error) == "invalid Generic recovery phase", error
+            else:
+                raise AssertionError("older reader accepted pending preparation")
+            assert {p.relative_to(base): p.read_bytes()
+                    for p in base.rglob("*") if p.is_file()} == before_downgrade, "downgrade changed saved state"
         if scenario == "after-stage-removal":
             assert not Path(json.loads(pending.read_text())["stage"]).exists(), "stage deletion did not complete"
         if scenario == "edited-after-commit":
@@ -188,6 +206,12 @@ def case_cleanup(scenario):
         assert set(root.glob(".generic-delivery-*")) == {foreign}, "orphaned owned backups"
         assert not list(base.glob(".generic-receipt-*")), "orphaned receipt staging"
         assert (foreign / "sentinel").read_text() == "another transaction\n"
+        if preparing:
+            # Once updated recovery finishes, older publication works again.
+            old_reader.publish(plan, root, receipt, "run")
+            assert len(projections(root)) == 3 and len(json.loads(receipt.read_text())) == 3
+            assert all(data.endswith(plan[0]["body"].encode()) for data in projections(root).values())
+            assert not pending.exists() and set(root.glob(".generic-delivery-*")) == {foreign}
         module.publish(plan, root, receipt, "run")
         published, published_receipt = projections(root), receipt.read_bytes()
         assert len(published) == 3 and len(json.loads(published_receipt)) == 3

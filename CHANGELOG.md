@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Journal Generic delivery preparation before copying finding content, so retries reclaim backups and staged projections left by process death; catchable preparation failures trigger immediate cleanup (repolens-r15-p8-5).
+- Journal Generic delivery preparation before copying finding content, so retries reclaim backups and staged projections left by process death; catchable preparation failures trigger immediate cleanup. Recover pending preparation with this revision or newer before downgrading to an older reader (repolens-r15-p8-5).
 
 - Preserve the last complete round digest when final finding sorting or sorted-input redirection fails, including sort failures after producing output (repolens-r15-p7-3).
 

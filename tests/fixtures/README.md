@@ -1,5 +1,11 @@
 # Test Fixtures
 
+`generic_output_eb34142.py` is an unchanged snapshot of `lib/generic_output.py`
+from commit `eb34142d7e86538e23dc5f8b26a56ae4f5fd3ffa`. The cleanup recovery suite
+uses this pinned older reader to verify the downgrade prerequisite without
+depending on git history: pending preparation must be recovered by an updated
+reader before the older publisher can resume delivery. Keep the snapshot frozen.
+
 `test_key` and `test_key.pub` are a passwordless ed25519 keypair committed
 intentionally for the Docker SSH integration test.
 
