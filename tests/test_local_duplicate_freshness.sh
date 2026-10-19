@@ -23,6 +23,7 @@ for lib in ledger local-dedupe human_review artifacts; do
   source "$REPO/lib/$lib.sh"
 done
 failed=0 checks=0
+# Count each assertion and retain failures so all scenarios can report results.
 check() {
   checks=$((checks + 1))
   if ! "$@" >/dev/null 2>&1; then
@@ -30,6 +31,7 @@ check() {
     failed=$((failed + 1))
   fi
 }
+# Write one standalone finding with the supplied lens suffix, title and severity.
 write_finding() {
   cat > "$OUTPUT_DIR/$1.md" <<EOF
 ---
@@ -41,7 +43,7 @@ lens: probe-$1
 Evidence for $2 at src/state.sh:12.
 EOF
 }
-for scenario in edited-duplicate edited-canonical threshold valid transitive spaced-link tabbed-link; do
+for scenario in edited-duplicate edited-canonical threshold valid transitive spaced-link tabbed-link spaced-status tabbed-status; do
   LOG_BASE="$FIXTURE/$scenario/logs/probe"
   OUTPUT_DIR="$FIXTURE/$scenario/output"
   mkdir -p "$OUTPUT_DIR"
@@ -70,7 +72,18 @@ for scenario in edited-duplicate edited-canonical threshold valid transitive spa
     dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
     check test "$before_dedupe" = "$(sha256sum "$OUTPUT_DIR/"*.md)"
   fi
-  check grep -qE '^status: duplicate$' "$OUTPUT_DIR/a.md"
+  duplicate_path="$OUTPUT_DIR/a.md"
+  if [[ "$scenario" == spaced-status || "$scenario" == tabbed-status ]]; then
+    # A previous duplicate becomes canonical after its severity is raised.
+    padding=' '
+    [[ "$scenario" != tabbed-status ]] || padding=$'\t'
+    sed -i "s/^status:.*/status${padding}: duplicate/; s/^severity:.*/severity: critical/" "$OUTPUT_DIR/a.md"
+    sed -i 's/^severity:.*/severity: high/' "$OUTPUT_DIR/b.md"
+    dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
+    check test "$(grep -cE '^status[[:space:]]*:' "$OUTPUT_DIR/a.md" || true)" -eq 0
+    duplicate_path="$OUTPUT_DIR/b.md"
+  fi
+  check grep -qE '^status: duplicate$' "$duplicate_path"
   case "$scenario" in
     edited-duplicate) sed -i 's/^title:.*/title: Credentials exposed through request logs/' "$OUTPUT_DIR/a.md" ;;
     edited-canonical) sed -i 's/^title:.*/title: Credentials exposed through request logs/' "$OUTPUT_DIR/b.md" ;;

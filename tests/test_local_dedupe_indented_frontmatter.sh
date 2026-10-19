@@ -29,8 +29,12 @@ check() {
   if "$@"; then passed=$((passed + 1));
   else failed=$((failed + 1)); printf 'FAIL: %s\n' "$description" >&2; fi
 }
-for indent in '  ' '    '; do
-  output="$FIXTURE/indent-${#indent}"
+for scenario in plain-2 plain-4 space-2 space-4 tab-2 tab-4; do
+  spacing="${scenario%-*}"
+  printf -v indent '%*s' "${scenario##*-}" ''
+  padding=''
+  case "$spacing" in space) padding=' ' ;; tab) padding=$'\t' ;; esac
+  output="$FIXTURE/$spacing/indent-${#indent}"
   mkdir -p "$output/performance/algorithm" "$output/security/authorization"
   canonical="$output/performance/algorithm/a.md"
   duplicate="$output/security/authorization/b.md"
@@ -41,7 +45,7 @@ for indent in '  ' '    '; do
       printf '%s\n' '---'
       # An old provenance block BEFORE other root fields exercises stripping
       # without consuming equally indented canonical metadata on the next pass.
-      printf '%s%s\n' "$indent" 'also_reported_by:'
+      printf '%salso_reported_by%s:\n' "$indent" "$padding"
       printf '%s  - lens: stale\n%s    domain: stale\n' "$indent" "$indent"
       printf '%stitle: Repeated work for the same request\n' "$indent"
       printf '%sseverity: %s\n' "$indent" "$severity"
@@ -67,6 +71,7 @@ for indent in '  ' '    '; do
   LOG_BASE="$FIXTURE/run-${#indent}"
   check 'registry validates and publishes after dedupe' build_finding_registry fixture "$output"
   for path in "$canonical" "$duplicate"; do
+    check 'stale root provenance is removed' test "$(grep -c 'lens: stale' "$path" || true)" -eq 0
     check 'nested status is preserved' grep -qxF "${indent}  status: duplicate" "$path"
     check 'nested link is preserved' grep -qxF "${indent}  duplicate_of: nested-only.md" "$path"
     check 'nested provenance is preserved' grep -qxF "${indent}  also_reported_by: keep nested data" "$path"
