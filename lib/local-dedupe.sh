@@ -110,7 +110,8 @@ _local_dedupe_mark_file() {
         text = substr(line, indent + 1)
         if (indent == root_indent) {
           if (text ~ /^also_reported_by:/) { skip_arb = 1; continue }
-          if (text ~ /^status[[:space:]]*:[[:space:]]*["'\'']?duplicate/) continue
+          # Only the complete managed scalar is ours, including paired quotes.
+          if (text ~ /^status[[:space:]]*:[[:space:]]*(duplicate|"duplicate"|'\''duplicate'\'')([[:space:]]+#.*)?[[:space:]]*$/) continue
           if (text ~ /^duplicate_of[[:space:]]*:/) continue
         }
         print line
