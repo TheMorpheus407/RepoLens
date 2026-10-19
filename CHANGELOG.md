@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject directory and directory-symlink CSV destinations with portable exact-path publication, propagate projection failure to the registry caller, and remove failed stages for a repaired retry (repolens-r15-p5-2).
+
 - Decode single-line double-quoted YAML escapes before publishing Generic titles, preserving terminal newlines and Unicode separators, excluding trailing comments, and retaining literal backslashes in other scalar styles. Keep admission metadata and digest/verifier identities unchanged, and retain prior deliveries if decoding fails (repolens-r15-p4-1).
 
 - Reject directory and symlink obstructions for saved Cross-Link payloads, and use portable exact-path replacement for promotion and rollback so candidates and recovery bytes cannot be nested outside their artifact paths (repolens-r15-p3-1).

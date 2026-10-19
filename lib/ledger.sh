@@ -763,8 +763,8 @@ build_findings_jsonl_from_local() {
 #   titles with shell metacharacters or unicode are never shell-evaluated.
 #
 #   Sibling of build_findings_jsonl_from_{manifest,local}: same atomic-write
-#   (tmp + mv) + jq-owns-escaping discipline. Pure: reads the JSONL, writes the
-#   CSV. An empty findings.jsonl yields a header-only CSV (matching the empty,
+#   (staging + exact-path rename) + jq-owns-escaping discipline. Pure: reads the
+#   JSONL, writes the CSV. An empty findings.jsonl yields a header-only CSV (matching the empty,
 #   zero-line registry), exit 0. Returns non-zero on missing args or a missing
 #   input file (no output written), and on a jq/IO failure (tmp cleaned up).
 build_findings_csv() {
@@ -791,7 +791,18 @@ build_findings_csv() {
     | @csv
   ' "$in" >> "$tmp" || { rm -f "$tmp"; return 1; }
 
-  mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }
+  # Share the portable exact-path promoter used by local JSONL and reports.
+  # Load in a subshell to preserve standalone callers' shell state.
+  if ! (
+    # shellcheck source=lib/artifacts.sh
+    source "$(_ledger_repo_root)/lib/artifacts.sh" || exit 1
+    _artifacts_replace_report "$tmp" "$out"
+  ); then
+    # Imported artifact functions have their own local tmp; ours is unchanged.
+    # shellcheck disable=SC2031
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 # validate_findings_jsonl <findings_jsonl_path>

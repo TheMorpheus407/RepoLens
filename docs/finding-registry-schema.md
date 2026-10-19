@@ -172,6 +172,12 @@ atomically. Directory and directory-symlink destinations fail without changing
 their contents, and failed publication removes staged registry files. Relative
 sourcing of `lib/ledger.sh` remains valid after the caller changes directories.
 
+CSV publication uses the same portable exact-path replacement through Python 3.
+A directory or symlink to a directory at `findings.csv` fails without nested
+writes and removes the staged CSV. The registry caller returns failure, and a
+repaired retry regenerates the CSV. Symlinks to files and dangling symlinks are
+replaced at the requested path; their targets are never written through.
+
 Triage reports replace their requested file paths atomically. A directory or
 symlink to a directory at a report path causes generation to fail, preserving
 the directory contents and cleaning staged Markdown. Promotion never puts a

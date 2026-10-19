@@ -138,7 +138,7 @@ finish() {
 }
 
 # --- Source lib/ledger.sh ALONE (must stay self-contained) -----------------
-# build_findings_csv only needs jq + coreutils, so ledger must still source on
+# build_findings_csv uses jq + coreutils + Python 3, and ledger must source on
 # its own (no hard dep on lib/core.sh / logging.sh). Sourcing alone here proves
 # that contract and doubles as the TDD red-phase guard: before the function
 # exists, we fail with a single clear message instead of a cascade.
@@ -227,9 +227,8 @@ echo "=== real CSV-parser round-trip (python3 csv module) ==="
 
 # The authoritative round-trip: parse the CSV with a real RFC-4180 reader and
 # assert the tricky title decodes byte-for-byte, null JSONL fields decode to
-# empty cells, and the omitted fields are not columns. Guarded — python3 is not
-# a hard test dependency; skip with a logged note when absent (the always-run
-# greps above still cover the quoting/omission ACs without it).
+# empty cells, and the omitted fields are not columns. Python 3 is also required
+# by the production exact-path CSV promoter.
 if command -v python3 >/dev/null 2>&1; then
   py_rc=0
   python3 - "$out_csv" <<'PYEOF' || py_rc=$?
