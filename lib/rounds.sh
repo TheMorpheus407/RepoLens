@@ -2760,6 +2760,16 @@ build_round_digest() {
     done
   done
 
+  # Complete sorting before rendering: process substitution hides a sort
+  # failure, including one that emitted rows before failing.
+  local sorted_finding_records=""
+  if (( ${#finding_records[@]} > 0 )); then
+    sorted_finding_records="$(printf '%s\n' "${finding_records[@]}" | LC_ALL=C sort -t "$(printf '\t')" -k1,1nr -k2,2 -k3,3)" || {
+      _round_digest_warn "Unable to sort complete round findings; preserving previous digest"
+      return 1
+    }
+  fi
+
   tmp_digest="${digest_path}.tmp.$$"
   {
     printf '# Round Digest\n\n'
@@ -2852,7 +2862,7 @@ build_round_digest() {
           fi
           printf ' hypothesis="%s"\n' "$record_hypothesis"
           emitted=$((emitted + 1))
-        done < <(printf '%s\n' "${finding_records[@]}" | LC_ALL=C sort -t "$(printf '\t')" -k1,1nr -k2,2 -k3,3)
+        done <<< "$sorted_finding_records"
 
         omitted_total=0
         for lens in "${!_round_digest_omitted_lens_counts[@]}"; do
