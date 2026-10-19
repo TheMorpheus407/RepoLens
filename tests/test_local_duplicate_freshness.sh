@@ -43,7 +43,10 @@ lens: probe-$1
 Evidence for $2 at src/state.sh:12.
 EOF
 }
-for scenario in edited-duplicate edited-canonical threshold valid transitive spaced-link tabbed-link spaced-status tabbed-status spaced-single-status tabbed-single-status spaced-double-status tabbed-double-status; do
+for scenario in edited-duplicate edited-canonical threshold valid transitive spaced-link tabbed-link \
+  spaced-status tabbed-status spaced-single-status tabbed-single-status spaced-double-status tabbed-double-status \
+  spaced-comment-status tabbed-comment-status spaced-single-comment-status tabbed-single-comment-status \
+  spaced-double-comment-status tabbed-double-comment-status; do
   LOG_BASE="$FIXTURE/$scenario/logs/probe"
   OUTPUT_DIR="$FIXTURE/$scenario/output"
   mkdir -p "$OUTPUT_DIR"
@@ -80,6 +83,8 @@ for scenario in edited-duplicate edited-canonical threshold valid transitive spa
     value=duplicate
     [[ "$scenario" != *single* ]] || value="'duplicate'"
     [[ "$scenario" != *double* ]] || value='"duplicate"'
+    # Exercise YAML comments and surrounding whitespace for every quoting form.
+    [[ "$scenario" != *comment* ]] || value+=$' \t# managed duplicate \t'
     sed -i "s/^status:.*/status${padding}: $value/; s/^severity:.*/severity: critical/" "$OUTPUT_DIR/a.md"
     sed -i 's/^severity:.*/severity: high/' "$OUTPUT_DIR/b.md"
     dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
