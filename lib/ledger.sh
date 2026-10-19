@@ -378,9 +378,9 @@ build_findings_jsonl_from_manifest() {
 #   double or single quotes. A frontmatter `title: "[high] X"` must de-quote to
 #   the bare `[high] X` so it earns the SAME finding_id as the manifest path
 #   (the surrounding quotes otherwise prevent the [severity] prefix from being
-#   stripped during normalization — an id-divergence bug). Self-contained
-#   replica of lib/rounds.sh::_round_digest_trim_yaml_value (no dependency, to
-#   keep lib/ledger.sh sourceable on its own).
+#   stripped during normalization — an id-divergence bug). This ordinary-header
+#   helper keeps ledger.sh sourceable on its own. Generic projection titles are
+#   JSON-quoted by the publisher and decoded separately during ingestion below.
 _ledger_trim_yaml_value() {
   local v="$*"
   v="${v#"${v%%[![:space:]]*}"}"
@@ -615,7 +615,10 @@ build_findings_jsonl_from_local() {
     if [[ "$domain" == generic && "$generic_source_id" =~ ^[a-f0-9]{64}$ ]]; then
       # Projected blocks may share title/lens while owning separate evidence.
       raw_value="$(_ledger_frontmatter_scalar "$snapshot" title)" || { ingest_failed=1; break; }
-      title="$(jq -r . <<< "$raw_value")" || { ingest_failed=1; break; }
+      # A successful JSON decode appends a sentinel so command substitution
+      # cannot discard LF bytes belonging to the title itself.
+      title="$(jq -jr '. + "."' <<< "$raw_value")" || { ingest_failed=1; break; }
+      title="${title%.}"
       id="$(finding_id "$domain" "$lens" "$title" "generic:$generic_source_id")" || { ingest_failed=1; break; }
     else
       id="$(finding_id "$domain" "$lens" "$title")" || { ingest_failed=1; break; }
