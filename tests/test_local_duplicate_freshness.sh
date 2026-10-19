@@ -43,7 +43,7 @@ lens: probe-$1
 Evidence for $2 at src/state.sh:12.
 EOF
 }
-for scenario in edited-duplicate edited-canonical threshold valid transitive spaced-link tabbed-link; do
+for scenario in edited-duplicate edited-canonical threshold valid transitive spaced-link tabbed-link spaced-status tabbed-status spaced-single-status tabbed-single-status spaced-double-status tabbed-double-status; do
   LOG_BASE="$FIXTURE/$scenario/logs/probe"
   OUTPUT_DIR="$FIXTURE/$scenario/output"
   mkdir -p "$OUTPUT_DIR"
@@ -72,7 +72,25 @@ for scenario in edited-duplicate edited-canonical threshold valid transitive spa
     dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
     check test "$before_dedupe" = "$(sha256sum "$OUTPUT_DIR/"*.md)"
   fi
-  check grep -qE '^status: duplicate$' "$OUTPUT_DIR/a.md"
+  duplicate_path="$OUTPUT_DIR/a.md"
+  if [[ "$scenario" == *status ]]; then
+    # A previous duplicate becomes canonical after its severity is raised.
+    padding=' '
+    [[ "$scenario" != tabbed* ]] || padding=$'\t'
+    value=duplicate
+    [[ "$scenario" != *single* ]] || value="'duplicate'"
+    [[ "$scenario" != *double* ]] || value='"duplicate"'
+    sed -i "s/^status:.*/status${padding}: $value/; s/^severity:.*/severity: critical/" "$OUTPUT_DIR/a.md"
+    sed -i 's/^severity:.*/severity: high/' "$OUTPUT_DIR/b.md"
+    dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
+    check test "$(grep -cE '^status[[:space:]]*:' "$OUTPUT_DIR/a.md" || true)" -eq 0
+    duplicate_path="$OUTPUT_DIR/b.md"
+    check grep -qxF 'duplicate_of: a.md' "$duplicate_path"
+    before_dedupe="$(sha256sum "$OUTPUT_DIR/"*.md)"
+    dedupe_local_markdown "$OUTPUT_DIR" >/dev/null 2>&1
+    check test "$before_dedupe" = "$(sha256sum "$OUTPUT_DIR/"*.md)"
+  fi
+  check grep -qE '^status: duplicate$' "$duplicate_path"
   case "$scenario" in
     edited-duplicate) sed -i 's/^title:.*/title: Credentials exposed through request logs/' "$OUTPUT_DIR/a.md" ;;
     edited-canonical) sed -i 's/^title:.*/title: Credentials exposed through request logs/' "$OUTPUT_DIR/b.md" ;;
