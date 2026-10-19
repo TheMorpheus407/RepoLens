@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - Remove spaced duplicate status keys when local dedupe promotes a previous duplicate to canonical, preserving one actionable finding after registry rebuilding (repolens-r15-pr534-fn-1).
+  Preserve other status values beginning with `duplicate`, including user-authored candidate and pending states.
+  Retain custom non-canonical status metadata losslessly while assigning one duplicate status, and restore it on canonical promotion.
 
 - Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).
 

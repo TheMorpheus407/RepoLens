@@ -44,8 +44,10 @@
 #
 # IDEMPOTENT: the pass OWNS the fields/notes it writes. On every run it strips the
 # pass-owned frontmatter keys (status:duplicate, duplicate_of, also_reported_by)
-# and the sentinel-wrapped body note FIRST, then recomputes them. Grouping keys
-# only off title/severity/domain/lens (build_findings_jsonl_from_local derives
+# and the sentinel-wrapped body note FIRST, then recomputes them. Other statuses
+# on non-canonicals are saved losslessly in repolens_dedupe_original_status and
+# restored on canonical promotion, leaving one authoritative root status. Grouping
+# keys only off title/severity/domain/lens (build_findings_jsonl_from_local derives
 # records purely from those frontmatter fields), never off the pass-owned marks,
 # so a re-run over an already-deduped tree is byte-identical.
 #
@@ -60,13 +62,29 @@ _local_dedupe_lib_dir() {
   ( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )
 }
 
+# Shared jq serializer: JSON escapes plus YAML-forbidden/folded Unicode bytes.
+_local_dedupe_yaml_string_filter() {
+  cat <<'JQ'
+      def yaml_string:
+        @json | explode | map(
+          if (. >= 127 and . <= 159) or . == 8232 or . == 8233
+             or . == 65534 or . == 65535 then
+            . as $cp | "\\u" + ([4096, 256, 16, 1]
+              | map((($cp / . | floor) % 16) as $digit
+                  | "0123456789abcdef"[$digit:$digit+1]) | join(""))
+          else [.] | implode end) | join("");
+JQ
+}
+
 # _local_dedupe_mark_file <file> <fm_add> <note>
 #   Idempotent in-place YAML-frontmatter + body surgery on one finding file.
-#   Single awk pass that STRIPS the pass-owned content first, then re-adds it:
+#   Scan root status metadata, then STRIP owned content and re-add it atomically:
 #     - frontmatter: drops a pass-owned `status: duplicate`, any `duplicate_of:`,
 #       and the whole `also_reported_by:` block (key + its indented children),
 #       then inserts <fm_add> at the existing root indentation immediately
-#       before the closing `---`. Nested names remain untouched;
+#       before the closing `---`. Non-canonical custom status lines are backed
+#       up as JSON-quoted YAML scalars and restored on promotion. Nested names
+#       remain untouched;
 #     - body: drops everything from the `<!-- repolens-dedupe:begin -->` sentinel
 #       to EOF and trims trailing blank lines, then appends a fresh, blank-line-
 #       separated, sentinel-wrapped note carrying <note>.
@@ -84,8 +102,9 @@ _local_dedupe_mark_file() {
   local file="$1" fm_add="$2" note="$3"
   local tmp="${file}.rldedupe.$$"
 
-  RL_FM_ADD="$fm_add" RL_NOTE="$note" awk '
+  local program='
     BEGIN {
+      scanning = ENVIRON["RL_STATUS_SCAN"] == "1"
       fm_add = ENVIRON["RL_FM_ADD"]
       note   = ENVIRON["RL_NOTE"]
       state  = "pre"     # pre -> fm -> body
@@ -95,7 +114,44 @@ _local_dedupe_mark_file() {
     }
     # Buffer frontmatter to determine root indentation before replacing any
     # owned keys. A nested mapping may precede later canonical root fields.
-    function emit_frontmatter(    i, line, indent, text, count, additions) {
+    function duplicate_status(text) {
+      # Own only the complete scalar, with matching quotes if present.
+      return text ~ /^status[[:space:]]*:[[:space:]]*(duplicate|"duplicate"|'\''duplicate'\'')([[:space:]]+#.*|[[:space:]]*)$/
+    }
+    function status_metadata(    i, j, line, text, indent, result) {
+      for (i = 1; i <= nf; i++) {
+        line = frontmatter[i]
+        match(line, /^[[:space:]]*/)
+        if (RLENGTH != root_indent) continue
+        text = substr(line, RLENGTH + 1)
+        if (text ~ /^status[[:space:]]*:/ && !duplicate_status(text)) {
+          result = result "S" line "\n"
+          # Only single-line scalar statuses can be archived losslessly here.
+          for (j = i + 1; j <= nf; j++) {
+            if (frontmatter[j] ~ /^[[:space:]]*(#|$)/) continue
+            match(frontmatter[j], /^[[:space:]]*/)
+            indent = RLENGTH
+            if (indent > root_indent ||
+                (indent == root_indent && frontmatter[j] ~ /^[[:space:]]*-([[:space:]]|$)/))
+              result = result "Xblock-status\n"
+            break
+          }
+        }
+        if (text ~ /^repolens_dedupe_original_status[[:space:]]*:/) {
+          sub(/^repolens_dedupe_original_status[[:space:]]*:[[:space:]]*/, "", text)
+          result = result "B" text "\n"
+        }
+      }
+      return substr(result, 1, length(result) > 0 ? length(result) - 1 : 0)
+    }
+    function emit_frontmatter(    i, line, indent, text, count, additions, metadata) {
+      metadata = status_metadata()
+      if (scanning) {
+        if (length(metadata) > 0) print metadata
+        return
+      }
+      # A status edit between passes must not be replaced by a stale backup.
+      if (metadata != ENVIRON["RL_EXPECTED_STATUS_METADATA"]) exit 1
       for (i = 1; i <= nf; i++) {
         line = frontmatter[i]
         match(line, /^[[:space:]]*/)
@@ -110,11 +166,16 @@ _local_dedupe_mark_file() {
         text = substr(line, indent + 1)
         if (indent == root_indent) {
           if (text ~ /^also_reported_by:/) { skip_arb = 1; continue }
-          if (text ~ /^status[[:space:]]*:[[:space:]]*["'\'']?duplicate/) continue
+          if (duplicate_status(text)) continue
+          if (ENVIRON["RL_DUPLICATE_ROLE"] == "1" && text ~ /^status[[:space:]]*:/) continue
+          if (text ~ /^repolens_dedupe_original_status[[:space:]]*:/) continue
           if (text ~ /^duplicate_of[[:space:]]*:/) continue
         }
         print line
       }
+      if (length(ENVIRON["RL_STATUS_BACKUP"]) > 0)
+        print root_prefix "repolens_dedupe_original_status: " ENVIRON["RL_STATUS_BACKUP"]
+      if (length(ENVIRON["RL_STATUS_RESTORE"]) > 0) print ENVIRON["RL_STATUS_RESTORE"]
       if (length(fm_add) > 0) {
         count = split(fm_add, additions, "\n")
         for (i = 1; i <= count; i++) print root_prefix additions[i]
@@ -123,14 +184,14 @@ _local_dedupe_mark_file() {
     {
       if (state == "pre") {
         if ($0 != "---") exit 1
-        print $0
+        if (!scanning) print $0
         state = "fm"
         next
       }
       if (state == "fm") {
         if ($0 == "---") {
           emit_frontmatter()
-          print "---"
+          if (!scanning) print "---"
           state = "body"
           next
         }
@@ -145,6 +206,7 @@ _local_dedupe_mark_file() {
         }
         next
       }
+      if (scanning) next
       # state == body: buffer up to the sentinel, drop the sentinel block + after.
       if (seen_sentinel == 1) { next }
       if ($0 == "<!-- repolens-dedupe:begin -->") { seen_sentinel = 1; next }
@@ -156,16 +218,50 @@ _local_dedupe_mark_file() {
       # Never publish buffered, incomplete frontmatter or append a body note
       # to a file that changed after ingestion. The caller discards the temp.
       if (state != "body") exit 1
-      while (nb > 0 && body[nb] == "") nb--   # trim trailing blank lines
-      for (k = 1; k <= nb; k++) print body[k]
-      if (length(note) > 0) {
-        print ""
-        print "<!-- repolens-dedupe:begin -->"
-        print note
-        print "<!-- repolens-dedupe:end -->"
+      if (!scanning) {
+        while (nb > 0 && body[nb] == "") nb--   # trim trailing blank lines
+        for (k = 1; k <= nb; k++) print body[k]
+        if (length(note) > 0) {
+          print ""
+          print "<!-- repolens-dedupe:begin -->"
+          print note
+          print "<!-- repolens-dedupe:end -->"
+        }
       }
     }
-  ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  '
+  local metadata entry original="" backup="" saved="" restore="" duplicate_role=0
+  # Use the same root parser for both passes; never inspect nested statuses.
+  metadata="$(RL_STATUS_SCAN=1 awk "$program" "$file")" || return 1
+  while IFS= read -r entry; do
+    case "$entry" in
+      S*) [[ -z "$original" ]] || return 1; original="${entry:1}" ;;
+      B*) [[ -z "$backup" ]] || return 1; backup="${entry:1}"
+          [[ -n "$backup" ]] || return 1 ;;
+      X*) return 1 ;;
+    esac
+  done <<< "$metadata"
+  if [[ -n "$backup" ]]; then
+    # Invalid or conflicting backups fail without replacing the finding.
+    saved="$(jq -er 'select(type == "string")
+      | select(test("^[ \\t]*status[ \\t]*:") and (contains("\n") | not)
+          and (contains("\u0000") | not))' <<< "$backup")" || return 1
+    [[ -z "$original" || "$original" == "$saved" ]] || return 1
+  fi
+  if [[ "$fm_add" == status:\ duplicate$'\n'* || "$fm_add" == 'status: duplicate' ]]; then
+    duplicate_role=1
+    if [[ -z "$backup" && -n "$original" ]]; then
+      backup="$(jq -nr --arg line "$original" "$(_local_dedupe_yaml_string_filter)"'
+        $line | yaml_string')" || return 1
+    fi
+  else
+    [[ -n "$original" ]] || restore="$saved"
+    backup=""
+  fi
+  RL_STATUS_SCAN=0 RL_EXPECTED_STATUS_METADATA="$metadata" \
+    RL_FM_ADD="$fm_add" RL_NOTE="$note" RL_DUPLICATE_ROLE="$duplicate_role" \
+    RL_STATUS_BACKUP="$backup" RL_STATUS_RESTORE="$restore" \
+    awk "$program" "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
 
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
@@ -276,16 +372,8 @@ dedupe_local_markdown() {
   local group canon_idx canon_md canon_rel canon_yaml contrib_idx_json m dup_md
   local arb groups_marked=0
   # Share YAML-safe quoting between the canonical link and contributor paths.
-  local yaml_string_filter='
-      def yaml_string:
-        @json | explode | map(
-          if (. >= 127 and . <= 159) or . == 8232 or . == 8233
-             or . == 65534 or . == 65535 then
-            . as $cp | "\\u" + ([4096, 256, 16, 1]
-              | map((($cp / . | floor) % 16) as $digit
-                  | "0123456789abcdef"[$digit:$digit+1]) | join(""))
-          else [.] | implode end) | join("");
-  '
+  local yaml_string_filter
+  yaml_string_filter="$(_local_dedupe_yaml_string_filter)"
   while IFS= read -r group; do
     if [[ "${REPOLENS_FINAL_STATE:-finished}" == interrupted ]]; then
       rm -rf "$tmpdir"

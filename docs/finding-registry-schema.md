@@ -132,6 +132,20 @@ lens and markdown path, while retaining the winner's other fields. The human-rev
 digest excludes marked duplicates from review buckets and accounts for them separately;
 the registry retains those records when their IDs differ from the canonical ID.
 
+Local Markdown deduplication owns only the complete root `status: duplicate`
+scalar, including quoted values and trailing YAML comments. Other canonical
+statuses remain unchanged. Before assigning duplicate status to a non-canonical
+finding, the pass retains its original status line (including indentation,
+spacing, quotes and comments) as a JSON-quoted YAML string in the reserved
+`repolens_dedupe_original_status` field. It writes one authoritative duplicate
+status, preserves the saved line on reruns, and restores it on canonical promotion,
+consuming the backup. Nested metadata remains unchanged. Invalid or conflicting
+backups, multiple custom root statuses, unsupported block statuses, or status
+edits detected between the scan and rewrite leave that file intact and emit the
+existing best-effort warning.
+Singletons retain their annotations; registry rebuilding still restores review
+eligibility when a saved duplicate link is no longer valid.
+
 Because the registry is derived, several fields below are **added or derived by
 the builder** and are present in neither upstream source (notably `id`,
 `confidence`, `primary_location`, `type`, `duplicate_group`, `validation`).
