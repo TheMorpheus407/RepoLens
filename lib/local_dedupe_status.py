@@ -25,6 +25,7 @@ ARCHIVE = "repolens_dedupe_original_status"
 KEY = re.compile(r"^(\s*)([^#\s-][^:]*):")
 STATUS = re.compile(r"^status\s*:")
 MANAGED = re.compile(r"^status\s*:\s*(duplicate|\"duplicate\"|'duplicate')(\s+#.*)?\s*$")
+QUOTED = re.compile(r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:\s+#.*)?\s*""")
 
 
 def preserve_status(text, mode):
@@ -49,6 +50,11 @@ def preserve_status(text, mode):
     # removing just the first line would attach its continuation to another key.
     for index in statuses:
         value = lines[index].split(":", 1)[1].lstrip()
+        # Quoted continuations may be unindented and resemble root mappings.
+        # Require a complete first-line scalar before trusting next_root;
+        # escaped double quotes and doubled single quotes do not close it.
+        if value.startswith(('"', "'")) and not QUOTED.fullmatch(value):
+            raise ValueError("custom status is not a single-line scalar")
         next_root = next((i for i, _ in root if i > index), end)
         if value.startswith(("|", ">")) or any(
             line.strip() and not line.lstrip().startswith("#")

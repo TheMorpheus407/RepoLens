@@ -62,7 +62,8 @@ dissolution, dedupe restores the original entry and removes the archive and
 managed marks, including when no duplicate groups remain. Repeated dedupe keeps
 the archive unchanged. Incompatible archives, subsequent custom-status edits
 and multiline custom status values (including plain folded values beginning
-with `duplicate`) warn and leave the affected file unchanged in either role;
+with `duplicate` or quoted continuations resembling root keys), and incomplete
+quoted statuses warn and leave the affected file unchanged in either role;
 other files retain the existing best-effort dedupe behavior. Registry ingestion
 only reads these files and still validates duplicate links before suppression.
 

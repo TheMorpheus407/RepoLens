@@ -70,6 +70,50 @@ for role in canonical duplicate; do
   check dedupe_local_markdown "$output"
   check cmp -s "$output/$role.md" "$FIXTURE/expected.md"
 done
+# Quoted YAML can continue at column zero even when the next line looks like
+# another root key. Mapping-shaped lines cannot establish its scalar boundary.
+for value in '"duplicate' "'duplicate" '"duplicate\"' "'duplicate''"; do
+  quote="${value:0:1}"
+  for padding in '' ' ' $'\t'; do
+    for mode in canonical duplicate; do
+      scenario="quoted/$value/$padding/$mode"
+      file="$FIXTURE/quoted.md"
+      printf '%s\n' --- 'title: Shared state' "status$padding: $value" \
+        "pending: confirmation${quote}" 'severity: high' --- body > "$file" || exit 1
+      cp "$file" "$FIXTURE/expected.md" || exit 1
+      addition=''
+      [[ "$mode" != duplicate ]] || addition=$'status: duplicate\nduplicate_of: canonical.md'
+      rc=0
+      _local_dedupe_mark_file "$file" "$addition" note > "$FIXTURE/rewrite.log" 2>&1 || rc=$?
+      check test "$rc" -ne 0
+      check grep -q 'not a single-line scalar' "$FIXTURE/rewrite.log"
+      check cmp -s "$file" "$FIXTURE/expected.md"
+      check test "$(find "$FIXTURE" -name '*.rldedupe.*' | wc -l)" -eq 0
+    done
+  done
+done
+# Exercise that quoted continuation through real grouping in both roles too.
+for quote in '"' "'"; do
+  for role in canonical duplicate; do
+    scenario="grouped-quoted/$quote/$role"
+    output="$FIXTURE/quoted-group"
+    mkdir -p "$output" || exit 1
+    for name in canonical duplicate; do
+      severity=high
+      [[ "$name" != canonical ]] || severity=critical
+      {
+        printf '%s\n' --- 'title: Unsafe access to shared state'
+        [[ "$name" != "$role" ]] || printf '%s\n' "status : ${quote}duplicate" "pending: confirmation${quote}"
+        printf '%s\n' "severity: $severity" 'domain: security' "lens: probe-$name" --- body
+      } > "$output/$name.md" || exit 1
+    done
+    cp "$output/$role.md" "$FIXTURE/expected.md" || exit 1
+    check dedupe_local_markdown "$output"
+    check cmp -s "$output/$role.md" "$FIXTURE/expected.md"
+    check dedupe_local_markdown "$output"
+    check cmp -s "$output/$role.md" "$FIXTURE/expected.md"
+  done
+done
 # Blank lines and comments after a complete scalar do not extend its value.
 scenario=single-line-with-comments
 file="$FIXTURE/comments.md"

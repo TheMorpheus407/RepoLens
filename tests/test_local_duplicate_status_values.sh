@@ -45,13 +45,30 @@ for padding in '' ' ' $'\t'; do
   done
   for value in duplicate-pending duplicate_pending 'duplicate pending' 'duplicate#literal' \
       '"duplicate-pending"' "'duplicate-pending'" '"duplicate pending"' "'duplicate pending'" \
-      '"duplicate\"pending"' "'duplicate''pending'" '"duplicate' "'duplicate" \
+      '"duplicate\"pending"' "'duplicate''pending'" \
       "duplicate'" 'duplicate"' '"duplicate-pending" # foreign'; do
     scenario="foreign/$padding/$value"
     printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/foreign.md" || exit 1
     cp "$FIXTURE/foreign.md" "$FIXTURE/expected.md" || exit 1
     check _local_dedupe_mark_file "$FIXTURE/foreign.md" '' ''
     check cmp -s "$FIXTURE/foreign.md" "$FIXTURE/expected.md"
+  done
+done
+# An unmatched opening quote may continue onto a mapping-shaped line. Preserve
+# ambiguous entries with a warning instead of treating their first line alone.
+for value in '"duplicate' "'duplicate"; do
+  for mode in canonical duplicate; do
+    scenario="incomplete-quote/$value/$mode"
+    file="$FIXTURE/incomplete.md"
+    printf '%s\n' --- 'title: Duplicate status probe' "status: $value" --- body > "$file" || exit 1
+    cp "$file" "$FIXTURE/expected.md" || exit 1
+    addition=''
+    [[ "$mode" != duplicate ]] || addition=$'status: duplicate\nduplicate_of: canonical.md'
+    rc=0
+    _local_dedupe_mark_file "$file" "$addition" note > "$FIXTURE/rewrite.log" 2>&1 || rc=$?
+    check test "$rc" -ne 0
+    check grep -q 'not a single-line scalar' "$FIXTURE/rewrite.log"
+    check cmp -s "$file" "$FIXTURE/expected.md"
   done
 done
 # Exercise the actual grouping path: a padded foreign status on the canonical
