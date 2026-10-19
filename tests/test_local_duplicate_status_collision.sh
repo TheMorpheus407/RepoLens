@@ -14,13 +14,14 @@
 # limitations under the License.
 
 # Local dedupe owns only the exact duplicate scalar, never a status prefix.
-set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE="$(mktemp -d)"
+set -uo pipefail
+# Setup failures stop the suite; check() collects behavioral assertion failures.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 for lib in local-dedupe ledger human_review artifacts; do
   # shellcheck source=/dev/null
-  source "$REPO/lib/$lib.sh"
+  source "$REPO/lib/$lib.sh" || exit 1
 done
 failed=0 checks=0
 # Run an assertion and count failures without ending the remaining scenarios.
@@ -41,7 +42,7 @@ for variant in plain quoted single; do
     scenario="collision/$padding/$value"
     output="$FIXTURE/collision"
     LOG_BASE="$FIXTURE/collision-run"
-    mkdir -p "$output"
+    mkdir -p "$output" || exit 1
     original="  status$padding: $value # original"
     for name in canonical duplicate; do
       severity=high indent='  '
@@ -52,11 +53,11 @@ for variant in plain quoted single; do
         [[ "$name" != duplicate ]] || printf '%s\n' "$original"
         printf '%s%s\n' "$indent" 'domain: security' "$indent" "lens: probe-$name"
         printf '%s\n' --- body
-      } > "$output/$name.md"
+      } > "$output/$name.md" || exit 1
     done
     check dedupe_local_markdown "$output"
     check test "$(grep -cE '^[[:space:]]*status[[:space:]]*:' "$output/duplicate.md")" -eq 1
-    archive="$(_ledger_frontmatter_scalar "$output/duplicate.md" repolens_dedupe_original_status)"
+    archive="$(_ledger_frontmatter_scalar "$output/duplicate.md" repolens_dedupe_original_status)" || exit 1
     check jq -ne --arg raw "$archive" --arg original "$original" '$raw | fromjson == $original'
     check build_finding_registry collision "$output"
     findings="$LOG_BASE/final/findings.jsonl"
@@ -71,15 +72,15 @@ for variant in plain quoted single; do
     check grep -q 'probe-duplicate' "$LOG_BASE/final/DUPLICATES.md"
     check test "$(tail -n +2 "$LOG_BASE/final/findings.csv" | grep -c ',"new",')" -eq 1
     check test "$(tail -n +2 "$LOG_BASE/final/findings.csv" | grep -c ',"duplicate",')" -eq 1
-    before="$(sha256sum "$output/"*.md)"
+    before="$(sha256sum "$output/"*.md)" || exit 1
     check dedupe_local_markdown "$output"
     check test "$before" = "$(sha256sum "$output/"*.md)"
-    registry_before="$(sha256sum "$findings" "$LOG_BASE/final/findings.csv")"
+    registry_before="$(sha256sum "$findings" "$LOG_BASE/final/findings.csv")" || exit 1
     check build_finding_registry collision "$output"
     check test "$registry_before" = "$(sha256sum "$findings" "$LOG_BASE/final/findings.csv")"
     # A promotion must restore the complete original entry, without an archive.
-    sed -i 's/severity: high/severity: critical/' "$output/duplicate.md"
-    sed -i 's/severity: critical/severity: low/' "$output/canonical.md"
+    sed -i 's/severity: high/severity: critical/' "$output/duplicate.md" || exit 1
+    sed -i 's/severity: critical/severity: low/' "$output/canonical.md" || exit 1
     check dedupe_local_markdown "$output"
     check grep -qxF "$original" "$output/duplicate.md"
     check test -z "$(_ledger_frontmatter_scalar "$output/duplicate.md" repolens_dedupe_original_status)"
@@ -90,16 +91,16 @@ done
 # Archived singletons must be restored even when grouping produces no output.
 for scenario in dissolved-title dissolved-threshold; do
   output="$FIXTURE/$scenario"
-  mkdir -p "$output"
+  mkdir -p "$output" || exit 1
   for name in a b; do
     printf '%s\n' --- 'title: Unsafe shared state access' 'severity: high' \
-      'domain: security' "lens: probe-$name" --- body > "$output/$name.md"
+      'domain: security' "lens: probe-$name" --- body > "$output/$name.md" || exit 1
   done
   original=$'status\t: "duplicate-pending" # keep quotes and spacing'
-  sed -i '/^severity:/a status\t: "duplicate-pending" # keep quotes and spacing' "$output/b.md"
+  sed -i '/^severity:/a status\t: "duplicate-pending" # keep quotes and spacing' "$output/b.md" || exit 1
   check dedupe_local_markdown "$output"
   if [[ "$scenario" == dissolved-title ]]; then
-    sed -i 's/^title:.*/title: Credentials exposed by request logging/' "$output/a.md"
+    sed -i 's/^title:.*/title: Credentials exposed by request logging/' "$output/a.md" || exit 1
   else
     export DEDUPE_TITLE_SIM_PRIMARY=10001 DEDUPE_TITLE_SIM_SECONDARY=10001
   fi
@@ -107,7 +108,7 @@ for scenario in dissolved-title dissolved-threshold; do
   check grep -qxF "$original" "$output/b.md"
   check test -z "$(_ledger_frontmatter_scalar "$output/b.md" repolens_dedupe_original_status)"
   check test -z "$(_ledger_frontmatter_scalar "$output/b.md" duplicate_of)"
-  before="$(sha256sum "$output/"*.md)"
+  before="$(sha256sum "$output/"*.md)" || exit 1
   check dedupe_local_markdown "$output"
   check test "$before" = "$(sha256sum "$output/"*.md)"
   check build_findings_jsonl_from_local "$output" "$FIXTURE/dissolved.jsonl"
@@ -118,7 +119,7 @@ done
 scenario=existing-collision
 file="$FIXTURE/existing-collision.md"
 printf '%s\n' --- 'title: Existing collision' 'status : "duplicate-pending"' \
-  'status: duplicate' 'duplicate_of: canonical.md' --- body > "$file"
+  'status: duplicate' 'duplicate_of: canonical.md' --- body > "$file" || exit 1
 check _local_dedupe_mark_file "$file" $'status: duplicate\nduplicate_of: canonical.md' note
 check test "$(grep -cE '^status[[:space:]]*:' "$file")" -eq 1
 check _local_dedupe_mark_file "$file" '' ''
@@ -127,18 +128,18 @@ check grep -qxF 'status : "duplicate-pending"' "$file"
 for scenario in invalid-archive edited-status duplicate-archive block-status; do
   file="$FIXTURE/conflict.md"
   printf '%s\n' --- 'title: Status conflict' 'severity: high' \
-    'status : "duplicate-pending" # keep' --- body > "$file"
+    'status : "duplicate-pending" # keep' --- body > "$file" || exit 1
   if [[ "$scenario" != block-status ]]; then
     check _local_dedupe_mark_file "$file" $'status: duplicate\nduplicate_of: canonical.md' note
     case "$scenario" in
-      invalid-archive) sed -i 's/^repolens_dedupe_original_status:.*/repolens_dedupe_original_status: {foreign: data}/' "$file" ;;
-      edited-status) sed -i 's/^status: duplicate/status: user-updated/' "$file" ;;
-      duplicate-archive) sed -i '/^repolens_dedupe_original_status:/p' "$file" ;;
+      invalid-archive) sed -i 's/^repolens_dedupe_original_status:.*/repolens_dedupe_original_status: {foreign: data}/' "$file" || exit 1 ;;
+      edited-status) sed -i 's/^status: duplicate/status: user-updated/' "$file" || exit 1 ;;
+      duplicate-archive) sed -i '/^repolens_dedupe_original_status:/p' "$file" || exit 1 ;;
     esac
   else
-    sed -i 's/^status.*/status: |\n  custom block value/' "$file"
+    sed -i 's/^status.*/status: |\n  custom block value/' "$file" || exit 1
   fi
-  before="$(sha256sum "$file")"
+  before="$(sha256sum "$file")" || exit 1
   rc=0
   _local_dedupe_mark_file "$file" $'status: duplicate\nduplicate_of: canonical.md' note > "$FIXTURE/conflict.log" 2>&1 || rc=$?
   check test "$rc" -ne 0

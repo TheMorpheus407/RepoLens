@@ -14,13 +14,14 @@
 # limitations under the License.
 
 # Local dedupe owns only the exact duplicate scalar, never a status prefix.
-set -euo pipefail
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE="$(mktemp -d)"
+set -uo pipefail
+# Setup failures stop the suite; check() collects behavioral assertion failures.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 for lib in local-dedupe ledger human_review artifacts; do
   # shellcheck source=/dev/null
-  source "$REPO/lib/$lib.sh"
+  source "$REPO/lib/$lib.sh" || exit 1
 done
 failed=0 checks=0
 # Run an assertion and count failures without ending the remaining scenarios.
@@ -35,10 +36,10 @@ for padding in '' ' ' $'\t'; do
   for value in duplicate 'duplicate  ' '"duplicate"' "'duplicate'" \
       'duplicate # managed' '"duplicate" # managed' "'duplicate' # managed"; do
     scenario="managed/$padding/$value"
-    printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/managed.md"
+    printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/managed.md" || exit 1
     check _local_dedupe_mark_file "$FIXTURE/managed.md" '' ''
     check test "$(grep -cE '^status[[:space:]]*:' "$FIXTURE/managed.md" || true)" -eq 0
-    printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/managed.md"
+    printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/managed.md" || exit 1
     check _local_dedupe_mark_file "$FIXTURE/managed.md" $'status: duplicate\nduplicate_of: canonical.md' note
     check test -z "$(_ledger_frontmatter_scalar "$FIXTURE/managed.md" repolens_dedupe_original_status)"
   done
@@ -47,8 +48,8 @@ for padding in '' ' ' $'\t'; do
       '"duplicate\"pending"' "'duplicate''pending'" '"duplicate' "'duplicate" \
       "duplicate'" 'duplicate"' '"duplicate-pending" # foreign'; do
     scenario="foreign/$padding/$value"
-    printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/foreign.md"
-    cp "$FIXTURE/foreign.md" "$FIXTURE/expected.md"
+    printf '%s\n' --- 'title: Duplicate status probe' "status$padding: $value" --- body > "$FIXTURE/foreign.md" || exit 1
+    cp "$FIXTURE/foreign.md" "$FIXTURE/expected.md" || exit 1
     check _local_dedupe_mark_file "$FIXTURE/foreign.md" '' ''
     check cmp -s "$FIXTURE/foreign.md" "$FIXTURE/expected.md"
   done
@@ -58,18 +59,18 @@ done
 for padding in ' ' $'\t'; do
   scenario="grouped/$padding"
   output="$FIXTURE/group"
-  mkdir -p "$output"
+  mkdir -p "$output" || exit 1
   for name in canonical duplicate; do
     severity=high
     [[ "$name" != canonical ]] || severity=critical
     printf '%s\n' --- 'title: Unsafe access to shared state' "severity: $severity" \
-      'domain: security' "lens: probe-$name" --- body > "$output/$name.md"
+      'domain: security' "lens: probe-$name" --- body > "$output/$name.md" || exit 1
   done
-  sed -i "/^severity:/a status$padding: \"duplicate-pending\"" "$output/canonical.md"
+  sed -i "/^severity:/a status$padding: \"duplicate-pending\"" "$output/canonical.md" || exit 1
   check dedupe_local_markdown "$output"
   check grep -qxF "status$padding: \"duplicate-pending\"" "$output/canonical.md"
   check grep -qxF 'status: duplicate' "$output/duplicate.md"
-  before="$(sha256sum "$output/"*.md)"
+  before="$(sha256sum "$output/"*.md)" || exit 1
   check dedupe_local_markdown "$output"
   check test "$before" = "$(sha256sum "$output/"*.md)"
 done
