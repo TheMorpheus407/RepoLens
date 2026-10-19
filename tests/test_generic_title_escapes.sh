@@ -31,7 +31,7 @@ set -euo pipefail
 FIXTURE="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$FIXTURE"' EXIT
 # Independent expected strings exercise syntax without requiring a YAML package.
-python3 - "$FIXTURE" <<'PYCASES'
+command python3 - "$FIXTURE" <<'PYCASES'
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
