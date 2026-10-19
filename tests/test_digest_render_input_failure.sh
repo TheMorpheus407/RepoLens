@@ -22,6 +22,25 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/lib/core.sh"
 # shellcheck source=/dev/null
 source "$ROOT/lib/rounds.sh"
+saved_file_limit="$(ulimit -S -f)"
+fault=none
+fault_armed=0
+# Define the override before builtin printf calls for older ShellCheck versions.
+# Restore the limit at the next output operation, so only the here-string's
+# temporary-file write fails; subsequent rendering could otherwise hide it.
+printf() {
+  if (( fault_armed )); then
+    ulimit -S -f "$saved_file_limit"
+    fault_armed=0
+  fi
+  # shellcheck disable=SC2059 # Forward the caller's format and arguments.
+  builtin printf "$@"
+  if [[ "$fault" == render-input && "${1:-}" == '## Findings\n' ]]; then
+    builtin printf 'reached\n' > "$fixture/fault-reached"
+    ulimit -S -f 0
+    fault_armed=1
+  fi
+}
 fail() {
   builtin printf 'FAIL: %s\n' "$*" >&2
   exit 1
@@ -38,24 +57,6 @@ builtin printf -- '---\ntitle: retained finding\nseverity: high\ndomain: securit
 build_round_digest "$round" || fail 'baseline digest build failed'
 cp "$round/digest.md" "$fixture/before"
 
-saved_file_limit="$(ulimit -S -f)"
-fault=none
-fault_armed=0
-# Restore the limit at the next output operation, so only the here-string's
-# temporary-file write fails; subsequent rendering could otherwise hide it.
-printf() {
-  if (( fault_armed )); then
-    ulimit -S -f "$saved_file_limit"
-    fault_armed=0
-  fi
-  # shellcheck disable=SC2059 # Forward the caller's format and arguments.
-  builtin printf "$@"
-  if [[ "$fault" == render-input && "${1:-}" == '## Findings\n' ]]; then
-    builtin printf 'reached\n' > "$fixture/fault-reached"
-    ulimit -S -f 0
-    fault_armed=1
-  fi
-}
 trap '' XFSZ
 fault=render-input
 rc=0
