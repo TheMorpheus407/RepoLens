@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Replace stale local duplicate links whose YAML keys have whitespace before the colon, preventing duplicate actionable findings after registry rebuilding (repolens-r15-p7-2).
+
 - Retire stale triage reports after a successful empty non-local registry rebuild; preserve saved registry/reports after failures before current synthesis acceptance, retain accepted findings after filing/accounting failures, and restore the report set on catchable interruption during retirement (repolens-r15-p7-1).
 
 - Reject directory and directory-symlink CSV destinations with portable exact-path publication, propagate projection failure to the registry caller, and remove failed stages for a repaired retry (repolens-r15-p5-2).
