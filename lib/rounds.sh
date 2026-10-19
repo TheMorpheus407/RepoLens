@@ -2770,6 +2770,7 @@ build_round_digest() {
     }
   fi
 
+  local render_input_failed=0
   tmp_digest="${digest_path}.tmp.$$"
   {
     printf '# Round Digest\n\n'
@@ -2862,7 +2863,7 @@ build_round_digest() {
           fi
           printf ' hypothesis="%s"\n' "$record_hypothesis"
           emitted=$((emitted + 1))
-        done <<< "$sorted_finding_records"
+        done <<< "$sorted_finding_records" || render_input_failed=1
 
         omitted_total=0
         for lens in "${!_round_digest_omitted_lens_counts[@]}"; do
@@ -2908,6 +2909,13 @@ build_round_digest() {
     rm -f "$tmp_digest"
     return 1
   }
+  # Large here-strings use a temporary file; a failed redirection must stop
+  # publication even if subsequent rendering completed successfully.
+  if (( render_input_failed )); then
+    _round_digest_warn "Unable to read sorted round findings; preserving previous digest"
+    rm -f "$tmp_digest"
+    return 1
+  fi
 
   digest_lines="$(wc -l < "$tmp_digest" | tr -d '[:space:]')"
   if [[ "$digest_lines" =~ ^[0-9]+$ && "$digest_lines" -gt 500 ]]; then
