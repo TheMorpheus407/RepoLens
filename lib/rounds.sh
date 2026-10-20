@@ -2777,7 +2777,13 @@ build_round_digest() {
       finding_identity="$title_text"$'\n'"$hypothesis"
       finding_id="$(_round_digest_finding_id "$lens" "$domain" "$round_number" "$file" "$finding_identity" < <(printf '%s\n' "${suspect_files[@]}"))"
       if (( ${#display_files[@]} > 0 )); then
-        files_display="$(printf '%s\n' "${display_files[@]}" | paste -sd ',' - | sed 's/,/, /g')"
+        # Quote each complete array member before joining; commas belong to
+        # paths too and cannot be used to recover the original boundaries.
+        files_display=""
+        for suspect_file in "${display_files[@]}"; do
+          [[ -z "$files_display" ]] || files_display+=", "
+          files_display+="\`$suspect_file\`"
+        done
       else
         files_display="none"
       fi
@@ -2872,20 +2878,7 @@ build_round_digest() {
             "$(_round_digest_sanitize_identifier "$record_domain")" \
             "$(_round_digest_sanitize_identifier "$record_lens")" \
             "$(_round_digest_sanitize_identifier "$record_category")"
-          if [[ "$record_files" == "none" ]]; then
-            printf 'none'
-          else
-            local quoted_files=""
-            while IFS= read -r display_file; do
-              display_file="$(_round_digest_display_path "$display_file")"
-              [[ -n "$display_file" ]] || continue
-              if [[ -n "$quoted_files" ]]; then
-                quoted_files+=", "
-              fi
-              quoted_files+="\`$display_file\`"
-            done < <(printf '%s\n' "$record_files" | tr ',' '\n')
-            printf '%s' "${quoted_files:-none}"
-          fi
+          printf '%s' "$record_files"
           printf ' hypothesis="%s"\n' "$record_hypothesis"
           emitted=$((emitted + 1))
         done <<< "$sorted_finding_records" || render_input_failed=1
