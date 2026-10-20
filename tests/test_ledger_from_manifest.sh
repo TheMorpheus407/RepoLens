@@ -663,6 +663,21 @@ validate_findings_jsonl "$LOG_BASE/final/findings.jsonl"
 assert_success "oversized registry validates" "$?"
 assert_eq "full registry keeps exactly one record" "1" "$(wc -l < "$LOG_BASE/final/findings.jsonl" | tr -d ' ')"
 assert_eq "CSV contains header and oversized finding" "2" "$(wc -l < "$LOG_BASE/final/findings.csv" | tr -d ' ')"
+python3 - "$LOG_BASE/final/findings.csv" "$(finding_id code input-validation 'Large body evidence')" <<'PY'
+import csv
+import sys
+
+with open(sys.argv[1], newline="", encoding="utf-8") as stream:
+    rows = list(csv.DictReader(stream))
+assert rows == [{
+    "id": sys.argv[2], "title": "Large body evidence", "severity": "high",
+    "type": "maintainability", "domain": "code", "lens": "input-validation",
+    "status": "new", "primary_location": "", "confidence": "",
+    "duplicate_group": "missing-validation::upload-handler", "markdown_path": "",
+    "complexity": "",
+}], rows
+PY
+assert_success "oversized finding retains every CSV field value" "$?"
 cmp "$out_large" "$LOG_BASE/final/findings.jsonl"
 assert_success "full registry matches standalone ingestion" "$?"
 
