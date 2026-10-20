@@ -2807,16 +2807,16 @@ build_round_digest() {
     }
   fi
 
-  local render_input_failed=0
+  local render_input_failed=0 render_output_failed=0
   tmp_digest="${digest_path}.tmp.$$"
   {
-    printf '# Round Digest\n\n'
+    printf '# Round Digest\n\n' || render_output_failed=1
 
     if (( ${#_round_digest_lens_counts[@]} == 0 )); then
-      printf 'No findings this round.\n\n'
+      printf 'No findings this round.\n\n' || render_output_failed=1
     else
       mapfile -t sorted_lenses < <(printf '%s\n' "${!_round_digest_lens_counts[@]}" | LC_ALL=C sort)
-      printf '## Lens Findings\n'
+      printf '## Lens Findings\n' || render_output_failed=1
       local lens_summary_count=0 max_lens_summaries=100
       for lens in "${sorted_lenses[@]}"; do
         if (( lens_summary_count >= max_lens_summaries )); then
@@ -2824,55 +2824,55 @@ build_round_digest() {
         fi
         display_lens="$(_round_digest_sanitize_identifier "$lens")"
         [[ -n "$display_lens" ]] || continue
-        printf -- '- %s: %s finding' "$display_lens" "${_round_digest_lens_counts[$lens]}"
+        printf -- '- %s: %s finding' "$display_lens" "${_round_digest_lens_counts[$lens]}" || render_output_failed=1
         if (( ${_round_digest_lens_counts[$lens]} != 1 )); then
-          printf 's'
+          printf 's' || render_output_failed=1
         fi
-        printf '; top categories: %s\n' "$(_round_digest_join_lines < <(_round_digest_rank_lens_categories "$lens" 3))"
+        printf '; top categories: %s\n' "$(_round_digest_join_lines < <(_round_digest_rank_lens_categories "$lens" 3))" || render_output_failed=1
         lens_summary_count=$((lens_summary_count + 1))
       done
       if (( ${#sorted_lenses[@]} > max_lens_summaries )); then
-        printf -- '- + %s more lenses omitted from digest summary\n' "$(( ${#sorted_lenses[@]} - max_lens_summaries ))"
+        printf -- '- + %s more lenses omitted from digest summary\n' "$(( ${#sorted_lenses[@]} - max_lens_summaries ))" || render_output_failed=1
       fi
-      printf '\n'
+      printf '\n' || render_output_failed=1
 
-      printf '## Top Themes\n'
+      printf '## Top Themes\n' || render_output_failed=1
       if (( ${#_round_digest_category_counts[@]} == 0 )); then
-        printf 'none\n'
+        printf 'none\n' || render_output_failed=1
       else
         local rank=1 line count theme
         while IFS=$'\t' read -r count theme; do
           theme="$(_round_digest_sanitize_identifier "$theme")"
           [[ -n "$theme" ]] || continue
-          printf '%s. %s (%s)\n' "$rank" "$theme" "$count"
+          printf '%s. %s (%s)\n' "$rank" "$theme" "$count" || render_output_failed=1
           rank=$((rank + 1))
         done < <(_round_digest_rank_themes 3)
       fi
-      printf '\n'
+      printf '\n' || render_output_failed=1
 
-      printf '## Hot Suspect Files\n'
+      printf '## Hot Suspect Files\n' || render_output_failed=1
       if (( ${#_round_digest_suspect_file_counts[@]} == 0 )); then
-        printf 'none\n'
+        printf 'none\n' || render_output_failed=1
       else
         local suspect_rank=1 ranked_count ranked_file display_file
         while IFS=$'\t' read -r ranked_count ranked_file; do
           display_file="$(_round_digest_display_path "$ranked_file")"
           [[ -n "$display_file" ]] || continue
-          printf '%s. `%s` (%s mention' "$suspect_rank" "$display_file" "$ranked_count"
+          printf '%s. `%s` (%s mention' "$suspect_rank" "$display_file" "$ranked_count" || render_output_failed=1
           if (( ranked_count != 1 )); then
-            printf 's'
+            printf 's' || render_output_failed=1
           fi
-          printf ')\n'
+          printf ')\n' || render_output_failed=1
           suspect_rank=$((suspect_rank + 1))
         done < <(_round_digest_rank_suspect_files 10)
       fi
-      printf '\n'
+      printf '\n' || render_output_failed=1
 
-      printf '## Findings\n'
+      printf '## Findings\n' || render_output_failed=1
       local emitted=0 max_findings=30 _record_score record_lens record_id record_severity record_confidence
       local record_domain record_category record_files record_hypothesis
       if (( ${#finding_records[@]} == 0 )); then
-        printf 'none\n'
+        printf 'none\n' || render_output_failed=1
       else
         while IFS=$'\t' read -r _record_score record_lens record_id record_severity record_confidence record_domain record_category record_files record_hypothesis; do
           if (( emitted >= max_findings )); then
@@ -2883,9 +2883,9 @@ build_round_digest() {
             "$record_id" "$record_severity" "$record_confidence" \
             "$(_round_digest_sanitize_identifier "$record_domain")" \
             "$(_round_digest_sanitize_identifier "$record_lens")" \
-            "$(_round_digest_sanitize_identifier "$record_category")"
-          printf '%s' "$record_files"
-          printf ' hypothesis="%s"\n' "$record_hypothesis"
+            "$(_round_digest_sanitize_identifier "$record_category")" || render_output_failed=1
+          printf '%s' "$record_files" || render_output_failed=1
+          printf ' hypothesis="%s"\n' "$record_hypothesis" || render_output_failed=1
           emitted=$((emitted + 1))
         done <<< "$sorted_finding_records" || render_input_failed=1
 
@@ -2900,22 +2900,22 @@ build_round_digest() {
             if (( omitted_tail_count >= max_omitted_lens_tails )); then
               continue
             fi
-            printf -- '- + %s more finding' "${_round_digest_omitted_lens_counts[$lens]}"
+            printf -- '- + %s more finding' "${_round_digest_omitted_lens_counts[$lens]}" || render_output_failed=1
             if (( ${_round_digest_omitted_lens_counts[$lens]} != 1 )); then
-              printf 's'
+              printf 's' || render_output_failed=1
             fi
-            printf ' in %s\n' "$(_round_digest_sanitize_identifier "$lens")"
+            printf ' in %s\n' "$(_round_digest_sanitize_identifier "$lens")" || render_output_failed=1
             omitted_rendered=$(( omitted_rendered + _round_digest_omitted_lens_counts["$lens"] ))
             omitted_tail_count=$((omitted_tail_count + 1))
           done
           if (( omitted_rendered < omitted_total )); then
             printf -- '- + %s more findings across %s additional lenses\n' \
               "$(( omitted_total - omitted_rendered ))" \
-              "$(( ${#sorted_lenses[@]} - omitted_tail_count ))"
+              "$(( ${#sorted_lenses[@]} - omitted_tail_count ))" || render_output_failed=1
           fi
         fi
       fi
-      printf '\n'
+      printf '\n' || render_output_failed=1
     fi
 
     if (( ${#_round_digest_touched_domains[@]} > 0 )); then
@@ -2927,12 +2927,19 @@ build_round_digest() {
       coverage_domains="none"
     fi
 
-    printf '## Coverage\n'
-    printf 'Touched %s/%s audit domains: %s\n' "$coverage_count" "$audit_total" "$coverage_domains"
+    printf '## Coverage\n' || render_output_failed=1
+    printf 'Touched %s/%s audit domains: %s\n' "$coverage_count" "$audit_total" "$coverage_domains" || render_output_failed=1
   } > "$tmp_digest" || {
     rm -f "$tmp_digest"
     return 1
   }
+  # Later writes and loop counters can succeed after an earlier printf failed.
+  # Retain every output failure until publication admission.
+  if (( render_output_failed )); then
+    _round_digest_warn "Unable to write complete round digest; preserving previous digest"
+    rm -f "$tmp_digest"
+    return 1
+  fi
   # Large here-strings use a temporary file; a failed redirection must stop
   # publication even if subsequent rendering completed successfully.
   if (( render_input_failed )); then
