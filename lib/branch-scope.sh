@@ -30,7 +30,7 @@
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
-  _repolens_scan_citations "$1" | sort -u
+  (set -o pipefail; _repolens_scan_citations "$1" | sort -u)
 }
 
 # Emit the first complete noncitation code span attached to each occurrence of

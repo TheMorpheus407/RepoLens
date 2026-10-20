@@ -422,8 +422,14 @@ case_synthesis_body_io() (
     fi
     command awk "$@"
   }
+  # Sourceable helpers must retain errors even without caller pipefail.
+  if [[ "$body_fault" == scan-no-pipefail ]]; then set +o pipefail; fi
   rc=0
   run_synthesizer probe || rc=$?
+  if [[ "$body_fault" == scan-no-pipefail ]]; then
+    [[ ! -o pipefail ]] || exit 1
+    set -o pipefail
+  fi
   check test -s "$LOG_BASE/fault-hit"
   printf 'Reached body extraction fault: %s\n' "$body_fault"
   check test "$rc" -ne 0
@@ -449,5 +455,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) for body_fault in empty partial scan scan-partial membership; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) for body_fault in empty partial scan scan-partial scan-no-pipefail membership; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac
