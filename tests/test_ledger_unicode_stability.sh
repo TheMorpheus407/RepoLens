@@ -20,9 +20,12 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/lib/ledger.sh"
 FAIL=0
 check_ids() {
-  local title expected actual
+  local title expected actual composed decomposed
   while IFS='|' read -r title expected; do
-    actual="$(finding_id security injection "$title")" || return 1
+    actual="$(finding_id security injection "$title")" || {
+      printf 'FAIL: could not generate Unicode identity for %s\n' "$title"
+      return 1
+    }
     if [[ "$actual" == "$expected" ]]; then
       printf 'PASS: frozen Unicode identity for %s\n' "$title"
     else
@@ -44,12 +47,17 @@ café|fnd-3c22695f95e6
 Ᲊ|fnd-fca92e38f618
 ᲊ|fnd-9d48fb55abe3
 CASES
-  test "$(finding_id security injection É)" = "$(finding_id security injection $'E\xcc\x81')"
+  composed="$(finding_id security injection É)" || return 1
+  decomposed="$(finding_id security injection $'E\xcc\x81')" || return 1
+  if [[ "$composed" != "$decomposed" ]]; then
+    printf 'FAIL: canonically equivalent Unicode identities differ\n'
+    FAIL=$((FAIL + 1))
+  fi
 }
-check_ids
+check_ids || { printf 'FAIL: Unicode identity check could not complete\n'; FAIL=$((FAIL + 1)); }
 # Loading the synthesizer cannot change the registry identity rules.
 # shellcheck source=/dev/null
 source "$ROOT/lib/synthesize.sh"
-check_ids
+check_ids || { printf 'FAIL: Unicode identity check could not complete with synthesizer\n'; FAIL=$((FAIL + 1)); }
 printf 'Results: %s failed\n' "$FAIL"
 (( FAIL == 0 ))

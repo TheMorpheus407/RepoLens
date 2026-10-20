@@ -36,7 +36,10 @@ check_ascii() {
   # These IDs are frozen from master before PR #544, including its boundary
   # punctuation quirk (remove one boundary space before collapsing runs).
   while IFS='|' read -r title expected; do
-    actual="$(finding_id security injection "$title")" || return 1
+    actual="$(finding_id security injection "$title")" || {
+      printf 'FAIL: could not generate ASCII identity for %s\n' "$title"
+      return 1
+    }
     check "ASCII identity: $title" test "$actual" = "$expected"
   done <<'CASES'
 Missing CSRF token|fnd-c85e3de3f641
@@ -45,17 +48,20 @@ Unchecked read()|fnd-2439a83c0a38
 [High] Cache!|fnd-c96e35acdd72
 CASES
 }
-check_ascii
+check_ascii || FAIL=$((FAIL + 1))
 # Normal production ingestion loads the synthesizer too.
 # shellcheck source=/dev/null
 source "$ROOT/lib/synthesize.sh"
-check_ascii
+check_ascii || FAIL=$((FAIL + 1))
 
 # Invalid bytes separate words instead of silently concatenating their text.
-invalid_id="$(finding_id security injection $'bad\xffbytes')"
-check 'invalid bytes normalize as separators' test "$invalid_id" = "$(finding_id security injection 'bad bytes')"
-check 'invalid-byte identity is locale independent' test "$invalid_id" = "$(LC_ALL=C finding_id security injection $'bad\xffbytes')"
-check 'literal replacement character remains title content' test "$invalid_id" != "$(finding_id security injection 'bad�bytes')"
+invalid_id="$(finding_id security injection $'bad\xffbytes')" || exit 1
+separator_id="$(finding_id security injection 'bad bytes')" || exit 1
+locale_id="$(LC_ALL=C finding_id security injection $'bad\xffbytes')" || exit 1
+replacement_id="$(finding_id security injection 'bad�bytes')" || exit 1
+check 'invalid bytes normalize as separators' test "$invalid_id" = "$separator_id"
+check 'invalid-byte identity is locale independent' test "$invalid_id" = "$locale_id"
+check 'literal replacement character remains title content' test "$invalid_id" != "$replacement_id"
 
 # An invalid byte in one ordinary finding must not stop all other records
 # from refreshing. The raw Markdown evidence must remain byte-identical.
