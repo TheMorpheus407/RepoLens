@@ -42,9 +42,10 @@ chmod 000 "$saved/meta-orchestrator-output.txt" || exit 1
 if [[ -r "$saved/meta-orchestrator-output.txt" ]]; then
   _rounds_meta_git() { return 1; }
 fi
-restore_rc=0
-_rounds_meta_restore_success "$saved" || restore_rc=$?
-printf 'unreadable saved output: restore_rc=%s (2 is pending/verification-unavailable)\n' "$restore_rc"
+# Keep this result distinct from artifact-helper locals across the reload below.
+output_restore_rc=0
+_rounds_meta_restore_success "$saved" || output_restore_rc=$?
+printf 'unreadable saved output: restore_rc=%s (2 is pending/verification-unavailable)\n' "$output_restore_rc"
 resume_rc=0
 run_rounds 2 LENSES || resume_rc=$?
 printf 'resume_rc=%s proof=%s calls=%s\n' "$resume_rc" "$(test -s "$saved/meta-orchestrator-success.json" && echo present || echo DELETED)" "$(wc -l < "$LOG_BASE/model-calls")"
@@ -55,7 +56,7 @@ repair_rc=0
 run_rounds 2 LENSES || repair_rc=$?
 test "$repair_rc" -eq 0 || exit 1
 printf 'after permission repair: model calls=%s (expected 1)\n' "$(wc -l < "$LOG_BASE/model-calls")"
-test "$restore_rc" -eq 2 || exit 1
+test "$output_restore_rc" -eq 2 || exit 1
 test "$resume_rc" -ne 0 || exit 1
 test "$(cat "$saved/meta-orchestrator-success.json")" = "$proof_before" || exit 1
 test "$(wc -l < "$LOG_BASE/model-calls")" -eq 1 || exit 1
