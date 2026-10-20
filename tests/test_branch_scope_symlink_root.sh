@@ -38,6 +38,20 @@ check() {
 write_finding() {
   printf -- '---\ntitle: %s\nseverity: high\n---\nEvidence: %s:1\n' "$2" "$3" > "$1"
 }
+# Fail only a backup copy of the prior diagnostic, after partial output.
+cp() {
+  if [[ "${fault:-}" == backup-copy ]]; then
+    local copy_arg
+    for copy_arg in "$@"; do
+      if [[ "$copy_arg" == "$rejected.out-of-scope.reason" ]]; then
+        : > "$base/backup-copy-attempted"
+        builtin printf 'partial previous reason' > "${!#}"
+        return 74
+      fi
+    done
+  fi
+  command cp "$@"
+}
 for variant in physical linked linked-slash; do
   base="$TMPROOT/$variant"
   mkdir -p "$base/real" "$base/external"
@@ -108,13 +122,15 @@ done
 # Exercise portable publication and failures after staging, rather than only
 # destinations rejected before mktemp. No native BSD host is needed to model
 # its mv option contract; all ordinary moves still use the real executable.
-for fault in bsd-mv cross-device stage-write publish; do
+for fault in bsd-mv cross-device stage-write publish quarantine rollback backup-copy; do
   base="$TMPROOT/publication-$fault"
   mkdir -p "$base/real/nested dir"
   rejected="$base/real/nested dir/rejected.md"
   write_finding "$rejected" 'Rejected finding' untouched.sh
   cp -- "$rejected" "$base/original"
   printf 'previous diagnostic\n' > "$rejected.out-of-scope.reason"
+  printf 'previous diagnostic\n' > "$base/expected-reason"
+  if [[ "$fault" == quarantine || "$fault" == rollback ]]; then mkdir "$rejected.out-of-scope"; fi
   filter_path="$PATH"
   if [[ "$fault" == bsd-mv ]]; then
     # Use an executable mock so this contract stays active even when the
@@ -139,6 +155,16 @@ MOCK
     check "BSD mv mock rejects unsupported option" test "$rc" -eq 64
   fi
   python3() {
+    if [[ "$fault" == rollback && "${!#}" == "$rejected.out-of-scope" ]]; then
+      : > "$base/quarantine-attempted"
+      command python3 "$@"
+      return $?
+    fi
+    if [[ "$fault" == rollback && "${!#}" == "$rejected.out-of-scope.reason" \
+          && -f "$base/quarantine-attempted" ]]; then
+      : > "$base/rollback-attempted"
+      return 1
+    fi
     # Model a mount boundary at the nested finding directory. Execute the real
     # publication helper, but make rename across that boundary report EXDEV.
     if [[ "$fault" == cross-device && "${!#}" == "$rejected.out-of-scope.reason" ]]; then
@@ -176,8 +202,9 @@ exec(code)
     builtin printf "$@"
   }
   rc=0
-  PATH="$filter_path" branch_scope_filter_directory "$base/real" || rc=$?
+  PATH="$filter_path" branch_scope_filter_directory "$base/real" > "$base/filter.log" 2>&1 || rc=$?
   unset -f python3 printf
+  [[ "$fault" != backup-copy ]] || unset -f cp
   if [[ "$fault" == bsd-mv || "$fault" == cross-device ]]; then
     if [[ "$fault" == cross-device ]]; then
       check "cross-device reaches real publication helper" test -f "$base/publication-attempted"
@@ -188,12 +215,33 @@ exec(code)
   else
     marker="$base/write-attempted"
     [[ "$fault" != publish ]] || marker="$base/publication-attempted"
-    check "$fault reaches staged failure" test -f "$marker"
+    [[ "$fault" != quarantine ]] || marker="$rejected.out-of-scope"
+    [[ "$fault" != rollback ]] || marker="$base/rollback-attempted"
+    [[ "$fault" != backup-copy ]] || marker="$base/backup-copy-attempted"
+    if [[ "$fault" == quarantine ]]; then
+      check "$fault obstruction exists" test -d "$marker"
+    else
+      check "$fault reaches staged failure" test -f "$marker"
+    fi
     check "$fault reports failure" test "$rc" -ne 0
     check "$fault preserves source bytes" cmp -s "$base/original" "$rejected"
-    check "$fault publishes no quarantine" test ! -e "$rejected.out-of-scope"
-    check "$fault preserves previous diagnostic" grep -Fxq 'previous diagnostic' "$rejected.out-of-scope.reason"
+    if [[ "$fault" == quarantine || "$fault" == rollback ]]; then
+      check "$fault preserves the blocked quarantine directory" test -d "$rejected.out-of-scope"
+    else
+      check "$fault publishes no quarantine" test ! -e "$rejected.out-of-scope"
+    fi
+    if [[ "$fault" == rollback ]]; then
+      retained_backup="$(find "$base/real" -name '.branch-scope-reason.previous.*' -type f -print)"
+      check "$fault retains a recovery copy" test -f "$retained_backup"
+      if [[ -f "$retained_backup" ]]; then
+        check "$fault recovery copy preserves exact bytes" cmp -s "$base/expected-reason" "$retained_backup"
+        check "$fault reports the retained recovery path" grep -Fq "$retained_backup" "$base/filter.log"
+        check "$fault diagnostic can be recovered" _branch_scope_replace_file "$retained_backup" "$rejected.out-of-scope.reason"
+      fi
+    fi
+    check "$fault preserves previous diagnostic" cmp -s "$base/expected-reason" "$rejected.out-of-scope.reason"
     check "$fault cleans failed staging before retry" test -z "$(find "$base/real" -name '.branch-scope-*' -print)"
+    if [[ "$fault" == quarantine || "$fault" == rollback ]]; then rmdir "$rejected.out-of-scope"; fi
     check "$fault retry succeeds" branch_scope_filter_directory "$base/real"
     check "$fault retry quarantines exact source" cmp -s "$base/original" "$rejected.out-of-scope"
     check "$fault retry publishes full reason" grep -Fxq 'out-of-scope citation: untouched.sh' "$rejected.out-of-scope.reason"

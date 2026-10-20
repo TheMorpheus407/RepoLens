@@ -386,7 +386,7 @@ branch_scope_filter_directory() {
   (( filter_rc == 0 )) || return "$filter_rc"
   # A later scope/read failure must not quarantine an earlier finding.
   # Finish verification before committing any rejections.
-  local rejection_index reason_tmp
+  local rejection_index reason_tmp directory_reason_backup
   for rejection_index in "${!rejected_files[@]}"; do
     file="${rejected_files[$rejection_index]}"
     reason="${rejection_reasons[$rejection_index]}"
@@ -399,17 +399,36 @@ branch_scope_filter_directory() {
     # Stage beside the finding so exact-path replacement stays on its
     # filesystem even when a nested directory is a separate mount.
     reason_tmp="$(mktemp "${file%/*}/.branch-scope-reason.XXXXXX")" || return 1
+    directory_reason_backup=""
+    if [[ -f "$file.out-of-scope.reason" ]]; then
+      directory_reason_backup="$(mktemp "${file%/*}/.branch-scope-reason.previous.XXXXXX")" || {
+        rm -f -- "$reason_tmp"
+        return 1
+      }
+      if ! cp -p -- "$file.out-of-scope.reason" "$directory_reason_backup"; then
+        rm -f -- "$reason_tmp" "$directory_reason_backup"
+        return 1
+      fi
+    fi
     if ! printf '%s\n' "$reason" > "$reason_tmp" ||
         ! _branch_scope_replace_file "$reason_tmp" "$file.out-of-scope.reason"; then
       rm -f -- "$reason_tmp"
+      [[ -z "$directory_reason_backup" ]] || rm -f -- "$directory_reason_backup"
       filter_rc=1
       break
     fi
     if ! _branch_scope_replace_file "$file" "$file.out-of-scope"; then
-      rm -f -- "$file.out-of-scope.reason"
+      if [[ -n "$directory_reason_backup" ]]; then
+        if ! _branch_scope_replace_file "$directory_reason_backup" "$file.out-of-scope.reason"; then
+          printf 'branch_scope_filter_directory: previous diagnostic retained at %s after restoration failed\n' "$directory_reason_backup" >&2
+        fi
+      else
+        rm -f -- "$file.out-of-scope.reason"
+      fi
       filter_rc=1
       break
     fi
+    [[ -z "$directory_reason_backup" ]] || rm -f -- "$directory_reason_backup" || return 1
   done
   return "$filter_rc"
 }
