@@ -400,14 +400,27 @@ case_synthesis_body_io() (
   printf '[{"retained":true}]\n' > "$LOG_BASE/final/manifest.json.out-of-scope.json"
   printf '[{"cluster_id":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
   before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")"
-  # Fail only the scope body reader, optionally emitting a valid citation first.
+  check branch_scope_verify_body 'src/probe.sh:1'
+  # repolens-r16-p8-2: execution failures are not semantic rejections.
   jq() {
-    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "$#" == 2 && "$1" == -r && "$2" == .body ]]; then
+    if [[ "$body_fault" == membership && "${FUNCNAME[1]:-}" == branch_scope_verify_body && "${1:-}" == -e && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      return 74
+    fi
+    if [[ ( "$body_fault" == empty || "$body_fault" == partial ) && "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "$#" == 2 && "$1" == -r && "$2" == .body ]]; then
       printf 'fault\n' >> "$LOG_BASE/fault-hit"
       [[ "$body_fault" != partial ]] || printf 'src/probe.sh:1\n'
       return 74
     fi
     command jq "$@"
+  }
+  awk() {
+    if [[ "$body_fault" == scan* && "${FUNCNAME[1]:-}" == _repolens_scan_citations && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$body_fault" != scan-partial ]] || printf 'src/probe.sh:1\n'
+      return 74
+    fi
+    command awk "$@"
   }
   rc=0
   run_synthesizer probe || rc=$?
@@ -417,7 +430,7 @@ case_synthesis_body_io() (
   check test "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$before"
   check jq -e 'length == 1 and .[0].body == "src/probe.sh:1"' "$LOG_BASE/final/manifest.scope-pending.json"
   check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
-  unset -f jq
+  unset -f jq awk
   check run_synthesizer probe
   check jq -e 'length == 1 and .[0].body == "src/probe.sh:1"' "$LOG_BASE/final/manifest.json"
   check jq -e 'length == 0' "$LOG_BASE/final/manifest.json.out-of-scope.json"
@@ -436,5 +449,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) for body_fault in empty partial; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) for body_fault in empty partial scan scan-partial membership; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac

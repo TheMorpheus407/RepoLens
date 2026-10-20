@@ -252,17 +252,25 @@ branch_scope_verify_body() {
     printf 'branch scope missing or invalid\n'
     return 2
   fi
-  if ! citations="$(repolens_extract_citations "$body")"; then
-    printf 'malformed citation list in body\n'
-    return 1
+  if citations="$(repolens_extract_citations "$body")"; then
+    :
+  else
+    case $? in
+      1) printf 'malformed citation list in body\n'; return 1 ;;
+      *) printf 'citation extraction unavailable\n'; return 2 ;;
+    esac
   fi
   [[ -n "$citations" ]] || { printf 'branch finding has no file:line citation\n'; return 1; }
   while IFS= read -r path; do
     path="${path%:*}"
     path="${path#./}"
-    if ! jq -e --arg path "$path" 'index($path) != null' <<< "$paths" >/dev/null; then
-      printf 'out-of-scope citation: %s\n' "$path"
-      return 1
+    if jq -e --arg path "$path" 'index($path) != null' <<< "$paths" >/dev/null; then
+      :
+    else
+      case $? in
+        1) printf 'out-of-scope citation: %s\n' "$path"; return 1 ;;
+        *) printf 'branch scope membership check unavailable\n'; return 2 ;;
+      esac
     fi
   done <<< "$citations"
 }
