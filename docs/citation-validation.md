@@ -44,7 +44,7 @@ an existing file can be out of scope, and an in-scope line can be nonexistent.
 | N19 | Valid nested evidence as issue or action body | Publish once through mocked structured readback | filing governance N19 |
 | N20 | Valid independent parent, action containing unsupported file-like citations (including conventional root files), alone or alongside valid bare/quoted anchors | Reject the action with a diagnostic and zero comment POSTs | filing governance unsupported-action cases |
 | N21 | Valid parent, citation-free action prose, opaque URL (including commas/semicolons), comma-terminated timestamp or backtick sample (including multiline fences) with no recognized source citation | Preserve ordinary comment publication | filing governance citation-free action cases |
-| N22 | Action citation classification fails | Record failure; zero comment creates | filing governance citation probe failure |
+| N22 | Action citation extraction/classification cannot complete | Return retry status; preserve pending actions and saved receipts; zero comment creates until repaired | filing governance citation probe failure; scope retry-caller cross-scan cases |
 | N23 | Valid parent, recognized source citation inside a multiline fence | Apply live-source and branch-scope checks; reject missing files, nonexistent lines or out-of-scope paths with zero comment POSTs | filing governance fenced-citation cases |
 
 The action guard classifies every body and requires nonempty strict extraction
@@ -53,7 +53,12 @@ only the original body supplies evidence to scope and live-source validation.
 This action publication check is stricter than extraction alone (N13).
 Action classification retains scanner failures through its output filter even
 when a sourceable caller disables `pipefail`; partial output cannot authorize a
-comment POST. This follows the existing action-classification failure policy.
+comment POST. Operational failures in action extraction, classification, output
+filtering or candidate input setup return retry status 2 without a permanent
+rejection or reservation of a fresh action for POST. Saved receipts, payloads
+and their attempt guards remain intact. A repaired retry publishes a fresh
+action once and reattests saved actions without another POST; malformed or
+unsupported citations still receive permanent rejection.
 Backtick masking in the classifier spans the complete body, including multiline
 fenced samples. The shared extractor still scans the original body: recognized
 bare or quoted source citations, including those inside fences, undergo

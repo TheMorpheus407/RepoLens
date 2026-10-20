@@ -428,17 +428,27 @@ esac
 exec "$REPOLENS_TEST_REAL_AWK" "$@"
 SH
 chmod +x "$probe_bin/awk"
+probe_rc=0
 REPOLENS_TEST_REAL_AWK="$probe_real_awk" \
   REPOLENS_TEST_PROBE_CALLED="$TMP/citation-probe-called" \
   PATH="$probe_bin:$PATH" \
-  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr"
+  _filing_cross_link_enact run > "$TMP/stdout" 2> "$TMP/stderr" || probe_rc=$?
 check 'citation probe failure was exercised' test -f "$TMP/citation-probe-called"
-check 'citation probe failure records an action rejection' \
-  test -f "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+check 'citation probe failure returns retry status' test "$probe_rc" -eq 2
+check 'citation probe failure leaves the action pending' \
+  test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.failed"
+check 'citation probe failure does not reserve a POST' \
+  test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.attempted"
 check 'citation probe failure cannot produce a success receipt' \
   test ! -e "$LOG_BASE/final/filed/cross-link/comment-9.done"
 check 'citation probe failure performs zero comment POSTs' \
   test "$(grep -c '^issue comment$' "$TMP/calls")" = 0
+check 'repaired citation probe retries successfully' _filing_cross_link_enact run
+check 'repaired citation probe writes a success receipt' \
+  test -f "$LOG_BASE/final/filed/cross-link/comment-9.done"
+check 'repeated citation probe dispatch succeeds' _filing_cross_link_enact run
+check 'repaired citation probe publishes exactly once' \
+  test "$(grep -c '^issue comment$' "$TMP/calls")" = 1
 
 # docs/citation-validation.md N16-N19: parent evidence is checked before action
 # evidence; a valid parent never authorizes invalid new supporting references.

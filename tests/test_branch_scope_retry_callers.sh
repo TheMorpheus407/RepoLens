@@ -493,34 +493,83 @@ case_verifier_input_io() (
 # A sourceable filing caller need not enable pipefail. Failed classification
 # must never be hidden by sed, including when the scanner emitted a prefix.
 case_cross_link_scan_io() (
-  local output="$1" cross_prefix
-  fresh "cross-scan-$output"
+  local output="$1" boundary="${2:-candidate}" saved="${3:-new}" cross_prefix rc=0 before=""
+  fresh "cross-scan-$output-$boundary-$saved"
   CROSS_LINK_MODE=comment
   cross_prefix="$LOG_BASE/final/filed/cross-link/comment-9"
   jq '.[0].body="Parent src/probe.sh:1" | .[0].cross_link_actions=[{type:"comment",issue_number:9,body:"Action src/probe.sh:1"}]' "$LOG_BASE/final/manifest.json" > "$LOG_BASE/changed.json"
   mv "$LOG_BASE/changed.json" "$LOG_BASE/final/manifest.json"
-  eval "$(declare -f repolens_extract_citations | sed '1s/repolens_extract_citations/original_extract/')"
+  mkdir -p "${cross_prefix%/*}"
+  if [[ "$saved" == saved ]]; then
+    printf 'done\n' > "$cross_prefix.done"
+    printf 'Action src/probe.sh:1' > "$cross_prefix.body.md"
+    printf 'https://github.com/acme/probe/issues/9#issuecomment-1\n' > "$cross_prefix.created-response"
+    before="$(sha256sum "$cross_prefix.done" "$cross_prefix.body.md" "$cross_prefix.created-response")"
+  fi
+  eval "$(declare -f repolens_extract_citations | command sed '1s/repolens_extract_citations/original_extract/')"
+  eval "$(declare -f _filing_action_reference_candidates | command sed '1s/_filing_action_reference_candidates/original_candidates/')"
   repolens_extract_citations() {
-    if [[ "$1" == src/probe.sh:1 ]]; then
+    if [[ ( "$boundary" == candidate && "$1" == src/probe.sh:1 ) || ( "$boundary" == action && "$1" == 'Action src/probe.sh:1' ) ]]; then
       printf 'fault\n' >> "$LOG_BASE/fault-hit"
       [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
-      return 74
+      return 2
     fi
     original_extract "$@"
   }
+  _filing_action_reference_candidates() {
+    if [[ "$boundary" == input ]]; then
+      : > "$LOG_BASE/fault-hit"
+      printf 'src/probe.sh:1\n%.0s' {1..8000}
+      return 0
+    fi
+    if [[ "$boundary" == classifier || "$boundary" == classifier-one ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
+      [[ "$boundary" != classifier-one ]] || return 1
+      return 74
+    fi
+    original_candidates "$@"
+  }
+  sed() {
+    if [[ "$boundary" == filter && "${1:-}" == '/^quoted:1$/d' ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
+      return 1
+    fi
+    command sed "$@"
+  }
   set +o pipefail
-  check _filing_cross_link_enact probe
+  if [[ "$boundary" == input ]]; then
+    (trap '' XFSZ; ulimit -f 0; _filing_cross_link_enact probe) || rc=$?
+  else
+    _filing_cross_link_enact probe || rc=$?
+  fi
   [[ ! -o pipefail ]] || exit 1
   set -o pipefail
-  check test -s "$LOG_BASE/fault-hit"
+  check test -e "$LOG_BASE/fault-hit"
+  check test "$rc" -eq 2
   check test ! -e "$LOG_BASE/posts"
-  check test ! -e "$cross_prefix.done"
-  check grep -Fq 'action citation classification failed' "$cross_prefix.failed"
-  printf 'PASS: cross-link classification retains %s scanner failure without caller pipefail\n' "$output"
+  check test ! -e "$cross_prefix.failed"
+  check test ! -e "$cross_prefix.unverified-done"
+  if [[ "$saved" == saved ]]; then
+    check test "$(sha256sum "$cross_prefix.done" "$cross_prefix.body.md" "$cross_prefix.created-response")" = "$before"
+  else
+    check test ! -e "$cross_prefix.done"
+    check test ! -e "$cross_prefix.attempted"
+  fi
+  unset -f repolens_extract_citations _filing_action_reference_candidates sed
+  eval "$(declare -f original_extract | command sed '1s/original_extract/repolens_extract_citations/')"
+  eval "$(declare -f original_candidates | command sed '1s/original_candidates/_filing_action_reference_candidates/')"
+  check _filing_cross_link_enact probe
+  check test -f "$cross_prefix.done"
+  check _filing_cross_link_enact probe
+  if [[ "$saved" == saved ]]; then check test ! -e "$LOG_BASE/posts";
+  else check test "$(wc -l < "$LOG_BASE/posts")" -eq 1; fi
+  printf 'PASS: %s cross-link retries %s %s failure without caller pipefail or repeated POST\n' "$saved" "$output" "$boundary"
 )
 case "${1:-all}" in
   semantics) case_verifier_semantics ;;
-  cross-scan-*) case_cross_link_scan_io "${1#cross-scan-}" ;;
+  cross-scan-*) case_cross_link_scan_io "${1#cross-scan-}" "${2:-candidate}" "${3:-new}" ;;
   input-*) case_verifier_input_io "${1#input-}" ;;
   body-*) case_synthesis_body_io "${1#body-}" ;;
   kept-*) case_synthesis_kept_io "${1#kept-}" ;;
@@ -533,5 +582,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) case_verifier_semantics; for boundary in scanner membership loop; do case_verifier_input_io "$boundary"; done; for output in empty partial; do case_cross_link_scan_io "$output"; done; for body_fault in empty partial scan scan-partial scan-no-pipefail scan-one scan-three sort-one membership membership-one; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) case_verifier_semantics; for boundary in scanner membership loop; do case_verifier_input_io "$boundary"; done; for saved in new saved; do for boundary in candidate action classifier classifier-one filter; do for output in empty partial; do case_cross_link_scan_io "$output" "$boundary" "$saved"; done; done; case_cross_link_scan_io empty input "$saved"; done; for body_fault in empty partial scan scan-partial scan-no-pipefail scan-one scan-three sort-one membership membership-one; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac

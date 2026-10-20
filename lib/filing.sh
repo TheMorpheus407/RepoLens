@@ -716,7 +716,9 @@ _filing_action_reference_candidates() {
 #
 #   Ordinary action failures are best-effort and logged to stderr. Parent
 #   cancellation stops admission and makes the enclosing dispatch fail. A failed
-#   saved-receipt quarantine also fails the dispatch.
+#   saved-receipt quarantine also fails the dispatch. Operational action citation
+#   extraction/classification failures return 2 before publication, preserving
+#   retry eligibility and any saved receipt.
 #
 #   Required globals: FORGE_REPO (or REPO_OWNER+REPO_NAME).
 #   Optional globals: REPOLENS_REOPEN_LABEL (defaults "repolens:reopen-candidate").
@@ -884,7 +886,14 @@ _filing_cross_link_enact() {
       continue
     fi
     # Newly introduced citations in the action itself must also verify.
-    if ! action_citations="$(repolens_extract_citations "$body")"; then
+    if action_citations="$(repolens_extract_citations "$body")"; then
+      :
+    else
+      rc=$?
+      if (( rc != 1 )); then
+        printf '_filing_cross_link_enact: action citation extraction unavailable; retry after repair\n' >&2
+        return 2
+      fi
       _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: malformed citation list in body' || return 1
       continue
     fi
@@ -892,13 +901,22 @@ _filing_cross_link_enact() {
     # references. Candidates never replace the original validation body.
     local action_reference_candidates action_reference candidate_citations
     if ! action_reference_candidates="$(_filing_action_reference_candidates "$body")"; then
-      _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: action citation classification failed' || return 1
-      continue
+      printf '_filing_cross_link_enact: action citation classification unavailable; retry after repair\n' >&2
+      return 2
     fi
     local unsupported_reference=0
     while IFS= read -r action_reference; do
       [[ -n "$action_reference" ]] || continue
-      if ! candidate_citations="$(set -o pipefail; repolens_extract_citations "$action_reference" | sed '/^quoted:1$/d')"; then
+      # A failed output filter is operational even when sed returns 1, the
+      # extractor's semantic rejection code. Preserve caller shell options.
+      if candidate_citations="$(set -o pipefail; repolens_extract_citations "$action_reference" | { sed '/^quoted:1$/d' || return 2; })"; then
+        :
+      else
+        rc=$?
+        if (( rc != 1 )); then
+          printf '_filing_cross_link_enact: action citation classification unavailable; retry after repair\n' >&2
+          return 2
+        fi
         _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: action citation classification failed' || return 1
         unsupported_reference=1
         break
@@ -908,7 +926,10 @@ _filing_cross_link_enact() {
         unsupported_reference=1
         break
       fi
-    done <<< "$action_reference_candidates"
+    done <<< "$action_reference_candidates" || {
+      printf '_filing_cross_link_enact: action citation candidates unavailable; retry after repair\n' >&2
+      return 2
+    }
     (( unsupported_reference )) && continue
     if [[ -n "$action_citations" ]]; then
       if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")"; then
