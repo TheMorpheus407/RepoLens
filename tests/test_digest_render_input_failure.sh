@@ -25,6 +25,7 @@ source "$ROOT/lib/rounds.sh"
 saved_file_limit="$(ulimit -S -f)"
 fault=none
 fault_armed=0
+write_format=''
 # Define the override before builtin printf calls for older ShellCheck versions.
 # Restore the limit at the next output operation, so only the here-string's
 # temporary-file write fails; subsequent rendering could otherwise hide it.
@@ -32,6 +33,17 @@ printf() {
   if (( fault_armed )); then
     ulimit -S -f "$saved_file_limit"
     fault_armed=0
+  fi
+  if [[ "$fault" == render-output && "${1:-}" == "$write_format" ]]; then
+    builtin printf 'reached\n' > "$fixture/fault-reached"
+    local injected_write_rc=0
+    ulimit -S -f 0
+    # Return the actual EFBIG status, then allow later writes to succeed.
+    # shellcheck disable=SC2059 # Forward the production format and arguments.
+    builtin printf "$@" || injected_write_rc=$?
+    ulimit -S -f "$saved_file_limit"
+    builtin printf '%s\n' "$injected_write_rc" > "$fixture/write-status"
+    return "$injected_write_rc"
   fi
   if [[ "$fault" == cap-marker && "${1:-}" == 'Digest truncated at 500 lines.\n' ]]; then
     builtin printf 'reached\n' > "$fixture/fault-reached"
@@ -127,6 +139,37 @@ builtin printf 'PASS: render-input failure preserves digest, cleans staging and 
 builtin printf -- '---\ntitle: retained finding\nseverity: high\ndomain: security\nlens: injection\nsuspect_files: src/probe.sh:1\n---\n## hypothesis\nRetained security evidence\n' > "$round/lens-outputs/finding.md"
 build_round_digest "$round" || fail 'publication baseline failed'
 cp "$round/digest.md" "$fixture/before"
+
+# A failed output operation can be hidden by later successful writes/counters.
+# Cover the header, a finding body, and both final coverage operations with
+# real transient file-size failures rather than a fabricated printf status.
+write_case=0
+for write_format in '# Round Digest\n\n' ' hypothesis="%s"\n' '## Coverage\n' 'Touched %s/%s audit domains: %s\n'; do
+  write_case=$((write_case + 1))
+  fault=render-output
+  rm -f "$fixture/fault-reached" "$fixture/write-status"
+  rc=0
+  build_round_digest "$round" 2>&1 | cat > "$fixture/write-$write_case.log" || rc=$?
+  [[ -f "$fixture/fault-reached" ]] || fail 'render-output fault was not reached'
+  [[ "$(cat "$fixture/write-status")" -ne 0 ]] || fail 'printf did not report a real write failure'
+  grep 'File too large' "$fixture/write-$write_case.log" || fail 'missing real EFBIG diagnostic'
+  builtin printf 'render-output %s: printf=%s digest=%s\n' "$write_case" "$(cat "$fixture/write-status")" "$rc"
+  if (( rc == 0 )); then
+    builtin printf 'FAIL: output failure %s must fail the digest build\n' "$write_case" >&2
+    failures=$((failures + 1))
+  fi
+  if ! cmp -s "$fixture/before" "$round/digest.md"; then
+    builtin printf 'FAIL: output failure %s replaced the complete digest\n' "$write_case" >&2
+    failures=$((failures + 1))
+  fi
+  staged_files="$(find "$round" -name 'digest.md.tmp.*' -print)" || fail 'output staging inspection failed'
+  [[ -z "$staged_files" ]] || fail 'output failure retained staging'
+  fault=none
+  build_round_digest "$round" || fail 'output failure retry failed'
+  cmp "$fixture/before" "$round/digest.md" || fail 'output retry changed the complete digest'
+done
+test "$failures" -eq 0 || fail 'render-output preservation assertions failed'
+builtin printf 'PASS: real render-output failures preserve digest, clean staging and retry.\n'
 
 # Directory destinations must not turn a staged file into a nested artifact.
 for output_size in normal capped; do

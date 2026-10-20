@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Retain round-digest rendering write failures even when later output succeeds, preserving the previous complete digest and permitting a repaired retry instead of publishing partial findings (repolens-r16-p10-1).
+
 - Preserve trailing content quotes and apostrophes in plain Generic delivery titles, keeping the complete title in exported Markdown and the finding registry (repolens-r16-p9-2).
 
 - Stream manifest entries into registry serialization instead of passing their complete evidence bodies as command arguments, so valid large findings retain JSONL and CSV output (repolens-r16-p7-1).
