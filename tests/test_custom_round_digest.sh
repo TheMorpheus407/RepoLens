@@ -75,5 +75,24 @@ check_contains 'mixed digest keeps registered lens' "$digest" RegisteredControl
 check_contains 'mixed digest keeps dispatched Generic' "$digest" GenericControl
 check_absent 'mixed digest still rejects undispatched Custom' "$digest" UndispatchedCustom
 check_absent 'mixed digest still rejects domain spoof' "$digest" DomainSpoof
+# A source path's comma is data, including in the three-path display limit.
+for path_case in single multiple none; do
+  finding="$round/lens-outputs/$canonical/001.md"
+  printf -- '---\ntitle: Comma path evidence\nseverity: high\ndomain: custom\nlens: %s\nconfidence: high\nsuspect_files:\n' "$lens" > "$finding"
+  if [[ "$path_case" != none ]]; then
+    printf '  - "src/a,b.py:1"\n' >> "$finding"
+  fi
+  if [[ "$path_case" == multiple ]]; then
+    printf '  - "src/a, b.py:2"\n  - src/ordinary.py:3\n  - src/hidden.py:4\n' >> "$finding"
+  fi
+  printf -- '---\n## hypothesis\nComma anchor remains intact.\n## evidence\nsrc/a,b.py:1\n' >> "$finding"
+  build_round_digest "$round" "$entry" 2> "$FIXTURE/comma-warnings"
+  case "$path_case" in
+    single) expected='files=`src/a,b.py:1` hypothesis="Comma anchor remains intact."' ;;
+    multiple) expected='files=`src/a,b.py:1`, `src/a, b.py:2`, `src/ordinary.py:3` hypothesis="Comma anchor remains intact."' ;;
+    none) expected='files=none hypothesis="Comma anchor remains intact."' ;;
+  esac
+  check_contains "$path_case source paths remain intact in the finding line" "$(cat "$round/digest.md")" "$expected"
+done
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 test "$FAIL" -eq 0

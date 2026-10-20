@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve commas and spaces within each round-digest source path by formatting complete array members before joining; retain the three-source display limit and empty-source representation (repolens-r16-p5-2).
+
 - Fail registry validation when its input cannot be opened, preserving the previous readable JSONL, CSV and triage reports instead of promoting an unvalidated candidate (repolens-r16-p5-1).
 
 - Require exactly one array of path strings in persisted branch scope; reject multi-document JSON streams before filtering findings or manifests, preserving their evidence for a repaired retry (repolens-r16-p3-3).
