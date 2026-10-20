@@ -2937,11 +2937,25 @@ build_round_digest() {
 
   digest_lines="$(wc -l < "$tmp_digest" | tr -d '[:space:]')"
   if [[ "$digest_lines" =~ ^[0-9]+$ && "$digest_lines" -gt 500 ]]; then
-    head -n 499 "$tmp_digest" > "$digest_path"
-    printf 'Digest truncated at 500 lines.\n' >> "$digest_path"
+    local capped_digest
+    capped_digest="$(mktemp "${tmp_digest}.cap.XXXXXX")" || { rm -f "$tmp_digest"; return 1; }
+    if ! head -n 499 "$tmp_digest" > "$capped_digest" \
+        || ! printf 'Digest truncated at 500 lines.\n' >> "$capped_digest"; then
+      rm -f "$tmp_digest" "$capped_digest"
+      return 1
+    fi
+    rm -f "$tmp_digest" || { rm -f "$capped_digest"; return 1; }
+    tmp_digest="$capped_digest"
+  fi
+  # Share the portable exact-path publisher; plain mv nests inside directory
+  # destinations. Keep the last complete digest until either stage is ready.
+  if ! (
+    # shellcheck source=lib/artifacts.sh
+    source "$(_rounds_repo_root)/lib/artifacts.sh" || exit 1
+    _artifacts_replace_report "$tmp_digest" "$digest_path"
+  ); then
     rm -f "$tmp_digest"
-  else
-    mv "$tmp_digest" "$digest_path"
+    return 1
   fi
 }
 
