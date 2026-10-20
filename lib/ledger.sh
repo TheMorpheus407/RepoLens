@@ -693,9 +693,16 @@ build_findings_jsonl_from_local() {
   # Reuse current connected components, including transitive matches and the
   # operator's thresholds. A live old link alone cannot justify suppression
   # after a title edit. Unmarked trees need no grouping during ingestion.
-  local components="$tmp.components" manifest="$tmp.manifest"
+  local components="$tmp.components" manifest="$tmp.manifest" duplicate_state
   : > "$components" || { rm -f "$tmp"; return 1; }
-  if jq -se 'any(.[]; .status == "duplicate")' "$tmp" >/dev/null; then
+  # Read the boolean separately from jq execution status: even status 1 can
+  # represent an input/setup failure rather than a successful false result.
+  if ! duplicate_state="$(jq -sr 'any(.[]; .status == "duplicate")' "$tmp")" \
+      || [[ "$duplicate_state" != true && "$duplicate_state" != false ]]; then
+    rm -f "$tmp" "$components"
+    return 1
+  fi
+  if [[ "$duplicate_state" == true ]]; then
     if ! declare -F _synthesize_compute_duplicate_groups >/dev/null 2>&1; then
       # shellcheck source=/dev/null
       source "$(_ledger_repo_root)/lib/synthesize.sh"

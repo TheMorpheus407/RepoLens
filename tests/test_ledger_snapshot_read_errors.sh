@@ -23,6 +23,15 @@ set -euo pipefail
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 LOG_BASE="$FIXTURE/run"
+fail_duplicate_read=false duplicate_read_rc=2
+jq() {
+  if [[ "$fail_duplicate_read" == true && " $* " == *'any(.[]; .status == "duplicate")'* ]]; then
+    : > "$FIXTURE/duplicate-read-reached"
+    [[ "$partial" != true ]] || command jq "$@"
+    return "$duplicate_read_rc"
+  fi
+  command jq "$@"
+}
 mkdir -p "$FIXTURE/findings" "$LOG_BASE/final"
 printf -- '---\ntitle: Saved authorization finding\nseverity: high\ndomain: security\nlens: injection\nstatus: duplicate\nduplicate_of: missing.md\n---\nEvidence\n' > "$FIXTURE/findings/001.md"
 build_finding_registry fixture "$FIXTURE/findings"
@@ -134,5 +143,39 @@ rm "$FIXTURE/findings/001.md" "$FIXTURE/findings/002.md"
 printf 'ordinary notes without frontmatter\n' > "$FIXTURE/findings/notes.md"
 build_finding_registry fixture "$FIXTURE/findings"
 check 'readable malformed input stays skippable' test ! -s "$LOG_BASE/final/findings.jsonl"
+# A failed duplicate-presence read must not promote valid duplicates to new.
+# shellcheck source=/dev/null
+source "$REPO/lib/local-dedupe.sh"
+for lens in injection validation; do
+  mkdir -p "$FIXTURE/findings/security/$lens"
+  printf -- '---\ntitle: SQL injection in login query\nseverity: high\ndomain: security\nlens: %s\n---\nIndependent evidence.\n' "$lens" > "$FIXTURE/findings/security/$lens/001.md"
+done
+dedupe_local_markdown "$FIXTURE/findings"
+build_finding_registry fixture "$FIXTURE/findings"
+check 'control has one actionable finding and one linked duplicate' jq -se \
+  'length == 2 and ([.[] | select(.status == "new")] | length) == 1 and ([.[] | select(.status == "duplicate")] | length) == 1 and any(.[]; (.also_reported_by // [] | length) == 1)' "$LOG_BASE/final/findings.jsonl"
+cp "$LOG_BASE/final/findings.jsonl" "$FIXTURE/before.jsonl"
+cp "$LOG_BASE/final/findings.csv" "$FIXTURE/before.csv"
+fail_duplicate_read=true duplicate_read_rc=2
+
+for duplicate_read_rc in 1 2 74; do
+  for partial in false true; do
+    rm -f "$FIXTURE/duplicate-read-reached"
+    rc=0
+    build_finding_registry fixture "$FIXTURE/findings" > "$FIXTURE/rebuild.log" 2>&1 || rc=$?
+    check 'duplicate-presence reader fault was reached' test -f "$FIXTURE/duplicate-read-reached"
+    check "duplicate read rc=$duplicate_read_rc partial=$partial fails rebuild" test "$rc" -ne 0
+    check 'duplicate read preserves JSONL and provenance' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+    check 'duplicate read preserves CSV' cmp -s "$FIXTURE/before.csv" "$LOG_BASE/final/findings.csv"
+    cp "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+    cp "$FIXTURE/before.csv" "$LOG_BASE/final/findings.csv"
+  done
+done
+fail_duplicate_read=false
+build_finding_registry fixture "$FIXTURE/findings"
+check 'repaired duplicate read reproduces complete registry' cmp -s "$FIXTURE/before.jsonl" "$LOG_BASE/final/findings.jsonl"
+rm "$FIXTURE/findings/security/validation/001.md"
+build_finding_registry fixture "$FIXTURE/findings"
+check 'readable inventory without duplicates remains publishable' jq -se 'length == 1 and .[0].status == "new"' "$LOG_BASE/final/findings.jsonl"
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 test "$FAIL" -eq 0
