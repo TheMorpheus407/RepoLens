@@ -20,7 +20,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Reuse setup and the production finalization callback, without running scenarios.
 # shellcheck source=/dev/null
 source <(awk '/^LOG_BASE=/ {exit} /^REPO=/ {next} {print}' "$REPO/tests/test_generic_explicit_output.sh")
-for scenario in ${1:-severity invalid trust overlap large strings private-discovery}; do
+for scenario in ${1:-severity invalid trust overlap large strings private-discovery rounds-dangling rounds-loop rounds-file rounds-before-find rounds-during-find}; do
   LOG_BASE="$FIXTURE/$scenario/run" OUTPUT_DIR="$FIXTURE/$scenario/output"
   OUTPUT_DIR_SET=true RUN_ID=probe MODE=bugreport LOCAL_MODE=true HUMAN_REVIEW=true
   PROJECT_PATH="$FIXTURE/project" REPOLENS_FINAL_STATE=finished
@@ -32,6 +32,56 @@ for scenario in ${1:-severity invalid trust overlap large strings private-discov
   raw="$rawdir/probe.md"
   printf -- '---\ndomain: generic\nlens_id: probe\nseverity: high\n---\n## hypothesis\nAccepted finding\n## evidence\nEvidence retained.\n' > "$raw"
   case "$scenario" in
+    rounds-*)
+      # repolens-r16-p9-1: initialize a valid symlink layout before its outage.
+      rounds_store="$FIXTURE/$scenario/rounds-store"
+      mv "$LOG_BASE/rounds" "$rounds_store"
+      ln -s "$rounds_store" "$LOG_BASE/rounds"
+      RUN_ROUNDS_RC=0
+      optional_local_finalization
+      projection="$(jq -r .markdown_path "$LOG_BASE/final/findings.jsonl")"
+      kept_paths=("$projection" "$LOG_BASE/final/"{generic-delivery.json,findings.jsonl,findings.csv,TODO.md,SUMMARY.md,NEEDS_REVIEW.md,DUPLICATES.md,HUMAN_REVIEW.md})
+      before="$(sha256sum "${kept_paths[@]}")"
+      case "$scenario" in
+        rounds-dangling) mv "$rounds_store" "$rounds_store.offline" ;;
+        rounds-loop) rm "$LOG_BASE/rounds"; ln -s rounds "$LOG_BASE/rounds" ;;
+        rounds-file) rm "$LOG_BASE/rounds"; printf 'obstruction\n' > "$LOG_BASE/rounds" ;;
+      esac
+      # Lose a previously observed target just before find traverses it. GNU
+      # find -H succeeds with no matches on the now-dangling command-line link.
+      # shellcheck disable=SC2329 # The production inventory invokes this callback.
+      find() {
+        # Ordinary inventory runs after presence was observed but before the
+        # rounds listing. Removing the link must still fail, not skip that list.
+        if [[ "$scenario" == rounds-before-find && "${1:-}" == -H && "${2:-}" == "$OUTPUT_DIR" ]]; then
+          command rm "$LOG_BASE/rounds" || return 1
+        fi
+        if [[ "$scenario" == rounds-during-find && "${1:-}" == -H && "${2:-}" == "$LOG_BASE/rounds" ]]; then
+          command mv "$rounds_store" "$rounds_store.offline" || return 1
+        fi
+        command find "$@"
+      }
+      # The real CLI finalizer attempts delivery even after an earlier failure.
+      RUN_ROUNDS_RC=1 REPOLENS_FINAL_STATE=failed
+      optional_local_finalization > "$LOG_BASE/outage.stdout" 2> "$LOG_BASE/outage.stderr"
+      test "$(sha256sum "${kept_paths[@]}")" = "$before"
+      grep -Fq 'Generic delivery incomplete' "$LOG_BASE/outage.stderr"
+      test "$GLOBAL_ISSUES_CREATED" -eq 1
+      unset -f find
+      if [[ -d "$rounds_store.offline" ]]; then mv "$rounds_store.offline" "$rounds_store"; fi
+      rm -f "$LOG_BASE/rounds"
+      ln -s "$rounds_store" "$LOG_BASE/rounds"
+      RUN_ROUNDS_RC=0 REPOLENS_FINAL_STATE=finished
+      optional_local_finalization
+      test "$(sha256sum "${kept_paths[@]}")" = "$before"
+      jq -se 'length == 1 and .[0].title == "Accepted finding"' "$LOG_BASE/final/findings.jsonl" >/dev/null
+      # A readable inventory that really became empty still retires delivery.
+      rm "$raw"
+      optional_local_finalization
+      test "$GLOBAL_ISSUES_CREATED" -eq 0
+      test ! -e "$projection"
+      jq -se 'length == 0' "$LOG_BASE/final/findings.jsonl" >/dev/null
+      ;;
     severity|invalid|trust)
       sed -e 's/Accepted finding/Rejected finding/' -e 's/severity: high/severity: low/' "$raw" > "$rawdir/rejected.md"
       if [[ "$scenario" == severity ]]; then
