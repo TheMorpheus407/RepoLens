@@ -848,6 +848,7 @@ LOG_WARN_MESSAGES=()
 truncation_repo="$TMPDIR/truncation-repo"
 mkdir -p "$truncation_repo/lib"
 cp "$ROUNDS_LIB" "$truncation_repo/lib/rounds.sh"
+cp "$SCRIPT_DIR/lib/artifacts.sh" "$truncation_repo/lib/artifacts.sh"
 write_synthetic_domains_config "$truncation_repo/config/domains.json"
 
 # shellcheck disable=SC1090
