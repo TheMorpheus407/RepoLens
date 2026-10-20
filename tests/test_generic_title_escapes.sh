@@ -49,6 +49,8 @@ import sys
 root = Path(sys.argv[1])
 cases = [
     (r'"Failure in \"login\" endpoint"', 'Failure in "login" endpoint'),
+    ('Failure in "login"', 'Failure in "login"'),
+    ("Expired users'", "Expired users'"),
     (r'"Windows C:\\repo\\src"', r'Windows C:\repo\src'),
     (r'"\u263A \x22login\x22 \U0001F680"', '☺ "login" 🚀'),
     (r'"before\tquoted\nline"', 'before\tquoted\nline'),
