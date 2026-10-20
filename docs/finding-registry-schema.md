@@ -236,6 +236,19 @@ One JSON object per line in `findings.jsonl`, with these 13 fields:
 - `id` — content-derived and **stable across runs**: the same finding produces
   the same `id` in any run. The hash algorithm is owned by **#311**; it is not
   defined here.
+  Registry title normalization uses the standard library's frozen Unicode 3.2
+  NFC before ASCII case folding, independent of the interpreter's current
+  Unicode database and caller locale. Other non-ASCII code points remain
+  literal, so non-ASCII case and punctuation can distinguish identities, and
+  scripts added after Unicode 3.2 remain distinct. Canonical equivalence is
+  limited to that frozen NFC version. Existing ASCII title IDs retain their
+  exact normalization, including the legacy rule that removes one boundary
+  separator before collapsing repeated separators. Ordinary local titles with
+  invalid UTF-8 bytes treat those bytes as separators for identity; ingestion
+  keeps its existing JSON replacement behavior and never rewrites source
+  Markdown. Existing non-ASCII IDs may change on rebuilding with this fix;
+  the registry is a derived projection, and discarded collisions are restored
+  from the upstream findings.
 - `title` — free-text finding title, from the manifest `title` or the local
   markdown `title` frontmatter.
 - `severity` — the canonical lowercase enum produced by `severity_normalize`

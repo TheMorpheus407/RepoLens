@@ -38,43 +38,37 @@
 _LEDGER_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # _ledger_normalize_title <title>
-#   Normalizes a finding title for stable hashing: lowercases, strips an
-#   optional leading "[severity]" prefix (only when the bracketed word is a
-#   real severity), collapses non-alphanumeric runs to single spaces, trims.
-#
-#   Prefers the shared `_synthesize_normalize_title` (lib/synthesize.sh) when
-#   it is already sourced, so the two stay in lockstep; otherwise falls back to
-#   a self-contained replica so lib/ledger.sh works when sourced on its own.
+#   Preserve non-ASCII text with frozen NFC and existing ASCII identity rules.
+#   Registry identity must not use the synthesizer's ASCII-only matching key:
+#   unrelated non-Latin titles can otherwise collapse to the same empty string.
 _ledger_normalize_title() {
-  if declare -F _synthesize_normalize_title >/dev/null 2>&1; then
-    _synthesize_normalize_title "$1"
-    return
-  fi
+  (set -o pipefail; printf '%s' "${1:-}" | python3 -c '
+import re
+import sys
+import unicodedata
 
-  # Self-contained replica of lib/synthesize.sh::_synthesize_normalize_title.
-  # The severity word set (critical|high|medium|low) is inlined to match
-  # lib/core.sh::severity_normalize without taking a hard dependency on it.
-  local title="${1:-}"
-  if [[ "$title" =~ ^\[([A-Za-z]+)\][[:space:]]*(.*)$ ]]; then
-    case "${BASH_REMATCH[1],,}" in
-      critical|high|medium|low) title="${BASH_REMATCH[2]}" ;;
-    esac
-  fi
-  title="${title,,}"
-  local out="" ch i len="${#title}"
-  for (( i = 0; i < len; i++ )); do
-    ch="${title:i:1}"
-    case "$ch" in
-      [a-z0-9]) out+="$ch" ;;
-      *) out+=' ' ;;
-    esac
-  done
-  out="${out## }"
-  out="${out%% }"
-  while [[ "$out" == *"  "* ]]; do
-    out="${out//  / }"
-  done
-  printf '%s' "$out"
+title = sys.stdin.buffer.read().decode("utf-8", errors="surrogateescape")
+title = re.sub(r"^\[(critical|high|medium|low)\]\s*", "", title, flags=re.I | re.ASCII)
+# Frozen Unicode data prevents interpreter upgrades from changing identities.
+# Normalize before ASCII case folding so E + combining acute still equals É.
+title = unicodedata.ucd_3_2_0.normalize("NFC", title)
+title = title.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+# Undecodable local bytes become separators; genuine non-ASCII text stays
+# literal, including code points unknown to this frozen Unicode database.
+normalized = "".join(
+    " " if 0xDC80 <= ord(ch) <= 0xDCFF else
+    ch if ord(ch) > 127 or "a" <= ch <= "z" or "0" <= ch <= "9" else " "
+    for ch in title
+)
+# Legacy ASCII IDs remove only one boundary space BEFORE collapsing runs.
+# Keep that preimage, including a remaining space from repeated punctuation.
+if normalized.startswith(" "):
+    normalized = normalized[1:]
+if normalized.endswith(" "):
+    normalized = normalized[:-1]
+normalized = re.sub(" +", " ", normalized)
+sys.stdout.buffer.write(normalized.encode("utf-8"))
+')
 }
 
 # _ledger_sha256_hex
@@ -94,8 +88,9 @@ _ledger_sha256_hex() {
 #   Prints a stable, content-derived finding id of the form `fnd-<12 hex>`.
 #
 #   The title argument is normalized internally (see _ledger_normalize_title),
-#   so casing, a leading "[severity]" prefix, and punctuation differences do
-#   not change the id. The canonical pre-image is the four fields joined by the
+#   using frozen NFC, ASCII case folding, leading "[severity]" stripping and
+#   legacy ASCII punctuation rules. Non-ASCII case/punctuation stays literal.
+#   The canonical pre-image is the four fields joined by the
 #   ASCII Unit Separator (US, 0x1F), SHA-256 hashed, truncated to 12 hex chars.
 #
 #   `primary_location` is optional; when omitted it hashes as an empty trailing
