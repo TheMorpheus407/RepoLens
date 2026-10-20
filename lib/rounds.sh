@@ -2944,8 +2944,14 @@ build_round_digest() {
       rm -f "$tmp_digest" "$capped_digest"
       return 1
     fi
-    rm -f "$tmp_digest" || { rm -f "$capped_digest"; return 1; }
-    tmp_digest="$capped_digest"
+    # Keep the original stage's umask-derived permissions for publication.
+    # Both stages are still unpublished, so a failed copy leaves the saved
+    # digest untouched and the caller can retry after cleanup.
+    if ! cat "$capped_digest" > "$tmp_digest"; then
+      rm -f "$tmp_digest" "$capped_digest"
+      return 1
+    fi
+    rm -f "$capped_digest" || { rm -f "$tmp_digest"; return 1; }
   fi
   # Share the portable exact-path publisher; plain mv nests inside directory
   # destinations. Keep the last complete digest until either stage is ready.
