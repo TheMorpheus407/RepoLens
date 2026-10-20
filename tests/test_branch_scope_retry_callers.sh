@@ -403,8 +403,9 @@ case_synthesis_body_io() (
   check branch_scope_verify_body 'src/probe.sh:1'
   # repolens-r16-p8-2: execution failures are not semantic rejections.
   jq() {
-    if [[ "$body_fault" == membership && "${FUNCNAME[1]:-}" == branch_scope_verify_body && "${1:-}" == -e && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
+    if [[ "$body_fault" == membership* && "${FUNCNAME[1]:-}" == branch_scope_verify_body && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
       printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$body_fault" != membership-one ]] || return 1
       return 74
     fi
     if [[ ( "$body_fault" == empty || "$body_fault" == partial ) && "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "$#" == 2 && "$1" == -r && "$2" == .body ]]; then
@@ -418,9 +419,18 @@ case_synthesis_body_io() (
     if [[ "$body_fault" == scan* && "${FUNCNAME[1]:-}" == _repolens_scan_citations && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
       printf 'fault\n' >> "$LOG_BASE/fault-hit"
       [[ "$body_fault" != scan-partial ]] || printf 'src/probe.sh:1\n'
+      [[ "$body_fault" != scan-one ]] || return 1
+      [[ "$body_fault" != scan-three ]] || return 3
       return 74
     fi
     command awk "$@"
+  }
+  sort() {
+    if [[ "$body_fault" == sort-one && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      return 1
+    fi
+    command sort "$@"
   }
   # Sourceable helpers must retain errors even without caller pipefail.
   if [[ "$body_fault" == scan-no-pipefail ]]; then set +o pipefail; fi
@@ -431,19 +441,87 @@ case_synthesis_body_io() (
     set -o pipefail
   fi
   check test -s "$LOG_BASE/fault-hit"
-  printf 'Reached body extraction fault: %s\n' "$body_fault"
+  printf 'Reached body verification fault: %s\n' "$body_fault"
   check test "$rc" -ne 0
   check test "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$before"
   check jq -e 'length == 1 and .[0].body == "src/probe.sh:1"' "$LOG_BASE/final/manifest.scope-pending.json"
   check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
-  unset -f jq awk
+  unset -f jq awk sort
   check run_synthesizer probe
   check jq -e 'length == 1 and .[0].body == "src/probe.sh:1"' "$LOG_BASE/final/manifest.json"
   check jq -e 'length == 0' "$LOG_BASE/final/manifest.json.out-of-scope.json"
   check test ! -e "$LOG_BASE/final/manifest.scope-pending.json"
-  printf 'PASS: %s body reader failure preserves findings and retries\n' "$body_fault"
+  printf 'PASS: %s body verification failure preserves findings and retries\n' "$body_fault"
+)
+# Semantic rejections must retain status 1 while operational faults use 2.
+case_verifier_semantics() (
+  local body rc
+  fresh semantic-status
+  for body in 'src/probe.sh:1,garbage' 'src/unchanged.sh:1' 'No citation'; do
+    rc=0
+    branch_scope_verify_body "$body" >/dev/null || rc=$?
+    check test "$rc" -eq 1
+  done
+  check test "$(repolens_extract_citations 'src/probe.sh:1')" = 'src/probe.sh:1'
+  check test -z "$(repolens_extract_citations 'No citation')"
+  printf 'PASS: malformed, out-of-scope and missing citations remain semantic rejections\n'
+)
+# Exercise Bash's actual status-1 here-string failures without exhausting disk.
+# File-size limits apply only inside the verifier subshell; fixture IO is normal.
+case_verifier_input_io() (
+  local boundary="$1" body='src/probe.sh:1' reason rc=0
+  fresh "input-$boundary"
+  case "$boundary" in
+    scanner) printf -v body '%100000s src/probe.sh:1' '' ;;
+    membership) jq -n '["src/probe.sh", ("x" * 100000)]' > "$BRANCH_SCOPE_FILE" ;;
+  esac
+  check branch_scope_verify_body 'src/probe.sh:1'
+  if [[ "$boundary" == loop ]]; then
+    repolens_extract_citations() { printf 'src/probe.sh:1\n%.0s' {1..8000}; }
+  fi
+  reason="$(trap '' XFSZ; ulimit -f 0; branch_scope_verify_body "$body")" || rc=$?
+  check test "$rc" -eq 2
+  check test "$reason" != 'malformed citation list in body'
+  check test "$reason" != 'out-of-scope citation: src/probe.sh'
+  if [[ "$boundary" == loop ]]; then
+    unset -f repolens_extract_citations
+    source "$ROOT/lib/branch-scope.sh"
+  fi
+  check branch_scope_verify_body "$body"
+  printf 'PASS: %s here-string IO failure is retryable and repaired retry succeeds\n' "$boundary"
+)
+# A sourceable filing caller need not enable pipefail. Failed classification
+# must never be hidden by sed, including when the scanner emitted a prefix.
+case_cross_link_scan_io() (
+  local output="$1" cross_prefix
+  fresh "cross-scan-$output"
+  CROSS_LINK_MODE=comment
+  cross_prefix="$LOG_BASE/final/filed/cross-link/comment-9"
+  jq '.[0].body="Parent src/probe.sh:1" | .[0].cross_link_actions=[{type:"comment",issue_number:9,body:"Action src/probe.sh:1"}]' "$LOG_BASE/final/manifest.json" > "$LOG_BASE/changed.json"
+  mv "$LOG_BASE/changed.json" "$LOG_BASE/final/manifest.json"
+  eval "$(declare -f repolens_extract_citations | sed '1s/repolens_extract_citations/original_extract/')"
+  repolens_extract_citations() {
+    if [[ "$1" == src/probe.sh:1 ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
+      return 74
+    fi
+    original_extract "$@"
+  }
+  set +o pipefail
+  check _filing_cross_link_enact probe
+  [[ ! -o pipefail ]] || exit 1
+  set -o pipefail
+  check test -s "$LOG_BASE/fault-hit"
+  check test ! -e "$LOG_BASE/posts"
+  check test ! -e "$cross_prefix.done"
+  check grep -Fq 'action citation classification failed' "$cross_prefix.failed"
+  printf 'PASS: cross-link classification retains %s scanner failure without caller pipefail\n' "$output"
 )
 case "${1:-all}" in
+  semantics) case_verifier_semantics ;;
+  cross-scan-*) case_cross_link_scan_io "${1#cross-scan-}" ;;
+  input-*) case_verifier_input_io "${1#input-}" ;;
   body-*) case_synthesis_body_io "${1#body-}" ;;
   kept-*) case_synthesis_kept_io "${1#kept-}" ;;
   synthesis-stream-*) case_synthesis_stream "${1#synthesis-stream-}" ;;
@@ -455,5 +533,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) for body_fault in empty partial scan scan-partial scan-no-pipefail membership; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) case_verifier_semantics; for boundary in scanner membership loop; do case_verifier_input_io "$boundary"; done; for output in empty partial; do case_cross_link_scan_io "$output"; done; for body_fault in empty partial scan scan-partial scan-no-pipefail scan-one scan-three sort-one membership membership-one; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac

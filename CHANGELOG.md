@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Treat citation-scanner and scope-membership execution errors as retryable, preserving valid synthesis candidates and saved results instead of publishing false rejections (repolens-r16-p8-2).
+- Treat citation-scanner, sorting and scope-membership execution errors (including shell input setup failures) as retryable, preserving valid synthesis candidates and saved results instead of publishing false rejections. Retain action-classification scanner failures through filtering even when the caller disables `pipefail` (repolens-r16-p8-2).
 
 - Preserve published synthesis results and the complete pending candidate when the initial scope-filter manifest read fails; keep genuinely invalid input rejected (repolens-r16-p8-1).
 

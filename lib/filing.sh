@@ -898,7 +898,7 @@ _filing_cross_link_enact() {
     local unsupported_reference=0
     while IFS= read -r action_reference; do
       [[ -n "$action_reference" ]] || continue
-      if ! candidate_citations="$(repolens_extract_citations "$action_reference" | sed '/^quoted:1$/d')"; then
+      if ! candidate_citations="$(set -o pipefail; repolens_extract_citations "$action_reference" | sed '/^quoted:1$/d')"; then
         _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" 'VERIFICATION_FAILED: action citation classification failed' || return 1
         unsupported_reference=1
         break

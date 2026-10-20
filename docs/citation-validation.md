@@ -51,6 +51,9 @@ The action guard classifies every body and requires nonempty strict extraction
 for each bare candidate. Quoted members stay opaque during classification;
 only the original body supplies evidence to scope and live-source validation.
 This action publication check is stricter than extraction alone (N13).
+Action classification retains scanner failures through its output filter even
+when a sourceable caller disables `pipefail`; partial output cannot authorize a
+comment POST. This follows the existing action-classification failure policy.
 Backtick masking in the classifier spans the complete body, including multiline
 fenced samples. The shared extractor still scans the original body: recognized
 bare or quoted source citations, including those inside fences, undergo
@@ -97,3 +100,12 @@ have no line 1; nonempty final lines count even without a newline, including
 lines ending in spaces or tabs. `tests/test_citation_read_errors.sh` covers these
 boundaries and confirms that a failed final-byte read prevents publication and
 a success receipt.
+
+Branch-scope verification returns 1 only for semantic rejection (malformed or
+missing citations, or a path outside the scope) and 2 when verification cannot
+complete. Scanner, sorting, membership-check and shell input setup failures
+remain operational failures even when their command status is 1. Directory
+filtering leaves findings pending; synthesis preserves saved publications and
+the complete candidate for a repaired retry. The scope retry-caller suite
+injects status-1 failures and real Bash here-string failures and checks both
+publication preservation and successful recovery.
