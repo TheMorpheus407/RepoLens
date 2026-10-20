@@ -199,7 +199,7 @@ _template_task_scope() {
 #  10b. Holds {{SPEC_DIFF_SECTION}} behind a sentinel for spec-change mode
 #  10c. Holds {{BRANCH_DIFF_SECTION}} behind a sentinel for branch-review mode
 #  11. Builds and substitutes {{SOURCE_SECTION}} (source material for content creation)
-#  12. Builds and substitutes {{SPEC_SECTION}} LAST (prevents placeholder injection)
+#  12. Builds {{SPEC_SECTION}} and holds it behind a sentinel
 #  13. Substitutes held untrusted markdown after all {{*_SECTION}} replacements
 #   Variables string format: "KEY1=VALUE1|KEY2=VALUE2|..."
 #   Large round context values may be passed as KEY=@/path/to/file for
@@ -214,7 +214,7 @@ compose_prompt() {
   local base_content lens_body spec_section prompt key value sentinel_seed
   local pair char next i vars_len
   local prior_round_digest_sentinel hypotheses_to_verify_sentinel round_context_sentinel triage_context_pack_sentinel
-  local voice_profile_sentinel
+  local voice_profile_sentinel bug_report_sentinel original_scope_sentinel spec_section_sentinel
   local current_backlog_section_sentinel
   local spec_diff_section_sentinel
   local branch_diff_section_sentinel
@@ -230,6 +230,9 @@ compose_prompt() {
   round_context_sentinel="__REPOLENS_ROUND_CONTEXT_SECTION_${sentinel_seed}__"
   triage_context_pack_sentinel="__REPOLENS_TRIAGE_CONTEXT_PACK_${sentinel_seed}__"
   voice_profile_sentinel="__REPOLENS_VOICE_PROFILE_${sentinel_seed}__"
+  bug_report_sentinel="__REPOLENS_BUG_REPORT_${sentinel_seed}__"
+  original_scope_sentinel="__REPOLENS_ORIGINAL_SCOPE_${sentinel_seed}__"
+  spec_section_sentinel="__REPOLENS_SPEC_SECTION_${sentinel_seed}__"
   current_backlog_section_sentinel="__REPOLENS_CURRENT_BACKLOG_SECTION_${sentinel_seed}__"
   spec_diff_section_sentinel="__REPOLENS_SPEC_DIFF_SECTION_${sentinel_seed}__"
   branch_diff_section_sentinel="__REPOLENS_BRANCH_DIFF_SECTION_${sentinel_seed}__"
@@ -282,6 +285,13 @@ compose_prompt() {
   for key in "${!prompt_vars[@]}"; do
     value="${prompt_vars[$key]}"
     case "$key" in
+      BUG_REPORT)
+        prompt="${prompt//\{\{$key\}\}/$bug_report_sentinel}"
+        ;;
+      ORIGINAL_BUG_REPORT_OR_SCOPE)
+        # Between-round orchestration carries the same user input under this key.
+        prompt="${prompt//\{\{$key\}\}/$original_scope_sentinel}"
+        ;;
       PRIOR_ROUND_DIGEST)
         prompt="${prompt//\{\{$key\}\}/$prior_round_digest_sentinel}"
         ;;
@@ -871,8 +881,7 @@ Read the source file using your file reading capabilities (cat, head, or equival
 
   prompt="${prompt//\{\{HOSTED_SECTION\}\}/$hosted_section}"
 
-  # Step 8 (LAST): Build and insert spec section
-  # Done last so spec content is never subject to variable substitution
+  # Step 8: Build and protect the spec section until substitutions finish.
   spec_section=""
   if [[ -n "$spec_file" && ! -f "$spec_file" ]]; then
     printf 'Unable to read required specification: %s\n' "$spec_file" >&2
@@ -955,7 +964,7 @@ ${spec_content}
     fi
   fi
 
-  prompt="${prompt//\{\{SPEC_SECTION\}\}/$spec_section}"
+  prompt="${prompt//\{\{SPEC_SECTION\}\}/$spec_section_sentinel}"
   # Clear any unsubstituted {{TRIAGE_CONTEXT_PACK}} placeholder so non-bugreport
   # templates (which never receive the pack) do not leak the raw token through.
   prompt="${prompt//\{\{TRIAGE_CONTEXT_PACK\}\}/$triage_context_pack_sentinel}"
@@ -968,6 +977,10 @@ ${spec_content}
   prompt="${prompt//$current_backlog_section_sentinel/$current_backlog_section}"
   prompt="${prompt//$spec_diff_section_sentinel/$spec_diff_section}"
   prompt="${prompt//$branch_diff_section_sentinel/$branch_diff_section}"
+  # Restore user input only after every template placeholder has been consumed.
+  prompt="${prompt//$spec_section_sentinel/$spec_section}"
+  prompt="${prompt//$original_scope_sentinel/${prompt_vars[ORIGINAL_BUG_REPORT_OR_SCOPE]:-}}"
+  prompt="${prompt//$bug_report_sentinel/${prompt_vars[BUG_REPORT]:-}}"
 
   printf "%s" "$prompt"
 }

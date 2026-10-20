@@ -187,4 +187,29 @@ assert_not_contains "rendered prompt without pack consumes the {{TRIAGE_CONTEXT_
                     "{{TRIAGE_CONTEXT_PACK}}" \
                     "$rendered_no_pack"
 
+echo ""
+echo "Test 7: bug-report text is opaque to later template substitutions"
+cat > "$TMPDIR/literal-report.txt" <<'EOF'
+The template removes {{SPEC_SECTION}} and {{MAX_ISSUES_SECTION}} from the response.
+Keep {{REPO_NAME}}, {{VOICE_PROFILE}}, {{TRIAGE_CONTEXT_PACK}}, and {{LOCAL_MODE_SECTION}} literal.
+EOF
+literal_report="$(cat "$TMPDIR/literal-report.txt")"
+for report_value in "@$TMPDIR/literal-report.txt" "$literal_report"; do
+  literal_prompt="$(compose_prompt "$SCRIPT_DIR/prompts/_base/bugreport.md" "$TMPDIR/lens.md" "${base_vars}|BUG_REPORT=${report_value}|VOICE_PROFILE=voice replacement|TRIAGE_CONTEXT_PACK=pack replacement" "" "bugreport")"
+  assert_contains "complete bug-report input survives in the actual prompt" "$literal_report" "$literal_prompt"
+  assert_contains "the actual repository slots still expand" "**owner/repo**" "$literal_prompt"
+  assert_contains "the actual triage slot still expands" "pack replacement" "$literal_prompt"
+done
+
+echo ""
+echo "Test 8: specification text is opaque to final context-slot replacements"
+cat > "$TMPDIR/literal-spec.md" <<'EOF'
+Specification expression: {{VOICE_PROFILE}} and {{TRIAGE_CONTEXT_PACK}}.
+Keep {{SPEC_SECTION}} and {{BUG_REPORT}} literal too.
+EOF
+literal_spec="$(cat "$TMPDIR/literal-spec.md")"
+spec_prompt="$(compose_prompt "$SCRIPT_DIR/prompts/_base/audit.md" "$TMPDIR/lens.md" "${base_vars}|VOICE_PROFILE=voice replacement|TRIAGE_CONTEXT_PACK=pack replacement" "$TMPDIR/literal-spec.md" "audit")"
+assert_contains "complete specification survives in the actual audit prompt" "$literal_spec" "$spec_prompt"
+assert_contains "specification reference wrapper is still rendered" "## Specification Reference" "$spec_prompt"
+
 finish

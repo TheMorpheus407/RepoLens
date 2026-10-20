@@ -294,6 +294,7 @@ printf '%s\n' '# Round Digest' 'No findings this round.' > "$LOG_BASE/rounds/rou
 RUN_AGENT_COUNT=0
 run_agent() {
   RUN_AGENT_COUNT=$((RUN_AGENT_COUNT + 1))
+  CAPTURED_META_PROMPT="$2"
   printf '%s\n' 'No more grounded angles.' 'NO_FRESH_ANGLES'
 }
 
@@ -309,6 +310,39 @@ else
   hypotheses_state="missing"
 fi
 assert_eq "saturation hypotheses artifact exists" "present" "$hypotheses_state"
+
+echo ""
+echo "Test 3a: meta-orchestrator preserves bug-report literals in original scope"
+cat > "$TMPDIR/literal-report.txt" <<'EOF'
+The symptom is missing {{SPEC_SECTION}} and {{MAX_ISSUES_SECTION}}.
+Keep {{REPO_NAME}}, {{VOICE_PROFILE}}, {{TRIAGE_CONTEXT_PACK}}, and {{LOCAL_MODE_SECTION}}.
+Also keep {{PRIOR_ROUND_DIGEST}}, {{ORIGINAL_BUG_REPORT_OR_SCOPE}}, and {{BUG_REPORT}}.
+Trace: client | server; backslash \ marker; ampersand & and `code`.
+EOF
+literal_report="$(cat "$TMPDIR/literal-report.txt")"
+MODE="bugreport"
+for scope_source in bug_report explicit_scope; do
+  BUG_REPORT="$literal_report"
+  if [[ "$scope_source" == explicit_scope ]]; then
+    ORIGINAL_BUG_REPORT_OR_SCOPE="$literal_report"
+    BUG_REPORT="This fallback must not replace the explicit scope."
+  fi
+  CAPTURED_META_PROMPT=""
+  run_meta_orchestrator 1 2
+  rc=$?
+  saved_meta_prompt="$(cat "$LOG_BASE/rounds/round-1/meta-orchestrator-prompt.md")"
+  assert_eq "$scope_source meta render succeeds" "0" "$rc"
+  assert_contains "$scope_source saved prompt preserves the complete original scope" \
+                  "- Original scope: $literal_report" "$saved_meta_prompt"
+  assert_contains "$scope_source agent receives the complete original scope" \
+                  "- Original scope: $literal_report" "$CAPTURED_META_PROMPT"
+  assert_contains "$scope_source repository slots still expand" "**local/RepoLens**" "$saved_meta_prompt"
+  assert_contains "$scope_source round slots still expand" "round 2 of 2" "$saved_meta_prompt"
+  assert_contains "$scope_source real digest slot still expands" "No findings this round." "$saved_meta_prompt"
+  unset ORIGINAL_BUG_REPORT_OR_SCOPE
+done
+unset BUG_REPORT
+MODE="audit"
 
 echo ""
 echo "Test 3b: meta-orchestrator rate-limit failure records abort state"
