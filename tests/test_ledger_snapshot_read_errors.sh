@@ -24,6 +24,8 @@ FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 LOG_BASE="$FIXTURE/run"
 fail_duplicate_read=false duplicate_read_rc=2
+# Intercept only the duplicate-presence predicate, mark its execution, optionally
+# emit real jq output, then return the injected failure; forward all other calls.
 jq() {
   if [[ "$fail_duplicate_read" == true && " $* " == *'any(.[]; .status == "duplicate")'* ]]; then
     : > "$FIXTURE/duplicate-read-reached"
