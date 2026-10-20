@@ -29,19 +29,26 @@ check() {
     failed=$((failed + 1))
   fi
 }
-for scenario in typed legacy canonical incomplete; do
+for scenario in typed legacy canonical incomplete \
+    typed-eof legacy-eof canonical-eof typed-eof-lf legacy-eof-lf canonical-eof-lf; do
   path="$FIXTURE/$scenario.md"
   prefix=$'---\ntitle: Shared state access\nseverity: high\nstatus: reviewed\n---\nEvidence before receipt.\n\n\n'
   suffix=$'\n## Follow-up\nKeep user evidence, tabs\tand spaces.  \n\n'
+  closing=$'<!-- repolens-dedupe:end -->\n'
   if [[ "$scenario" == typed ]]; then suffix="${suffix%$'\n\n'}"; fi
+  # A receipt may be the final record, with or without its line terminator.
+  case "$scenario" in
+    *-eof) suffix=''; closing='<!-- repolens-dedupe:end -->' ;;
+    *-eof-lf) suffix='' ;;
+  esac
   note='> Duplicate of `canonical.md` — see the canonical finding for the full details.'
   case "$scenario" in
-    typed|incomplete) note=$'<!-- repolens-dedupe:duplicate -->\n'"$note" ;;
-    canonical) note='> Also reported by other lenses.' ;;
+    typed*|incomplete) note=$'<!-- repolens-dedupe:duplicate -->\n'"$note" ;;
+    canonical*) note='> Also reported by other lenses.' ;;
   esac
   {
     printf '%s<!-- repolens-dedupe:begin -->\n%s\n' "$prefix" "$note"
-    if [[ "$scenario" != incomplete ]]; then printf '<!-- repolens-dedupe:end -->\n'; fi
+    if [[ "$scenario" != incomplete ]]; then printf '%s' "$closing"; fi
     printf '%s' "$suffix"
   } > "$path"
   if [[ "$scenario" == incomplete ]]; then
@@ -53,15 +60,15 @@ for scenario in typed legacy canonical incomplete; do
     continue
   fi
   replacement=$'<!-- repolens-dedupe:duplicate -->\n> Updated duplicate note.'
-  printf '%s<!-- repolens-dedupe:begin -->\n%s\n<!-- repolens-dedupe:end -->\n%s' \
-    "$prefix" "$replacement" "$suffix" > "$FIXTURE/expected.md"
+  printf '%s<!-- repolens-dedupe:begin -->\n%s\n%s%s' \
+    "$prefix" "$replacement" "$closing" "$suffix" > "$FIXTURE/expected.md"
   check 'bounded replacement succeeds' _local_dedupe_mark_file "$path" '' "$replacement"
   check 'surrounding evidence and whitespace remain byte-identical' cmp -s "$path" "$FIXTURE/expected.md"
   check 'rerun succeeds' _local_dedupe_mark_file "$path" '' "$replacement"
   check 'rerun remains byte-identical' cmp -s "$path" "$FIXTURE/expected.md"
   replacement='> Canonical finding after promotion.'
-  printf '%s<!-- repolens-dedupe:begin -->\n%s\n<!-- repolens-dedupe:end -->\n%s' \
-    "$prefix" "$replacement" "$suffix" > "$FIXTURE/expected.md"
+  printf '%s<!-- repolens-dedupe:begin -->\n%s\n%s%s' \
+    "$prefix" "$replacement" "$closing" "$suffix" > "$FIXTURE/expected.md"
   check 'promotion succeeds' _local_dedupe_mark_file "$path" '' "$replacement"
   check 'promotion preserves surrounding evidence' cmp -s "$path" "$FIXTURE/expected.md"
 done

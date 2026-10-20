@@ -86,7 +86,7 @@ _local_dedupe_lib_dir() {
 _local_dedupe_mark_file() {
   local file="$1" fm_add="$2" note="$3"
   local tmp="${file}.rldedupe.$$" last_byte
-  # awk normalizes record separators; retain a user suffix lacking final LF.
+  # awk normalizes record separators; retain a receipt or suffix lacking final LF.
   last_byte="$(tail -c 1 -- "$file")" || return 1
 
   RL_FM_ADD="$fm_add" RL_NOTE="$note" RL_LAST_BYTE="$last_byte" awk '
@@ -178,7 +178,9 @@ _local_dedupe_mark_file() {
         if (!seen_sentinel) print ""
         print "<!-- repolens-dedupe:begin -->"
         print note
-        print "<!-- repolens-dedupe:end -->"
+        if (seen_sentinel && nt == 0 && ENVIRON["RL_LAST_BYTE"] != "")
+          printf "%s", "<!-- repolens-dedupe:end -->"
+        else print "<!-- repolens-dedupe:end -->"
       }
       for (k = 1; k <= nt; k++) {
         if (k == nt && ENVIRON["RL_LAST_BYTE"] != "") printf "%s", tail[k]
