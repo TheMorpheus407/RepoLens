@@ -56,6 +56,39 @@ for variant in plain spaces special autolink html newlines crlf markup; do
   printf '%s\n' "$path" > "$LOG_BASE/expected-path.txt"
   printf '%s\n' "$contributor" > "$LOG_BASE/expected-contributor.txt"
 done
+# Standalone local ingestion must bind a relative root to its calling cwd.
+# Reports live elsewhere, so their links cannot depend on that cwd afterward.
+for variant in local-relative local-relative-special local-relative-newline local-relative-root; do (
+  project="$TMPROOT/$variant"
+  [[ "$variant" != local-relative-newline ]] || project+=$'\n\n'
+  export PROJECT_PATH="$project"
+  local_root=findings
+  [[ "$variant" != local-relative-special ]] || local_root='findings [ä] #?%'
+  LOG_BASE="$TMPROOT/run-$variant"
+  mkdir -p "$project/$local_root/security/injection" "$LOG_BASE/final"
+  cd "$project"
+  local_arg="$local_root"
+  if [[ "$variant" == local-relative-root ]]; then
+    cd /
+    local_arg="${project#/}/$local_root"
+  fi
+  path="$project/$local_root/security/injection/finding (a)[b].md"
+  contributor="$project/contributor.md"
+  printf -- '---\ntitle: Approved local finding\nseverity: high\n---\nEvidence\n' > "$path"
+  printf 'Contributor evidence\n' > "$contributor"
+  build_finding_registry report-links "$local_arg" false
+  # Missing attribution comes from the directory components below that root.
+  jq -e ' .domain == "security" and .lens == "injection" and .type == "security-vulnerability" ' "$LOG_BASE/final/findings.jsonl" >/dev/null
+  jq -c --arg contributor "$contributor" '. + {validation:{suggested_validation:"needs external scanner"},also_reported_by:[{domain:"security",lens:"auth",markdown_path:$contributor}]}' "$LOG_BASE/final/findings.jsonl" > "$LOG_BASE/final/report-fixture.jsonl"
+  registry="$LOG_BASE/final/report-fixture.jsonl"
+  generate_todo_md "$registry" "$LOG_BASE/final/TODO.md"
+  generate_summary_md "$registry" "$LOG_BASE/final/SUMMARY.md"
+  generate_needs_review_md "$registry" "$LOG_BASE/final/NEEDS_REVIEW.md"
+  generate_duplicates_md "$registry" "$LOG_BASE/final/DUPLICATES.md"
+  render_human_review_digest report-links
+  printf '%s\n' "$path" > "$LOG_BASE/expected-path.txt"
+  printf '%s\n' "$contributor" > "$LOG_BASE/expected-contributor.txt"
+); done
 python3 - "$TMPROOT" <<'PYTEST'
 import os,pathlib,re,sys,urllib.parse
 # The normal suite needs only stdlib. The optional replay also checks the full
@@ -65,7 +98,7 @@ if os.environ.get('REPOLENS_TEST_COMMONMARK') == '1':
     from markdown_it import MarkdownIt
     parser = MarkdownIt('commonmark')
 root=pathlib.Path(sys.argv[1]);passed=failed=0
-for variant in ('plain','spaces','special','autolink','html','newlines','crlf','markup'):
+for variant in ('plain','spaces','special','autolink','html','newlines','crlf','markup','local-relative','local-relative-special','local-relative-newline','local-relative-root'):
     run=root/f'run-{variant}'
     path=(run/'expected-path.txt').read_bytes().decode().removesuffix('\n')
     contributor=(run/'expected-contributor.txt').read_bytes().decode().removesuffix('\n')
@@ -104,7 +137,9 @@ for variant in ('plain','spaces','special','autolink','html','newlines','crlf','
                         ok=ok and child.type=='text'
                         text+=child.content
             ok=ok and sorted(rendered)==sorted(zip(wanted,normalized))
-        ok=ok and all(pathlib.Path(urllib.parse.unquote(href)).is_file() for href in hrefs)
+        # A filesystem // path can exist while the URL addresses a remote host.
+        ok=ok and all(not urllib.parse.urlsplit(href).netloc for href in hrefs)
+        ok=ok and all((run/'final'/urllib.parse.unquote(href)).is_file() for href in hrefs)
         if variant=='plain':
             ok=ok and f'[{path}]({path})' in doc
         if ok:passed+=1;print(f'PASS: {variant}/{name} links resolve to exact original files')
