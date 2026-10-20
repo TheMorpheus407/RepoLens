@@ -154,3 +154,22 @@ mv "$round/lens-outputs/subdir/finding.md" "$round/lens-outputs/subdir/"$'line\n
 build_round_digest "$round"
 grep -q 'Retained security evidence' "$round/digest.md"
 printf 'PASS: enumeration, staged-read and final-sort errors preserve digest; repaired retry succeeds.\n'
+
+# repolens-r16-p7-2: an existing unavailable inventory is not an empty round.
+cp "$round/digest.md" "$fixture/before"
+mv "$round/lens-outputs" "$round/saved-lens-outputs"
+for target in missing-loop-root loop-root; do
+  if [[ "$target" == loop-root ]]; then
+    ln -s lens-outputs "$round/lens-outputs"
+  else
+    ln -s "$target" "$round/lens-outputs"
+  fi
+  rc=0
+  build_round_digest "$round" || rc=$?
+  test "$rc" -ne 0
+  cmp "$fixture/before" "$round/digest.md"
+  rm "$round/lens-outputs"
+done
+mv "$round/saved-lens-outputs" "$round/lens-outputs"
+build_round_digest "$round"
+cmp "$fixture/before" "$round/digest.md"

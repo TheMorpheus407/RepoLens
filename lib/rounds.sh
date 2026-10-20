@@ -2593,6 +2593,11 @@ build_round_digest() {
     min_severity="$(severity_normalize "$REPOLENS_MIN_SEVERITY")"
   fi
 
+  if [[ ( -e "$lens_outputs_dir" || -L "$lens_outputs_dir" ) && ! -d "$lens_outputs_dir" ]]; then
+    _round_digest_warn "Unable to read findings inventory root: $lens_outputs_dir"
+    return 1
+  fi
+
   if [[ -d "$lens_outputs_dir" ]]; then
     # Complete enumeration before consumption: process substitution hides a
     # failed find/sort and can publish a false empty digest. NUL framing keeps
