@@ -25,7 +25,7 @@ check_ids() {
   test "$(finding_id security injection 'Cache 缓存泄漏')" != "$(finding_id security injection 'Cache 登录失败')"
   test "$(finding_id security injection '[High] 缓存泄漏!')" = "$(finding_id security injection 缓存泄漏)"
   test "$(finding_id security injection कल)" != "$(finding_id security injection कला)"
-  test "$(finding_id security injection café)" = "$(finding_id security injection $'cafe\u0301')"
+  test "$(finding_id security injection café)" = "$(finding_id security injection $'cafe\xcc\x81')"
   test "$(LC_ALL=C finding_id security injection 缓存泄漏)" = "$(finding_id security injection 缓存泄漏)"
   # Preserve the existing ASCII content identities.
   test "$(finding_id security injection 'Missing CSRF token')" = fnd-c85e3de3f641
@@ -37,7 +37,8 @@ source "$ROOT/lib/synthesize.sh"
 check_ids
 LOG_BASE="$fixture/run"
 mkdir -p "$LOG_BASE/final"
-jq -n '["缓存泄漏", "登录失败"] | to_entries | map({
+titles='["缓存泄漏", "登录失败", "𞓐", "𞓑", "Ᲊ", "ᲊ"]'
+jq -n --argjson titles "$titles" '$titles | to_entries | map({
   cluster_id:("independent-" + (.key|tostring)),title:.value,
   severity:"high",domain:"security",lens:"injection",root_cause_category:"validation",
   body:"Independent cause",source_finding_paths:[("finding-" + (.key|tostring) + ".md")],dedup_against_existing:[],
@@ -45,7 +46,31 @@ jq -n '["缓存泄漏", "登录失败"] | to_entries | map({
 })' > "$LOG_BASE/final/manifest.json"
 validate_manifest "$LOG_BASE/final/manifest.json"
 build_finding_registry probe ''
-jq -se 'length == 2 and ([.[].id] | unique | length == 2)
-  and ([.[].title] | sort == (["缓存泄漏", "登录失败"] | sort))' "$LOG_BASE/final/findings.jsonl"
-test "$(wc -l < "$LOG_BASE/final/findings.csv")" -eq 3
-printf 'PASS: Unicode identities preserve both independent findings and ASCII compatibility.\n'
+jq -se --argjson titles "$titles" 'length == ($titles | length)
+  and ([.[].id] | unique | length == ($titles | length))
+  and ([.[].title] | sort == ($titles | sort))' "$LOG_BASE/final/findings.jsonl"
+jq -s 'map({id,title}) | sort_by(.id)' "$LOG_BASE/final/findings.jsonl" > "$fixture/manifest-identities.json"
+python3 - "$LOG_BASE/final/findings.csv" "$titles" <<'PY'
+import csv
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8", newline="") as stream:
+    rows = list(csv.DictReader(stream))
+assert sorted(row["title"] for row in rows) == sorted(json.loads(sys.argv[2]))
+assert len({row["id"] for row in rows}) == len(rows)
+PY
+
+# Exercise the separate local-frontmatter ingestion path with the same titles.
+local_dir="$fixture/local"
+mkdir -p "$local_dir"
+index=0
+while IFS= read -r title; do
+  index=$((index + 1))
+  printf -- '---\ntitle: %s\nseverity: high\ndomain: security\nlens: injection\n---\nIndependent cause.\n' "$title" > "$local_dir/$index.md"
+done < <(jq -r '.[]' <<< "$titles")
+LOG_BASE="$fixture/local-run"
+build_finding_registry probe "$local_dir"
+jq -s 'map({id,title}) | sort_by(.id)' "$LOG_BASE/final/findings.jsonl" > "$fixture/local-identities.json"
+cmp "$fixture/manifest-identities.json" "$fixture/local-identities.json"
+test "$(wc -l < "$LOG_BASE/final/findings.csv")" -eq 7
+printf 'PASS: Independent Unicode findings retain identical JSONL/CSV identities through manifest and local ingestion.\n'

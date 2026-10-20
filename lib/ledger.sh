@@ -38,7 +38,7 @@
 _LEDGER_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # _ledger_normalize_title <title>
-#   Preserve Unicode letters/numbers while retaining existing ASCII identities.
+#   Preserve non-ASCII text with frozen NFC and existing ASCII identity rules.
 #   Registry identity must not use the synthesizer's ASCII-only matching key:
 #   unrelated non-Latin titles can otherwise collapse to the same empty string.
 _ledger_normalize_title() {
@@ -47,10 +47,26 @@ import re
 import sys
 import unicodedata
 
-title = sys.stdin.buffer.read().decode("utf-8")
+title = sys.stdin.buffer.read().decode("utf-8", errors="surrogateescape")
 title = re.sub(r"^\[(critical|high|medium|low)\]\s*", "", title, flags=re.I | re.ASCII)
-title = unicodedata.normalize("NFC", title.lower())
-normalized = " ".join("".join(ch if ch.isalnum() or unicodedata.category(ch).startswith("M") else " " for ch in title).split())
+# Frozen Unicode data prevents interpreter upgrades from changing identities.
+# Normalize before ASCII case folding so E + combining acute still equals É.
+title = unicodedata.ucd_3_2_0.normalize("NFC", title)
+title = title.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+# Undecodable local bytes become separators; genuine non-ASCII text stays
+# literal, including code points unknown to this frozen Unicode database.
+normalized = "".join(
+    " " if 0xDC80 <= ord(ch) <= 0xDCFF else
+    ch if ord(ch) > 127 or "a" <= ch <= "z" or "0" <= ch <= "9" else " "
+    for ch in title
+)
+# Legacy ASCII IDs remove only one boundary space BEFORE collapsing runs.
+# Keep that preimage, including a remaining space from repeated punctuation.
+if normalized.startswith(" "):
+    normalized = normalized[1:]
+if normalized.endswith(" "):
+    normalized = normalized[:-1]
+normalized = re.sub(" +", " ", normalized)
 sys.stdout.buffer.write(normalized.encode("utf-8"))
 ')
 }
@@ -72,8 +88,9 @@ _ledger_sha256_hex() {
 #   Prints a stable, content-derived finding id of the form `fnd-<12 hex>`.
 #
 #   The title argument is normalized internally (see _ledger_normalize_title),
-#   so casing, a leading "[severity]" prefix, and punctuation differences do
-#   not change the id. The canonical pre-image is the four fields joined by the
+#   using frozen NFC, ASCII case folding, leading "[severity]" stripping and
+#   legacy ASCII punctuation rules. Non-ASCII case/punctuation stays literal.
+#   The canonical pre-image is the four fields joined by the
 #   ASCII Unit Separator (US, 0x1F), SHA-256 hashed, truncated to 12 hex chars.
 #
 #   `primary_location` is optional; when omitted it hashes as an empty trailing

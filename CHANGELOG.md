@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve Unicode letters and numbers in registry finding identities so distinct non-Latin titles retain independent JSONL/CSV records; existing ASCII identities remain stable (repolens-r16-p7-3).
+- Preserve non-ASCII text in registry finding identities using frozen Unicode 3.2 NFC and fixed ASCII rules, so independent findings retain JSONL/CSV records across Python versions and locales. Existing ASCII IDs remain stable, including boundary punctuation; malformed UTF-8 title bytes become separators without blocking local registry refreshes. Non-ASCII case and punctuation remain literal, and existing non-ASCII IDs may change on rebuild (repolens-r16-p7-3).
 
 - Preserve the last round digest when its findings inventory root is a dangling or looping symlink, or a non-directory, including roots that become unavailable between validation and enumeration (repolens-r16-p7-2).
 
