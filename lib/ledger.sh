@@ -275,10 +275,10 @@ _ledger_resolve_finding_type() {
 #   - source_finding_paths is passed through verbatim so siblings can trace
 #     the underlying evidence.
 #
-#   jq owns all quoting/escaping: the whole entry is handed to jq via
-#   --argjson and fields are read inside jq, so titles/paths with quotes,
-#   newlines, shell metacharacters, or unicode survive intact. Only the three
-#   computed scalars (id, severity, status) are passed as --arg.
+#   jq owns all quoting/escaping: the whole entry is streamed to jq on stdin
+#   and fields are read inside jq, so titles/paths with quotes,
+#   newlines, shell metacharacters, or unicode survive intact. Computed scalar
+#   values are passed as --arg.
 #
 #   Empty manifest ([]) -> empty out file (0 lines), exit 0. Output is written
 #   atomically (tmp + mv) so a mid-loop failure leaves no partial registry.
@@ -337,11 +337,10 @@ build_findings_jsonl_from_manifest() {
       fi
     done < <(jq -j '.source_finding_paths[]? | ., "\u0000"' <<<"$entry")
 
-    jq -cn \
-      --argjson entry "$entry" \
+    jq -c \
       --arg id "$id" --arg severity "$sev" --arg status "$status" --arg ftype "$ftype" \
       --arg md "$md" --arg complexity "$cx" --arg source_base "$source_base" '
-      {
+      . as $entry | {
         id: $id,
         title: ($entry.title // ""),
         severity: $severity,
@@ -362,7 +361,7 @@ build_findings_jsonl_from_manifest() {
            if (.markdown_path | type) == "string" and .markdown_path != ""
               and (.markdown_path | startswith("/") | not)
            then .markdown_path = ($source_base + "/" + .markdown_path)
-           else . end))} else {} end)' >> "$tmp" || { rm -f "$tmp"; return 1; }
+           else . end))} else {} end)' <<< "$entry" >> "$tmp" || { rm -f "$tmp"; return 1; }
   done
 
   mv "$tmp" "$out" || { rm -f "$tmp"; return 1; }

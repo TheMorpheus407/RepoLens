@@ -626,6 +626,46 @@ else
     "rebuilt output differs from a clean build"
 fi
 
+echo "=== valid evidence bodies larger than the per-argument exec limit ==="
+
+# Build the large value in a file, not in an argument to the fixture's jq.
+# Only the production builder should be exposed to the oversized entry.
+large_body="$TMPDIR/large-body.txt"
+printf '%180000s' '' | tr ' ' x > "$large_body"
+manifest_large="$TMPDIR/manifest-large.json"
+jq --rawfile body "$large_body" '
+  .[0].body = $body | .[0].title = "Large body evidence"
+  | .[0].severity = "high" | [.[0]]
+' "$manifest_a" > "$manifest_large"
+# Validation runs in a child so the parent still exercises ledger.sh alone.
+bash -c 'source "$1/lib/synthesize.sh"; validate_manifest "$2"' \
+  _ "$SCRIPT_DIR" "$manifest_large"
+assert_success "oversized evidence manifest passes real validation" "$?"
+assert_eq "fixture has a 180000-byte body" "180000" "$(jq '.[0].body | length' "$manifest_large")"
+out_large="$TMPDIR/findings-large.jsonl"
+build_findings_jsonl_from_manifest "$manifest_large" "$out_large"
+assert_success "standalone builder accepts oversized evidence" "$?"
+assert_jq "oversized entry retains registry fields without the unused body" '
+  .title == "Large body evidence" and .severity == "high" and .status == "new"
+  and .domain == "code" and .lens == "input-validation"
+  and .duplicate_group == "missing-validation::upload-handler"
+  and (.source_finding_paths | length) == 2 and (has("body") | not)
+' "$out_large"
+assert_eq "oversized entry keeps its content-derived id" \
+  "$(finding_id code input-validation 'Large body evidence')" "$(jq -r .id "$out_large")"
+
+LOG_BASE="$TMPDIR/large-run"
+mkdir -p "$LOG_BASE/final"
+cp "$manifest_large" "$LOG_BASE/final/manifest.json"
+build_finding_registry large-body ''
+assert_success "full registry accepts oversized evidence" "$?"
+validate_findings_jsonl "$LOG_BASE/final/findings.jsonl"
+assert_success "oversized registry validates" "$?"
+assert_eq "full registry keeps exactly one record" "1" "$(wc -l < "$LOG_BASE/final/findings.jsonl" | tr -d ' ')"
+assert_eq "CSV contains header and oversized finding" "2" "$(wc -l < "$LOG_BASE/final/findings.csv" | tr -d ' ')"
+cmp "$out_large" "$LOG_BASE/final/findings.jsonl"
+assert_success "full registry matches standalone ingestion" "$?"
+
 echo "=== atomic write leaves no temp scaffolding behind ==="
 
 # The builder writes to "${out}.tmp.$$" and mv's it into place for atomicity.
