@@ -77,6 +77,39 @@ projection() {
     check 'CSV matches derived status' test "$(tail -n +2 "$LOG_BASE/final/findings.csv" | grep -c ',"new",' || true)" -eq "$actions"
   fi
 }
+# A status beginning with the managed word is still user metadata. Exercise
+# both canonical directions, literal quote/comment bytes and a spaced control.
+for scenario in prefix-plain prefix-single; do
+  OUTPUT_DIR="$FIXTURE/$scenario/output"
+  LOG_BASE="$FIXTURE/$scenario/logs/run"
+  mkdir -p "$OUTPUT_DIR"
+  indent=''
+  a_custom='status: duplicate_pending_owner'
+  b_custom='status: "duplicate_pending_owner" # original'
+  if [[ "$scenario" == prefix-single ]]; then
+    indent='  '
+    a_custom="status: 'duplicate-reviewed' # original"
+    b_custom='status : duplicate_pending_owner # spaced control'
+  fi
+  a="$OUTPUT_DIR/a.md" b="$OUTPUT_DIR/b.md"
+  write_finding "$a" probe-a critical "$a_custom"
+  write_finding "$b" probe-b high "$b_custom"
+  check 'prefix dedupe succeeds' dedupe_local_markdown "$OUTPUT_DIR"
+  check 'canonical prefix status survives' custom_preserved "$a" "$a_custom"
+  check 'duplicate prefix status survives without a second key' custom_preserved "$b" "$b_custom"
+  projection 1 1 probe-a 1
+  before="$(sha256sum "$a" "$b")"
+  check 'prefix rerun succeeds' dedupe_local_markdown "$OUTPUT_DIR"
+  check 'prefix rerun is byte-identical' test "$before" = "$(sha256sum "$a" "$b")"
+
+  sed -i "s/^${indent}severity:.*/${indent}severity: high/" "$a"
+  sed -i "s/^${indent}severity:.*/${indent}severity: critical/" "$b"
+  check 'prefix promotion succeeds' dedupe_local_markdown "$OUTPUT_DIR"
+  check 'new duplicate keeps its prefix status' custom_preserved "$a" "$a_custom"
+  check 'promoted canonical keeps its prefix status' custom_preserved "$b" "$b_custom"
+  projection 1 1 probe-b 1
+done
+
 for scenario in indented quoted-and-block double-quoted-key single-quoted-key; do
   OUTPUT_DIR="$FIXTURE/$scenario/output"
   LOG_BASE="$FIXTURE/$scenario/logs/run"

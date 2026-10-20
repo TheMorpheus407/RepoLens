@@ -116,9 +116,8 @@ _local_dedupe_mark_file() {
         text = substr(line, indent + 1)
         if (indent == root_indent) {
           if (text ~ /^also_reported_by[[:space:]]*:/) { skip_arb = 1; continue }
-          if (text ~ /^status:[[:space:]]*["'\'']?duplicate/) continue
-          # Newly supported spaced keys match complete managed scalar values.
-          if (text ~ /^status[[:space:]]+:[[:space:]]*(duplicate|"duplicate"|\047duplicate\047)([[:space:]]+#.*)?[[:space:]]*$/) continue
+          # Retire only complete managed values, never custom status prefixes.
+          if (text ~ /^status[[:space:]]*:[[:space:]]*(duplicate|"duplicate"|\047duplicate\047)([[:space:]]+#.*)?[[:space:]]*$/) continue
           if (text ~ /^duplicate_of[[:space:]]*:/) continue
           if (text ~ /^(status|"status"|\047status\047)[[:space:]]*:/) has_custom_status = 1
         }
