@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - Retire spaced managed duplicate-status keys when a local finding becomes canonical, including quoted values, so registry rebuilding retains exactly one actionable finding (repolens-r15-pr534-fn-1).
 
+- Preserve custom local status metadata without duplicate YAML keys; derive duplicate classification from complete owned receipts and validated current links, including quoted status keys, legacy notes, promotion and stale-link recovery. Bound receipt ownership to its closing sentinel so appended user notes remain intact and do not cancel duplicate classification (repolens-r15-pr536-custom-status).
+
 - Journal Generic delivery preparation before copying finding content, so retries reclaim backups and staged projections left by process death; catchable preparation failures trigger immediate cleanup. Recover pending preparation with this revision or newer before downgrading to an older reader (repolens-r15-p8-5).
 
 - Preserve the last complete round digest when final finding sorting or sorted-input redirection fails, including sort failures after producing output (repolens-r15-p7-3).
