@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Bind relative local-finding roots to the caller’s working directory before registry ingestion, so Markdown reports resolve their source links from the report location, including paths with spaces and URL-special characters (repolens-r16-p5-4).
+
 - Publish round digests at their exact path, rejecting directory and directory-symlink destinations with cleaned stages and a repaired retry. Stage hard-capped output before the same portable publisher, preserving normal digest permissions and the previous report on cap preparation failures (repolens-r16-p5-3).
 
 - Preserve commas and spaces within each round-digest source path by formatting complete array members before joining; retain the three-source display limit and empty-source representation (repolens-r16-p5-2).
