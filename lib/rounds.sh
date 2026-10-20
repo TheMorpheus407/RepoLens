@@ -2074,8 +2074,13 @@ _round_digest_finding_segments() {
 _generic_local_findings() (
   local output_dir="$1" action="$2" count_source="${3:-}" limit="" ordinary_count=0 count total physical_rounds physical_source ordinary_complete=0
   local stage="" stage_root candidate physical_output="" source segments segment frontmatter body title lens domain relative index severity round_root round_number dispatch_path completion_path list_complete=0 generic_source_id
-  local rounds_dir="${LOG_BASE:-}/rounds"
+  local rounds_dir="${LOG_BASE:-}/rounds" rounds_present=false
   mkdir -p "$LOG_BASE/final" || return 1
+  # Existing unavailable inventories are outages, not empty delivery plans.
+  if [[ -e "$rounds_dir" || -L "$rounds_dir" ]]; then
+    rounds_present=true
+    [[ -d "$rounds_dir" ]] || return 1
+  fi
   # TMPDIR can itself be inside a scanned tree, including through a symlink.
   # Select an outside location before allocation so peer cleanup cannot race
   # either the ordinary inventory or the private round-source traversal.
@@ -2129,10 +2134,12 @@ _generic_local_findings() (
     limit=$((10#$MAX_ISSUES - ordinary_count))
     (( limit >= 0 )) || limit=0
   fi
-  if [[ -d "$rounds_dir" ]]; then
+  if [[ "$rounds_present" == true || -e "$rounds_dir" || -L "$rounds_dir" ]]; then
     if ! { (set -o pipefail; find -H "$rounds_dir" -type f -path '*/lens-outputs/*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$stage/files"; then
       return 1
     fi
+    # find -H may succeed with zero matches after a symlink target disappears.
+    [[ -d "$rounds_dir" ]] || return 1
   else
     printf '\0' > "$stage/files" || return 1
   fi
