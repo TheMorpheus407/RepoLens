@@ -394,7 +394,15 @@ branch_scope_filter_manifest() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
   local manifest="$1" entry reason kept rejected verification_rc entries report_tmp accepted entry_body
   local report report_backup=""
-  jq -e 'type == "array"' "$manifest" >/dev/null 2>&1 || return 1
+  if jq -e 'type == "array"' "$manifest" >/dev/null 2>&1; then
+    :
+  else
+    # False/malformed input is invalid; read/execution failures are retryable.
+    case $? in
+      1|4|5) return 1 ;;
+      *) return 2 ;;
+    esac
+  fi
   _branch_scope_read_paths >/dev/null || return 2
   kept="$(mktemp "${manifest}.scope.XXXXXX")" || return 2
   # Capture and check the whole stream before filtering or publishing a prefix.
