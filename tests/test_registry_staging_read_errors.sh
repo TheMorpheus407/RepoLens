@@ -100,5 +100,50 @@ for scenario in manifest-empty manifest-partial local-empty local-partial combin
   triage
   check "$scenario retry refreshes the registry" test "$(jq -s length "$LOG_BASE/final/findings.jsonl")" -eq "$((before_count - 1))"
 done
+# Revoke access after the real assembly rename, immediately before validation.
+# A failed input redirection must never authorize promotion of that candidate.
+LOG_BASE="$FIXTURE/validator/run"
+local_dir="$FIXTURE/validator/findings"
+mkdir -p "$LOG_BASE/final" "$local_dir"
+printf -- '---\ntitle: Saved validator finding\nseverity: high\ndomain: code\nlens: correctness\n---\nEvidence\n' > "$local_dir/one.md"
+build_finding_registry fixture "$local_dir"
+_registry_ready=true
+triage
+for artifact in "${artifacts[@]}"; do
+  hashes["$artifact"]="$(sha256sum < "$LOG_BASE/final/$artifact")"
+done
+cp "$LOG_BASE/final/findings.jsonl" "$FIXTURE/unreadable.jsonl"
+chmod 000 "$FIXTURE/unreadable.jsonl"
+rc=0
+validate_findings_jsonl "$FIXTURE/unreadable.jsonl" > "$LOG_BASE/validate.log" 2>&1 || rc=$?
+check 'standalone validator rejects an unreadable registry' test "$rc" -ne 0
+chmod 600 "$FIXTURE/unreadable.jsonl"
+printf -- '---\ntitle: Replacement validator finding\nseverity: high\ndomain: code\nlens: correctness\n---\nEvidence\n' > "$local_dir/one.md"
+# shellcheck disable=SC2329 # Called indirectly by the production registry builder.
+mv() {
+  command mv "$@" || return $?
+  if [[ "${1:-}" == "$LOG_BASE/final/findings.jsonl.tmp.$$.dedup" ]]; then
+    : > "$LOG_BASE/validation-read-reached"
+    chmod 000 "$2"
+  fi
+}
+rc=0
+build_finding_registry fixture "$local_dir" > "$LOG_BASE/rebuild.log" 2>&1 || rc=$?
+unset -f mv
+check 'validator input fault was reached after assembly' test -e "$LOG_BASE/validation-read-reached"
+check 'unreadable candidate fails registry rebuilding' test "$rc" -ne 0
+check 'failed validation leaves the published registry readable' test -r "$LOG_BASE/final/findings.jsonl"
+# Restore permissions only so a red-phase replacement can be compared/removed.
+chmod 600 "$LOG_BASE/final/findings.jsonl"
+_registry_ready=false
+triage
+for artifact in "${artifacts[@]}"; do
+  check "failed validation preserves $artifact" same_bytes "$LOG_BASE/final/$artifact" "${hashes[$artifact]}"
+done
+check 'failed validation cleans candidate stages' test "$(command find "$LOG_BASE/final" -name '*.tmp.*' | wc -l)" -eq 0
+build_finding_registry fixture "$local_dir"
+_registry_ready=true
+triage
+check 'repaired validator publishes current findings' jq -se 'length == 1 and .[0].title == "Replacement validator finding"' "$LOG_BASE/final/findings.jsonl"
 printf 'Results: %s passed, %s failed\n' "$PASS" "$FAIL"
 test "$FAIL" -eq 0
