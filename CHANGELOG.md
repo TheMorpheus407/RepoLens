@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve literal template expressions in bug reports and specifications when composing prompts, while still expanding the surrounding template slots (repolens-r16-p3-1).
+- Preserve literal template expressions in bug reports and specifications when composing prompts, including the original scope passed to between-round orchestration, while still expanding the surrounding template slots (repolens-r16-p3-1).
 
 - Preserve Generic delivery and triage reports when an existing rounds root is unavailable or loses its symlink target during enumeration, including finalization after failed rounds; repaired and genuinely empty inventories remain publishable (repolens-r16-p9-1).
 

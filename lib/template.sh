@@ -214,7 +214,7 @@ compose_prompt() {
   local base_content lens_body spec_section prompt key value sentinel_seed
   local pair char next i vars_len
   local prior_round_digest_sentinel hypotheses_to_verify_sentinel round_context_sentinel triage_context_pack_sentinel
-  local voice_profile_sentinel bug_report_sentinel spec_section_sentinel
+  local voice_profile_sentinel bug_report_sentinel original_scope_sentinel spec_section_sentinel
   local current_backlog_section_sentinel
   local spec_diff_section_sentinel
   local branch_diff_section_sentinel
@@ -231,6 +231,7 @@ compose_prompt() {
   triage_context_pack_sentinel="__REPOLENS_TRIAGE_CONTEXT_PACK_${sentinel_seed}__"
   voice_profile_sentinel="__REPOLENS_VOICE_PROFILE_${sentinel_seed}__"
   bug_report_sentinel="__REPOLENS_BUG_REPORT_${sentinel_seed}__"
+  original_scope_sentinel="__REPOLENS_ORIGINAL_SCOPE_${sentinel_seed}__"
   spec_section_sentinel="__REPOLENS_SPEC_SECTION_${sentinel_seed}__"
   current_backlog_section_sentinel="__REPOLENS_CURRENT_BACKLOG_SECTION_${sentinel_seed}__"
   spec_diff_section_sentinel="__REPOLENS_SPEC_DIFF_SECTION_${sentinel_seed}__"
@@ -286,6 +287,10 @@ compose_prompt() {
     case "$key" in
       BUG_REPORT)
         prompt="${prompt//\{\{$key\}\}/$bug_report_sentinel}"
+        ;;
+      ORIGINAL_BUG_REPORT_OR_SCOPE)
+        # Between-round orchestration carries the same user input under this key.
+        prompt="${prompt//\{\{$key\}\}/$original_scope_sentinel}"
         ;;
       PRIOR_ROUND_DIGEST)
         prompt="${prompt//\{\{$key\}\}/$prior_round_digest_sentinel}"
@@ -974,6 +979,7 @@ ${spec_content}
   prompt="${prompt//$branch_diff_section_sentinel/$branch_diff_section}"
   # Restore user input only after every template placeholder has been consumed.
   prompt="${prompt//$spec_section_sentinel/$spec_section}"
+  prompt="${prompt//$original_scope_sentinel/${prompt_vars[ORIGINAL_BUG_REPORT_OR_SCOPE]:-}}"
   prompt="${prompt//$bug_report_sentinel/${prompt_vars[BUG_REPORT]:-}}"
 
   printf "%s" "$prompt"
