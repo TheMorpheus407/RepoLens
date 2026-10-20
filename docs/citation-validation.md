@@ -121,6 +121,9 @@ including the later scan that binds snippets. An unavailable extraction returns
 paths retain pending work and saved receipts without a new terminal failure;
 repair permits publication once or reattests a saved success without another
 POST. Malformed citations and source-evidence mismatches retain status 1.
+Building the action's live-verification JSON is checked separately: a failed
+serializer returns 2 before verification, even if it emitted valid JSON first.
 `tests/test_branch_scope_retry_callers.sh` injects scanner status 1 specifically
 inside these live guards, with empty/partial output and caller `pipefail`
-disabled for comments, covering fresh work and saved receipts.
+disabled for comments, covering fresh work and saved receipts. It also covers
+failed action-evidence serialization with empty or complete valid output.

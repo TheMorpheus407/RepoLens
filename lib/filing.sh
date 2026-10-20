@@ -823,7 +823,7 @@ _filing_cross_link_enact() {
   local -A seen=()
 
   local cluster_id action_type issue_number body key sentinel_done sentinel_failed body_file rc scope_rc
-  local evidence reason target response readback title new_number reconcile_done body_json reserve_rc action_citations
+  local evidence action_evidence reason target response readback title new_number reconcile_done body_json reserve_rc action_citations
   local open_issues duplicate open_issues_status=unfetched
   while IFS=$'\t' read -r cluster_id _ action_type issue_number body; do
     _filing_cancelled && return 1
@@ -954,8 +954,12 @@ _filing_cross_link_enact() {
     }
     (( unsupported_reference )) && continue
     if [[ -n "$action_citations" ]]; then
+      if ! action_evidence="$(jq -cn --arg body "$body" '{body:$body}')"; then
+        printf '_filing_cross_link_enact: action citation evidence unavailable; retry after repair\n' >&2
+        return 2
+      fi
       scope_rc=0
-      reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" || scope_rc=$?
+      reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$action_evidence")" || scope_rc=$?
       (( scope_rc <= 1 )) || return 2
       if (( scope_rc == 1 )); then
         _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1

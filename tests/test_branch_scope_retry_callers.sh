@@ -578,6 +578,15 @@ case_cross_link_scan_io() (
     fi
     command sed "$@"
   }
+  jq() {
+    if [[ "$boundary" == evidence && "${FUNCNAME[1]:-}" == _filing_cross_link_enact && "${1:-}" == -cn && "${4:-}" == 'Action src/probe.sh:1' ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      # Even a complete valid prefix cannot authorize verification after IO failure.
+      [[ "$output" != partial ]] || printf '{"body":"Action src/probe.sh:1"}\n'
+      return 1
+    fi
+    command jq "$@"
+  }
   set +o pipefail
   if [[ "$boundary" == input ]]; then
     (trap '' XFSZ; ulimit -f 0; _filing_cross_link_enact probe) || rc=$?
@@ -597,7 +606,7 @@ case_cross_link_scan_io() (
     check test ! -e "$cross_prefix.done"
     check test ! -e "$cross_prefix.attempted"
   fi
-  unset -f repolens_extract_citations _filing_action_reference_candidates _repolens_scan_citations sed awk
+  unset -f repolens_extract_citations _filing_action_reference_candidates _repolens_scan_citations sed awk jq
   eval "$(declare -f original_scanner | command sed '1s/original_scanner/_repolens_scan_citations/')"
   eval "$(declare -f original_extract | command sed '1s/original_extract/repolens_extract_citations/')"
   eval "$(declare -f original_candidates | command sed '1s/original_candidates/_filing_action_reference_candidates/')"
@@ -623,5 +632,5 @@ case "${1:-all}" in
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) case_verifier_semantics; for boundary in scanner membership loop; do case_verifier_input_io "$boundary"; done; for saved in new saved; do for boundary in candidate action classifier classifier-one filter live-parent live-action snippets-parent snippets-action; do for output in empty partial; do case_cross_link_scan_io "$output" "$boundary" "$saved"; done; done; case_cross_link_scan_io empty input "$saved"; done; for body_fault in empty partial scan scan-partial scan-no-pipefail scan-one scan-three sort-one membership membership-one; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; for saved in new saved; do for failure in scope scan snippets; do case_filing "$saved" "$failure"; done; done; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) case_verifier_semantics; for boundary in scanner membership loop; do case_verifier_input_io "$boundary"; done; for saved in new saved; do for boundary in candidate action classifier classifier-one filter live-parent live-action snippets-parent snippets-action evidence; do for output in empty partial; do case_cross_link_scan_io "$output" "$boundary" "$saved"; done; done; case_cross_link_scan_io empty input "$saved"; done; for body_fault in empty partial scan scan-partial scan-no-pipefail scan-one scan-three sort-one membership membership-one; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; for saved in new saved; do for failure in scope scan snippets; do case_filing "$saved" "$failure"; done; done; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac
