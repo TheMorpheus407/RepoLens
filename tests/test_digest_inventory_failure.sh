@@ -154,3 +154,92 @@ mv "$round/lens-outputs/subdir/finding.md" "$round/lens-outputs/subdir/"$'line\n
 build_round_digest "$round"
 grep -q 'Retained security evidence' "$round/digest.md"
 printf 'PASS: enumeration, staged-read and final-sort errors preserve digest; repaired retry succeeds.\n'
+
+# repolens-r16-p7-2: an existing unavailable inventory is not an empty round.
+cp "$round/digest.md" "$fixture/before"
+mv "$round/lens-outputs" "$round/saved-lens-outputs"
+for target in missing-loop-root loop-root regular-file file-target; do
+  case "$target" in
+    loop-root) ln -s lens-outputs "$round/lens-outputs" ;;
+    regular-file) printf 'not a directory\n' > "$round/lens-outputs" ;;
+    file-target)
+      printf 'not a directory\n' > "$fixture/not-directory"
+      ln -s "$fixture/not-directory" "$round/lens-outputs"
+      ;;
+    *) ln -s "$target" "$round/lens-outputs" ;;
+  esac
+  rc=0
+  build_round_digest "$round" || rc=$?
+  test "$rc" -ne 0
+  cmp "$fixture/before" "$round/digest.md"
+  rm "$round/lens-outputs"
+  ln -s saved-lens-outputs "$round/lens-outputs"
+  build_round_digest "$round"
+  cmp "$fixture/before" "$round/digest.md"
+  rm "$round/lens-outputs"
+done
+mv "$round/saved-lens-outputs" "$round/lens-outputs"
+
+# Deterministic outages after validation, without timing-sensitive background jobs.
+# DEBUG injects at the enumeration decision; find injects immediately before or
+# after traversal. A dangling command-line symlink can make find succeed empty.
+take_inventory_offline() {
+  if [[ "$root_kind" == directory ]]; then
+    mv "$round/lens-outputs" "$fixture/offline-inventory"
+  else
+    mv "$fixture/stored-inventory" "$fixture/offline-inventory"
+  fi
+  : > "$fixture/race-reached"
+}
+find() {
+  [[ "$race_stage" != find-before ]] || take_inventory_offline
+  command find "$@" || return $?
+  [[ "$race_stage" != find-after ]] || take_inventory_offline
+  return 0
+}
+outage_at_inventory_decision() {
+  if [[ "$race_stage" == decision && ${FUNCNAME[1]:-} == build_round_digest &&
+    ( "$1" == '[[ -d "$lens_outputs_dir" ]]' ||
+      "$1" == '[[ "$inventory_present" == true'* ) ]]; then
+    trap - DEBUG
+    take_inventory_offline
+  fi
+}
+mv "$round/lens-outputs" "$fixture/stored-inventory"
+race_failures=0
+for root_kind in directory symlink; do
+  for race_stage in decision find-before find-after; do
+    # Even an empty inventory outage must retain the previously saved findings.
+    mv "$fixture/stored-inventory/subdir/"$'line\nbreak.md' "$fixture/race-finding.md"
+    if [[ "$root_kind" == directory ]]; then
+      mv "$fixture/stored-inventory" "$round/lens-outputs"
+    else
+      ln -s "$fixture/stored-inventory" "$round/lens-outputs"
+    fi
+    (
+      set -T
+      trap 'outage_at_inventory_decision "$BASH_COMMAND"' DEBUG
+      rc=0
+      build_round_digest "$round" || rc=$?
+      trap - DEBUG
+      test -f "$fixture/race-reached" || exit 1
+      printf '%s/%s: rc=%s\n' "$root_kind" "$race_stage" "$rc"
+      case_failed=0
+      test "$rc" -ne 0 || case_failed=1
+      cmp "$fixture/before" "$round/digest.md" || case_failed=1
+      test "$case_failed" -eq 0
+    ) || race_failures=$((race_failures + 1))
+    rm "$fixture/race-reached"
+    rm -f "$round/lens-outputs"
+    mv "$fixture/offline-inventory" "$fixture/stored-inventory"
+    mv "$fixture/race-finding.md" "$fixture/stored-inventory/subdir/"$'line\nbreak.md'
+    ln -s "$fixture/stored-inventory" "$round/lens-outputs"
+    race_stage=none
+    build_round_digest "$round"
+    cmp "$fixture/before" "$round/digest.md"
+    test -z "$(command find "$round" -name '.digest-files.*' -o -name 'digest.md.tmp.*')"
+    rm "$round/lens-outputs"
+  done
+done
+test "$race_failures" -eq 0
+printf 'PASS: invalid roots and concurrent outages preserve digest; repaired retries succeed.\n'
