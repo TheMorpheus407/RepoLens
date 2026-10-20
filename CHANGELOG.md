@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Stream manifest entries into registry serialization instead of passing their complete evidence bodies as command arguments, so valid large findings retain JSONL and CSV output (repolens-r16-p7-1).
+
 - Preserve a previous scope-rejection diagnostic when quarantine publication fails, restoring its saved bytes and retaining a recovery copy with its path if restoration itself fails (repolens-r16-p6-2).
 
 - Bind relative local-finding roots to the caller’s working directory before registry ingestion, so Markdown reports resolve their source links from the report location, including paths with spaces, URL-special characters and trailing newlines in the working directory. Keep dedupe’s canonical and contributor links relative to that root, and avoid URL host links when called from `/` (repolens-r16-p5-4).
