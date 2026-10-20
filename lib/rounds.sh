@@ -2593,12 +2593,18 @@ build_round_digest() {
     min_severity="$(severity_normalize "$REPOLENS_MIN_SEVERITY")"
   fi
 
-  if [[ ( -e "$lens_outputs_dir" || -L "$lens_outputs_dir" ) && ! -d "$lens_outputs_dir" ]]; then
-    _round_digest_warn "Unable to read findings inventory root: $lens_outputs_dir"
-    return 1
+  # Remember an observed inventory: disappearance before enumeration is an
+  # outage, not an empty round. Keep genuinely absent roots valid as before.
+  local inventory_present=false
+  if [[ -e "$lens_outputs_dir" || -L "$lens_outputs_dir" ]]; then
+    inventory_present=true
+    if [[ ! -d "$lens_outputs_dir" ]]; then
+      _round_digest_warn "Unable to read findings inventory root: $lens_outputs_dir"
+      return 1
+    fi
   fi
 
-  if [[ -d "$lens_outputs_dir" ]]; then
+  if [[ "$inventory_present" == true || -e "$lens_outputs_dir" || -L "$lens_outputs_dir" ]]; then
     # Complete enumeration before consumption: process substitution hides a
     # failed find/sort and can publish a false empty digest. NUL framing keeps
     # every filesystem path intact; the final empty entry certifies a full read.
@@ -2607,6 +2613,13 @@ build_round_digest() {
     if ! { (set -o pipefail; find -H "$lens_outputs_dir" -type f -name '*.md' -print0 | LC_ALL=C sort -z) && printf '\0'; } > "$files_list"; then
       rm -f -- "$files_list"
       _round_digest_warn "Unable to enumerate complete findings inventory: $lens_outputs_dir"
+      return 1
+    fi
+    # find -H can succeed with no files when its command-line symlink loses
+    # its target. Require the inventory to remain available after traversal.
+    if [[ ! -d "$lens_outputs_dir" ]]; then
+      rm -f -- "$files_list"
+      _round_digest_warn "Findings inventory root became unavailable: $lens_outputs_dir"
       return 1
     fi
     while IFS= read -r -d '' file; do
