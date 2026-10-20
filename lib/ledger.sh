@@ -38,43 +38,21 @@
 _LEDGER_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # _ledger_normalize_title <title>
-#   Normalizes a finding title for stable hashing: lowercases, strips an
-#   optional leading "[severity]" prefix (only when the bracketed word is a
-#   real severity), collapses non-alphanumeric runs to single spaces, trims.
-#
-#   Prefers the shared `_synthesize_normalize_title` (lib/synthesize.sh) when
-#   it is already sourced, so the two stay in lockstep; otherwise falls back to
-#   a self-contained replica so lib/ledger.sh works when sourced on its own.
+#   Preserve Unicode letters/numbers while retaining existing ASCII identities.
+#   Registry identity must not use the synthesizer's ASCII-only matching key:
+#   unrelated non-Latin titles can otherwise collapse to the same empty string.
 _ledger_normalize_title() {
-  if declare -F _synthesize_normalize_title >/dev/null 2>&1; then
-    _synthesize_normalize_title "$1"
-    return
-  fi
+  (set -o pipefail; printf '%s' "${1:-}" | python3 -c '
+import re
+import sys
+import unicodedata
 
-  # Self-contained replica of lib/synthesize.sh::_synthesize_normalize_title.
-  # The severity word set (critical|high|medium|low) is inlined to match
-  # lib/core.sh::severity_normalize without taking a hard dependency on it.
-  local title="${1:-}"
-  if [[ "$title" =~ ^\[([A-Za-z]+)\][[:space:]]*(.*)$ ]]; then
-    case "${BASH_REMATCH[1],,}" in
-      critical|high|medium|low) title="${BASH_REMATCH[2]}" ;;
-    esac
-  fi
-  title="${title,,}"
-  local out="" ch i len="${#title}"
-  for (( i = 0; i < len; i++ )); do
-    ch="${title:i:1}"
-    case "$ch" in
-      [a-z0-9]) out+="$ch" ;;
-      *) out+=' ' ;;
-    esac
-  done
-  out="${out## }"
-  out="${out%% }"
-  while [[ "$out" == *"  "* ]]; do
-    out="${out//  / }"
-  done
-  printf '%s' "$out"
+title = sys.stdin.buffer.read().decode("utf-8")
+title = re.sub(r"^\[(critical|high|medium|low)\]\s*", "", title, flags=re.I | re.ASCII)
+title = unicodedata.normalize("NFC", title.lower())
+normalized = " ".join("".join(ch if ch.isalnum() or unicodedata.category(ch).startswith("M") else " " for ch in title).split())
+sys.stdout.buffer.write(normalized.encode("utf-8"))
+')
 }
 
 # _ledger_sha256_hex
