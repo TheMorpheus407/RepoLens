@@ -30,7 +30,8 @@
 # a citation. URLs (including ports) and timestamps are prose, not source
 # citations.
 repolens_extract_citations() {
-  _repolens_scan_citations "$1" | sort -u
+  # Only the scanner can report malformed input (1). A sort failure is IO (2).
+  (set -o pipefail; _repolens_scan_citations "$1" | { sort -u || return 2; })
 }
 
 # Emit the first complete noncitation code span attached to each occurrence of
@@ -43,12 +44,12 @@ repolens_citation_snippets() {
 # Scan once per request, retaining occurrence and complete code-span positions.
 # With a second argument emit its snippets; otherwise emit all source citations.
 _repolens_scan_citations() {
-  local body="$1" snippet_citation="${2:-}" quoted_marker='quoted'
+  local body="$1" snippet_citation="${2:-}" quoted_marker='quoted' scanned scan_status
   # Use a letter sequence absent from the input. Masking excluded spans with
   # '@' cannot fabricate that sequence or impersonate a quoted list member.
   while [[ "$body" == *"$quoted_marker"* ]]; do quoted_marker+='q'; done
   quoted_marker="@$quoted_marker@"
-  REPOLENS_SNIPPET_CITATION="$snippet_citation" awk -v quoted_marker="$quoted_marker" '
+  if scanned="$(REPOLENS_SNIPPET_CITATION="$snippet_citation" awk -v quoted_marker="$quoted_marker" '
         # Map masked characters to their original line positions. Placeholders
         # may change length; later bare references must keep their real offsets.
         function append_mask(text, origin, i, base) {
@@ -231,8 +232,22 @@ _repolens_scan_citations() {
           }
           if (ENVIRON["REPOLENS_SNIPPET_CITATION"] != "") emit_snippets(length($0))
         }
-        END { exit extraction_failed ? 1 : 0 }
-      ' <<< "$body"
+        END { print extraction_failed ? "malformed" : "complete" }
+      ' <<< "$body")"; then
+    # Semantic state travels only in a completed parser output, never in an
+    # exit code shared with awk execution or Bash here-string setup failures.
+    case "${scanned##*$'\n'}" in
+      complete) scan_status=0 ;;
+      malformed) scan_status=1 ;;
+      *) return 2 ;;
+    esac
+    if [[ "$scanned" == *$'\n'* ]]; then
+      printf '%s\n' "${scanned%$'\n'*}" || return 2
+    fi
+    return "$scan_status"
+  else
+    return 2
+  fi
 }
 
 # Read trusted configuration separately from finding validation. Missing,
@@ -243,28 +258,39 @@ _branch_scope_read_paths() {
   jq -ce 'select(type == "array" and all(.[]; type == "string"))' "$scope" 2>/dev/null
 }
 
-# Returns 0 for an accepted body, 1 for a rejected body, 2 if scope evidence is
+# Returns 0 for an accepted body, 1 for a rejected body, 2 if verification is
 # unavailable. Callers must not record an operational failure as a rejection.
 branch_scope_verify_body() {
   [[ "${MODE:-${REPOLENS_MODE:-}}" == "branch-review" ]] || return 0
-  local body="${1:-}" paths citations path
+  local body="${1:-}" paths citations path membership
   if ! paths="$(_branch_scope_read_paths)"; then
     printf 'branch scope missing or invalid\n'
     return 2
   fi
-  if ! citations="$(repolens_extract_citations "$body")"; then
-    printf 'malformed citation list in body\n'
-    return 1
+  if citations="$(repolens_extract_citations "$body")"; then
+    :
+  else
+    case $? in
+      1) printf 'malformed citation list in body\n'; return 1 ;;
+      *) printf 'citation extraction unavailable\n'; return 2 ;;
+    esac
   fi
   [[ -n "$citations" ]] || { printf 'branch finding has no file:line citation\n'; return 1; }
   while IFS= read -r path; do
     path="${path%:*}"
     path="${path#./}"
-    if ! jq -e --arg path "$path" 'index($path) != null' <<< "$paths" >/dev/null; then
-      printf 'out-of-scope citation: %s\n' "$path"
-      return 1
-    fi
-  done <<< "$citations"
+    # Read the boolean separately from execution status: shell input failures
+    # can return the same status as jq -e's false result.
+    membership="$(jq --arg path "$path" 'index($path) != null' <<< "$paths")" || {
+      printf 'branch scope membership check unavailable\n'
+      return 2
+    }
+    case "$membership" in
+      true) : ;;
+      false) printf 'out-of-scope citation: %s\n' "$path"; return 1 ;;
+      *) printf 'branch scope membership check unavailable\n'; return 2 ;;
+    esac
+  done <<< "$citations" || { printf 'citation list unavailable\n'; return 2; }
 }
 
 # Replace an exact quarantine or diagnostic path on GNU and BSD/macOS. Recheck

@@ -142,7 +142,8 @@ case_synthesis() (
 )
 case_filing() (
   saved="$1"
-  fresh "filing-$saved"
+  local failure="${2:-scope}" before=""
+  fresh "filing-$saved-$failure"
   prefix="$LOG_BASE/final/filed/c1"
   if [[ "$saved" == saved ]]; then
     # Admission queues c0 before reattesting c1; an outage must release c0's lock.
@@ -151,19 +152,39 @@ case_filing() (
     printf 'https://github.com/acme/probe/issues/17\n' > "$prefix.url"
     jq '.[1]' "$LOG_BASE/final/manifest.json" > "$prefix.request.json"
   fi
-  rm "$BRANCH_SCOPE_FILE"
+  if [[ "$saved" == saved ]]; then
+    before="$(sha256sum "$prefix.url" "$prefix.request.json")"
+  fi
+  if [[ "$failure" == scope ]]; then
+    rm "$BRANCH_SCOPE_FILE"
+  else
+    # Fail only inside mandatory live verification, after admission succeeds.
+    awk() {
+      if [[ "${FUNCNAME[1]:-}" == _repolens_scan_citations && " ${FUNCNAME[*]} " == *" filing_verify_cluster_citations "* ]] &&
+          { [[ "$failure" == scan && -z "${REPOLENS_SNIPPET_CITATION:-}" ]] || [[ "$failure" == snippets && -n "${REPOLENS_SNIPPET_CITATION:-}" ]]; }; then
+        printf 'fault\n' >> "$LOG_BASE/fault-hit"
+        printf 'src/probe.sh:1\n'
+        return 1
+      fi
+      command awk "$@"
+    }
+  fi
   rc=0
   dispatch_filing_batch probe || rc=$?
   check test "$rc" -ne 0
   for suffix in failed attempted unverified-url governor lock; do check test ! -e "$prefix.$suffix"; done
   check test ! -e "$LOG_BASE/posts"
   check test ! -e "$LOG_BASE/final/filed/c0.lock"
-  [[ "$saved" != saved ]] || check test -f "$prefix.url"
+  if [[ "$saved" == saved ]]; then
+    check test "$(sha256sum "$prefix.url" "$prefix.request.json")" = "$before"
+  fi
+  if [[ "$failure" != scope ]]; then check test -s "$LOG_BASE/fault-hit"; fi
+  unset -f awk
   printf '["src/probe.sh"]\n' > "$BRANCH_SCOPE_FILE"
   check dispatch_filing_batch probe
   check test -f "$prefix.url"
   check test "$(wc -l < "$LOG_BASE/posts")" -eq 1
-  printf 'PASS: %s filing retains retryable state on scope outage\n' "$saved"
+  printf 'PASS: %s filing retains retryable state on %s outage\n' "$saved" "$failure"
 )
 case_cross_link() (
   saved="$1" boundary="$2"
@@ -400,31 +421,206 @@ case_synthesis_body_io() (
   printf '[{"retained":true}]\n' > "$LOG_BASE/final/manifest.json.out-of-scope.json"
   printf '[{"cluster_id":"saved"}]\n' > "$LOG_BASE/final/cross-link-actions.preserved.json"
   before="$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")"
-  # Fail only the scope body reader, optionally emitting a valid citation first.
+  check branch_scope_verify_body 'src/probe.sh:1'
+  # repolens-r16-p8-2: execution failures are not semantic rejections.
   jq() {
-    if [[ "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "$#" == 2 && "$1" == -r && "$2" == .body ]]; then
+    if [[ "$body_fault" == membership* && "${FUNCNAME[1]:-}" == branch_scope_verify_body && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$body_fault" != membership-one ]] || return 1
+      return 74
+    fi
+    if [[ ( "$body_fault" == empty || "$body_fault" == partial ) && "${FUNCNAME[1]:-}" == branch_scope_filter_manifest && "$#" == 2 && "$1" == -r && "$2" == .body ]]; then
       printf 'fault\n' >> "$LOG_BASE/fault-hit"
       [[ "$body_fault" != partial ]] || printf 'src/probe.sh:1\n'
       return 74
     fi
     command jq "$@"
   }
+  awk() {
+    if [[ "$body_fault" == scan* && "${FUNCNAME[1]:-}" == _repolens_scan_citations && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$body_fault" != scan-partial ]] || printf 'src/probe.sh:1\n'
+      [[ "$body_fault" != scan-one ]] || return 1
+      [[ "$body_fault" != scan-three ]] || return 3
+      return 74
+    fi
+    command awk "$@"
+  }
+  sort() {
+    if [[ "$body_fault" == sort-one && " ${FUNCNAME[*]} " == *" branch_scope_filter_manifest "* ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      return 1
+    fi
+    command sort "$@"
+  }
+  # Sourceable helpers must retain errors even without caller pipefail.
+  if [[ "$body_fault" == scan-no-pipefail ]]; then set +o pipefail; fi
   rc=0
   run_synthesizer probe || rc=$?
+  if [[ "$body_fault" == scan-no-pipefail ]]; then
+    [[ ! -o pipefail ]] || exit 1
+    set -o pipefail
+  fi
   check test -s "$LOG_BASE/fault-hit"
-  printf 'Reached body extraction fault: %s\n' "$body_fault"
+  printf 'Reached body verification fault: %s\n' "$body_fault"
   check test "$rc" -ne 0
   check test "$(sha256sum "$LOG_BASE/final/manifest.json" "$LOG_BASE/final/manifest.json.out-of-scope.json" "$LOG_BASE/final/cross-link-actions.preserved.json")" = "$before"
   check jq -e 'length == 1 and .[0].body == "src/probe.sh:1"' "$LOG_BASE/final/manifest.scope-pending.json"
   check test -z "$(find "$LOG_BASE/final" -name '*.scope.*' -print)"
-  unset -f jq
+  unset -f jq awk sort
   check run_synthesizer probe
   check jq -e 'length == 1 and .[0].body == "src/probe.sh:1"' "$LOG_BASE/final/manifest.json"
   check jq -e 'length == 0' "$LOG_BASE/final/manifest.json.out-of-scope.json"
   check test ! -e "$LOG_BASE/final/manifest.scope-pending.json"
-  printf 'PASS: %s body reader failure preserves findings and retries\n' "$body_fault"
+  printf 'PASS: %s body verification failure preserves findings and retries\n' "$body_fault"
+)
+# Semantic rejections must retain status 1 while operational faults use 2.
+case_verifier_semantics() (
+  local body rc
+  fresh semantic-status
+  for body in 'src/probe.sh:1,garbage' 'src/unchanged.sh:1' 'No citation'; do
+    rc=0
+    branch_scope_verify_body "$body" >/dev/null || rc=$?
+    check test "$rc" -eq 1
+  done
+  check test "$(repolens_extract_citations 'src/probe.sh:1')" = 'src/probe.sh:1'
+  check test -z "$(repolens_extract_citations 'No citation')"
+  printf 'PASS: malformed, out-of-scope and missing citations remain semantic rejections\n'
+)
+# Exercise Bash's actual status-1 here-string failures without exhausting disk.
+# File-size limits apply only inside the verifier subshell; fixture IO is normal.
+case_verifier_input_io() (
+  local boundary="$1" body='src/probe.sh:1' reason rc=0
+  fresh "input-$boundary"
+  case "$boundary" in
+    scanner) printf -v body '%100000s src/probe.sh:1' '' ;;
+    membership) jq -n '["src/probe.sh", ("x" * 100000)]' > "$BRANCH_SCOPE_FILE" ;;
+  esac
+  check branch_scope_verify_body 'src/probe.sh:1'
+  if [[ "$boundary" == loop ]]; then
+    repolens_extract_citations() { printf 'src/probe.sh:1\n%.0s' {1..8000}; }
+  fi
+  reason="$(trap '' XFSZ; ulimit -f 0; branch_scope_verify_body "$body")" || rc=$?
+  check test "$rc" -eq 2
+  check test "$reason" != 'malformed citation list in body'
+  check test "$reason" != 'out-of-scope citation: src/probe.sh'
+  if [[ "$boundary" == loop ]]; then
+    unset -f repolens_extract_citations
+    source "$ROOT/lib/branch-scope.sh"
+  fi
+  check branch_scope_verify_body "$body"
+  printf 'PASS: %s here-string IO failure is retryable and repaired retry succeeds\n' "$boundary"
+)
+# A sourceable filing caller need not enable pipefail. Failed classification
+# must never be hidden by sed, including when the scanner emitted a prefix.
+case_cross_link_scan_io() (
+  local output="$1" boundary="${2:-candidate}" saved="${3:-new}" cross_prefix rc=0 before=""
+  fresh "cross-scan-$output-$boundary-$saved"
+  CROSS_LINK_MODE=comment
+  cross_prefix="$LOG_BASE/final/filed/cross-link/comment-9"
+  jq '.[0].body="Parent src/probe.sh:1" | .[0].cross_link_actions=[{type:"comment",issue_number:9,body:"Action src/probe.sh:1"}]' "$LOG_BASE/final/manifest.json" > "$LOG_BASE/changed.json"
+  mv "$LOG_BASE/changed.json" "$LOG_BASE/final/manifest.json"
+  mkdir -p "${cross_prefix%/*}"
+  if [[ "$saved" == saved ]]; then
+    printf 'done\n' > "$cross_prefix.done"
+    printf 'Action src/probe.sh:1' > "$cross_prefix.body.md"
+    printf 'https://github.com/acme/probe/issues/9#issuecomment-1\n' > "$cross_prefix.created-response"
+    before="$(sha256sum "$cross_prefix.done" "$cross_prefix.body.md" "$cross_prefix.created-response")"
+  fi
+  eval "$(declare -f _repolens_scan_citations | command sed '1s/_repolens_scan_citations/original_scanner/')"
+  _repolens_scan_citations() {
+    local scan_fixture_body="$1"
+    original_scanner "$@"
+  }
+  eval "$(declare -f repolens_extract_citations | command sed '1s/repolens_extract_citations/original_extract/')"
+  eval "$(declare -f _filing_action_reference_candidates | command sed '1s/_filing_action_reference_candidates/original_candidates/')"
+  repolens_extract_citations() {
+    if [[ ( "$boundary" == candidate && "$1" == src/probe.sh:1 ) || ( "$boundary" == action && "$1" == 'Action src/probe.sh:1' ) ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
+      return 2
+    fi
+    original_extract "$@"
+  }
+  _filing_action_reference_candidates() {
+    if [[ "$boundary" == input ]]; then
+      : > "$LOG_BASE/fault-hit"
+      printf 'src/probe.sh:1\n%.0s' {1..8000}
+      return 0
+    fi
+    if [[ "$boundary" == classifier || "$boundary" == classifier-one ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
+      [[ "$boundary" != classifier-one ]] || return 1
+      return 74
+    fi
+    original_candidates "$@"
+  }
+  # Exercise the later mandatory live rescan, not the earlier action scan.
+  # Tool status 1 is operational even if a valid prefix was emitted.
+  awk() {
+    if [[ "${FUNCNAME[1]:-}" == original_scanner && " ${FUNCNAME[*]} " == *" filing_verify_cluster_citations "* ]] &&
+        { [[ "$boundary" == live-parent && "$scan_fixture_body" == 'Parent src/probe.sh:1' && -z "${REPOLENS_SNIPPET_CITATION:-}" ]] ||
+          [[ "$boundary" == live-action && "$scan_fixture_body" == 'Action src/probe.sh:1' && -z "${REPOLENS_SNIPPET_CITATION:-}" ]] ||
+          [[ "$boundary" == snippets-parent && "$scan_fixture_body" == 'Parent src/probe.sh:1' && -n "${REPOLENS_SNIPPET_CITATION:-}" ]] ||
+          [[ "$boundary" == snippets-action && "$scan_fixture_body" == 'Action src/probe.sh:1' && -n "${REPOLENS_SNIPPET_CITATION:-}" ]]; }; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
+      return 1
+    fi
+    command awk "$@"
+  }
+  sed() {
+    if [[ "$boundary" == filter && "${1:-}" == '/^quoted:1$/d' ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      [[ "$output" != partial ]] || printf 'src/probe.sh:1\n'
+      return 1
+    fi
+    command sed "$@"
+  }
+  jq() {
+    if [[ "$boundary" == evidence && "${FUNCNAME[1]:-}" == _filing_cross_link_enact && "${1:-}" == -cn && "${4:-}" == 'Action src/probe.sh:1' ]]; then
+      printf 'fault\n' >> "$LOG_BASE/fault-hit"
+      # Even a complete valid prefix cannot authorize verification after IO failure.
+      [[ "$output" != partial ]] || printf '{"body":"Action src/probe.sh:1"}\n'
+      return 1
+    fi
+    command jq "$@"
+  }
+  set +o pipefail
+  if [[ "$boundary" == input ]]; then
+    (trap '' XFSZ; ulimit -f 0; _filing_cross_link_enact probe) || rc=$?
+  else
+    _filing_cross_link_enact probe || rc=$?
+  fi
+  [[ ! -o pipefail ]] || exit 1
+  set -o pipefail
+  check test -e "$LOG_BASE/fault-hit"
+  check test "$rc" -eq 2
+  check test ! -e "$LOG_BASE/posts"
+  check test ! -e "$cross_prefix.failed"
+  check test ! -e "$cross_prefix.unverified-done"
+  if [[ "$saved" == saved ]]; then
+    check test "$(sha256sum "$cross_prefix.done" "$cross_prefix.body.md" "$cross_prefix.created-response")" = "$before"
+  else
+    check test ! -e "$cross_prefix.done"
+    check test ! -e "$cross_prefix.attempted"
+  fi
+  unset -f repolens_extract_citations _filing_action_reference_candidates _repolens_scan_citations sed awk jq
+  eval "$(declare -f original_scanner | command sed '1s/original_scanner/_repolens_scan_citations/')"
+  eval "$(declare -f original_extract | command sed '1s/original_extract/repolens_extract_citations/')"
+  eval "$(declare -f original_candidates | command sed '1s/original_candidates/_filing_action_reference_candidates/')"
+  check _filing_cross_link_enact probe
+  check test -f "$cross_prefix.done"
+  check _filing_cross_link_enact probe
+  if [[ "$saved" == saved ]]; then check test ! -e "$LOG_BASE/posts";
+  else check test "$(wc -l < "$LOG_BASE/posts")" -eq 1; fi
+  printf 'PASS: %s cross-link retries %s %s failure without caller pipefail or repeated POST\n' "$saved" "$output" "$boundary"
 )
 case "${1:-all}" in
+  semantics) case_verifier_semantics ;;
+  cross-scan-*) case_cross_link_scan_io "${1#cross-scan-}" "${2:-candidate}" "${3:-new}" ;;
+  input-*) case_verifier_input_io "${1#input-}" ;;
   body-*) case_synthesis_body_io "${1#body-}" ;;
   kept-*) case_synthesis_kept_io "${1#kept-}" ;;
   synthesis-stream-*) case_synthesis_stream "${1#synthesis-stream-}" ;;
@@ -432,9 +628,9 @@ case "${1:-all}" in
   directory) case_directory ;;
   synthesis) for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done ;;
   synthesis-*) case_synthesis "${1#synthesis-}" ;;
-  filing-*) case_filing "${1#filing-}" ;;
+  filing-*) case_filing "${1#filing-}" "${2:-scope}" ;;
   cross-*) case_cross_link "${1#cross-}" "${2:-action}" ;;
   filing) case_filing new; case_filing saved ;;
   cross) for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
-  all) for body_fault in empty partial; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; case_filing new; case_filing saved; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
+  all) case_verifier_semantics; for boundary in scanner membership loop; do case_verifier_input_io "$boundary"; done; for saved in new saved; do for boundary in candidate action classifier classifier-one filter live-parent live-action snippets-parent snippets-action evidence; do for output in empty partial; do case_cross_link_scan_io "$output" "$boundary" "$saved"; done; done; case_cross_link_scan_io empty input "$saved"; done; for body_fault in empty partial scan scan-partial scan-no-pipefail scan-one scan-three sort-one membership membership-one; do case_synthesis_body_io "$body_fault"; done; for failure in allocate serialize aggregate replace replace-absent cleanup backup-allocate backup-copy backup-cleanup; do case_synthesis_kept_io "$failure"; done; case_synthesis_stream initial-read; case_synthesis_stream empty; case_synthesis_stream partial; case_manifest_stream empty; case_manifest_stream partial; case_directory; for fault in missing missing-empty malformed unreadable late late-min; do case_synthesis "$fault"; done; for saved in new saved; do for failure in scope scan snippets; do case_filing "$saved" "$failure"; done; done; for saved in new saved; do for boundary in parent action; do case_cross_link "$saved" "$boundary"; done; done ;;
 esac

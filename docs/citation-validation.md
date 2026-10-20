@@ -44,13 +44,21 @@ an existing file can be out of scope, and an in-scope line can be nonexistent.
 | N19 | Valid nested evidence as issue or action body | Publish once through mocked structured readback | filing governance N19 |
 | N20 | Valid independent parent, action containing unsupported file-like citations (including conventional root files), alone or alongside valid bare/quoted anchors | Reject the action with a diagnostic and zero comment POSTs | filing governance unsupported-action cases |
 | N21 | Valid parent, citation-free action prose, opaque URL (including commas/semicolons), comma-terminated timestamp or backtick sample (including multiline fences) with no recognized source citation | Preserve ordinary comment publication | filing governance citation-free action cases |
-| N22 | Action citation classification fails | Record failure; zero comment creates | filing governance citation probe failure |
+| N22 | Action citation extraction/classification cannot complete | Return retry status; preserve pending actions and saved receipts; zero comment creates until repaired | filing governance citation probe failure; scope retry-caller cross-scan cases |
 | N23 | Valid parent, recognized source citation inside a multiline fence | Apply live-source and branch-scope checks; reject missing files, nonexistent lines or out-of-scope paths with zero comment POSTs | filing governance fenced-citation cases |
 
 The action guard classifies every body and requires nonempty strict extraction
 for each bare candidate. Quoted members stay opaque during classification;
 only the original body supplies evidence to scope and live-source validation.
 This action publication check is stricter than extraction alone (N13).
+Action classification retains scanner failures through its output filter even
+when a sourceable caller disables `pipefail`; partial output cannot authorize a
+comment POST. Operational failures in action extraction, classification, output
+filtering or candidate input setup return retry status 2 without a permanent
+rejection or reservation of a fresh action for POST. Saved receipts, payloads
+and their attempt guards remain intact. A repaired retry publishes a fresh
+action once and reattests saved actions without another POST; malformed or
+unsupported citations still receive permanent rejection.
 Backtick masking in the classifier spans the complete body, including multiline
 fenced samples. The shared extractor still scans the original body: recognized
 bare or quoted source citations, including those inside fences, undergo
@@ -97,3 +105,25 @@ have no line 1; nonempty final lines count even without a newline, including
 lines ending in spaces or tabs. `tests/test_citation_read_errors.sh` covers these
 boundaries and confirms that a failed final-byte read prevents publication and
 a success receipt.
+
+Branch-scope verification returns 1 only for semantic rejection (malformed or
+missing citations, or a path outside the scope) and 2 when verification cannot
+complete. Scanner, sorting, membership-check and shell input setup failures
+remain operational failures even when their command status is 1. Directory
+filtering leaves findings pending; synthesis preserves saved publications and
+the complete candidate for a repaired retry. The scope retry-caller suite
+injects status-1 failures and real Bash here-string failures and checks both
+publication preservation and successful recovery.
+
+Mandatory live-source revalidation preserves scanner execution status too,
+including the later scan that binds snippets. An unavailable extraction returns
+2 through the issue governor and both parent/action cross-link guards. These
+paths retain pending work and saved receipts without a new terminal failure;
+repair permits publication once or reattests a saved success without another
+POST. Malformed citations and source-evidence mismatches retain status 1.
+Building the action's live-verification JSON is checked separately: a failed
+serializer returns 2 before verification, even if it emitted valid JSON first.
+`tests/test_branch_scope_retry_callers.sh` injects scanner status 1 specifically
+inside these live guards, with empty/partial output and caller `pipefail`
+disabled for comments, covering fresh work and saved receipts. It also covers
+failed action-evidence serialization with empty or complete valid output.

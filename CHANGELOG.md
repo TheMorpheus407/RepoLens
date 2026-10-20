@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Treat citation-scanner, sorting and scope-membership execution errors (including shell input setup failures) as retryable, preserving valid synthesis candidates and saved results instead of publishing false rejections. Keep scanner failures and action-evidence serialization errors retryable through mandatory live citation/snippet revalidation and cross-link action classification, including output filtering when the caller disables `pipefail`, preserving saved receipts and preventing duplicate posts after repair (repolens-r16-p8-2).
+
 - Preserve published synthesis results and the complete pending candidate when the initial scope-filter manifest read fails; keep genuinely invalid input rejected (repolens-r16-p8-1).
 
 - Preserve non-ASCII text in registry finding identities using frozen Unicode 3.2 NFC and fixed ASCII rules, so independent findings retain JSONL/CSV records across Python versions and locales. Existing ASCII IDs remain stable, including boundary punctuation; malformed UTF-8 title bytes become separators without blocking local registry refreshes. Non-ASCII case and punctuation remain literal, and existing non-ASCII IDs may change on rebuild (repolens-r16-p7-3).
