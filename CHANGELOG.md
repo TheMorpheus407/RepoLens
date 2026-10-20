@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Fail registry validation when its input cannot be opened, preserving the previous readable JSONL, CSV and triage reports instead of promoting an unvalidated candidate (repolens-r16-p5-1).
+
 - Require exactly one array of path strings in persisted branch scope; reject multi-document JSON streams before filtering findings or manifests, preserving their evidence for a repaired retry (repolens-r16-p3-3).
 
 - Preserve the complete registry and duplicate provenance when the duplicate-presence staging read fails, including failures after partial output; readable inventories without duplicates remain publishable (repolens-r16-p3-2).

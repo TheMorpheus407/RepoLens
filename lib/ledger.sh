@@ -865,8 +865,9 @@ build_findings_csv() {
 #   validation is an object (internals NOT checked — owned by validation-hints).
 #   Extra/forward-compatible keys (e.g. source_finding_paths) are tolerated.
 #
-#   Empty file -> 0. Returns 0 when every line is valid, 1 on any violation,
-#   2 on missing arg / missing file. Pure: reads only, no writes, no model.
+#   Empty file -> 0. Returns 0 when every line is valid, 1 on a violation or
+#   input open failure, 2 on missing arg / missing file.
+#   Pure: reads only, no writes, no model.
 validate_findings_jsonl() {
   local findings="${1:-}"
   if [[ -z "$findings" ]]; then
@@ -944,7 +945,10 @@ validate_findings_jsonl() {
       echo "validate_findings_jsonl: line $lineno: $violation" >&2
       errors=$((errors + 1))
     done <<< "$out"
-  done < "$findings"
+  done < "$findings" || {
+    echo "validate_findings_jsonl: cannot read findings.jsonl: $findings" >&2
+    return 1
+  }
 
   (( errors == 0 )) || return 1
   return 0
