@@ -52,7 +52,7 @@ from pathlib import Path
 import re
 import sys
 text = Path(sys.argv[1]).read_text()
-keys = re.findall(r"^" + re.escape(sys.argv[3]) + r"status[ \t]*:", text, re.M)
+keys = re.findall(r"^" + re.escape(sys.argv[3]) + r"(?:status|\"status\"|'status')[ \t]*:", text, re.M)
 sys.exit(0 if sys.argv[2] + "\n" in text and len(keys) == 1 else 1)
 PY
 }
@@ -77,7 +77,7 @@ projection() {
     check 'CSV matches derived status' test "$(tail -n +2 "$LOG_BASE/final/findings.csv" | grep -c ',"new",' || true)" -eq "$actions"
   fi
 }
-for scenario in indented quoted-and-block; do
+for scenario in indented quoted-and-block double-quoted-key single-quoted-key; do
   OUTPUT_DIR="$FIXTURE/$scenario/output"
   LOG_BASE="$FIXTURE/$scenario/logs/run"
   mkdir -p "$OUTPUT_DIR"
@@ -89,6 +89,10 @@ for scenario in indented quoted-and-block; do
     a_custom="status: 'reviewed' # original"
     b_custom=$'status: |-\n  reviewed\n  owner pending'
   fi
+  case "$scenario" in
+    double-quoted-key) b_custom='"status" : "needs owner" # retain this comment' ;;
+    single-quoted-key) indent=''; b_custom=$'\'status\': |-\n  reviewed\n  owner pending' ;;
+  esac
   a="$OUTPUT_DIR/a.md" b="$OUTPUT_DIR/b.md"
   write_finding "$a" probe-a critical "$a_custom"
   write_finding "$b" probe-b high "$b_custom"
@@ -98,6 +102,9 @@ for scenario in indented quoted-and-block; do
   check 'nested status retained' grep -qxF "${indent}  status: duplicate" "$b"
   check 'nested duplicate link retained' grep -qxF "${indent}  duplicate_of: nested-only.md" "$b"
   projection 1 1 probe-a 1
+  # Notes outside the receipt survive real reruns and later canonical promotion.
+  printf '\n## Follow-up\nUser evidence after receipt.  \n\n' >> "$b"
+  projection 1 1 probe-a
   before="$(sha256sum "$a" "$b")"
   check 'repeated dedupe succeeds' dedupe_local_markdown "$OUTPUT_DIR"
   check 'repeated dedupe is byte-identical' test "$before" = "$(sha256sum "$a" "$b")"
@@ -118,7 +125,7 @@ PY
   projection 1 1 probe-a
   check 'manual status edit remains untouched' custom_preserved "$b" "$b_custom"
   # Removing ownership restores eligibility even while the matching link stays.
-  sed -i '/^<!-- repolens-dedupe:begin -->$/,$d' "$b"
+  sed -i '/^<!-- repolens-dedupe:begin -->$/,/^<!-- repolens-dedupe:end -->$/d' "$b"
   projection 2 0 ''
   check 'next pass can re-mark a continuing match' dedupe_local_markdown "$OUTPUT_DIR"
   projection 1 1 probe-a
@@ -130,6 +137,7 @@ PY
   check 'new duplicate keeps custom status' custom_preserved "$a" "$a_custom"
   check 'promoted canonical keeps manual status' custom_preserved "$b" "$b_custom"
   projection 1 1 probe-b
+  check 'promotion retains trailing user evidence' grep -qxF 'User evidence after receipt.  ' "$b"
   before="$(sha256sum "$a" "$b")"
   check 'promoted rerun succeeds' dedupe_local_markdown "$OUTPUT_DIR"
   check 'promoted rerun is byte-identical' test "$before" = "$(sha256sum "$a" "$b")"

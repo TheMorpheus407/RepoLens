@@ -34,10 +34,14 @@ It is built from the existing finding outputs; it does not replace them.
   dedupe's legacy `status: duplicate` marks or complete owned duplicate body
   receipts only when their direct relative `duplicate_of` link identifies a
   different parsed record without either duplicate representation in the same
-  current deterministic group. Dedupe preserves a custom root `status` in place
-  and adds no second status key. New receipts carry the invisible
+  current deterministic group. Dedupe preserves a custom root `status` in place,
+  including single- and double-quoted `status` keys, and adds no second status key.
+  New receipts carry the invisible
   `<!-- repolens-dedupe:duplicate -->` marker inside the existing begin/end block;
-  complete exact legacy duplicate notes are also supported. Canonical notes,
+  complete exact legacy duplicate notes are also supported. Receipt ownership ends
+  at the closing sentinel; trailing Markdown does not cancel classification.
+  Dedupe reruns and promotion preserve surrounding content and whitespace;
+  incomplete receipt blocks are left unchanged with a warning. Canonical notes,
   incomplete blocks and unmarked links cannot establish duplicate ownership. The builder
   reuses current similarity thresholds and transitive connected components.
   Missing, filtered, invalid or now-unrelated canonicals (including after title

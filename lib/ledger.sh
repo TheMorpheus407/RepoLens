@@ -469,20 +469,19 @@ _ledger_local_duplicate_receipt() {
       if ($0 == "<!-- repolens-dedupe:begin -->") seen = 1
       next
     }
+    # Closing the first owned block ends classification, not the IO read.
+    closed { next }
     {
       count++
       if (count == 1) typed = ($0 == "<!-- repolens-dedupe:duplicate -->")
-      if ($0 != "") last = $0
-      if (count <= n) {
-        if ($0 != legacy[count]) legacy_ok = 0
-      } else if (count == n + 1) {
-        if ($0 != "<!-- repolens-dedupe:end -->") legacy_ok = 0
-      } else if ($0 != "") legacy_ok = 0
+      if ($0 == "<!-- repolens-dedupe:end -->") {
+        complete = typed || (legacy_ok && count == n + 1)
+        closed = 1
+        next
+      }
+      if (count > n || $0 != legacy[count]) legacy_ok = 0
     }
-    END {
-      if (seen && ((typed && count >= 2 && last == "<!-- repolens-dedupe:end -->") ||
-          (legacy_ok && count >= n + 1))) print "duplicate"
-    }
+    END { if (complete) print "duplicate" }
   ' "$1"
 }
 

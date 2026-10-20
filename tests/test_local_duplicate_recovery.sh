@@ -64,6 +64,7 @@ receipt() {
 }
 for scenario in missing missing-link invalid filtered self chain cycle outside failed-dedupe valid \
     receipt-typed receipt-legacy receipt-bare receipt-canonical receipt-incomplete receipt-outside \
+    receipt-typed-trailing receipt-legacy-trailing receipt-malformed-trailing receipt-canonical-trailing \
     receipt-malformed receipt-missing-link receipt-chain receipt-cycle receipt-missing receipt-unrelated receipt-self; do
   LOG_BASE="$FIXTURE/$scenario/logs/probe"
   OUTPUT_DIR="$FIXTURE/$scenario/output"
@@ -115,9 +116,16 @@ for scenario in missing missing-link invalid filtered self chain cycle outside f
     write_finding "$b" probe-b new
     expected_records=2 expected_new=2 expected_duplicates=0
     case "$style" in
-      typed|legacy)
-        receipt "$a" "$style"
+      typed|legacy|typed-trailing|legacy-trailing)
+        receipt "$a" "${style%-trailing}"
+        if [[ "$style" == *-trailing ]]; then
+          printf '\n## Follow-up\nKeep this user evidence.\n' >> "$a"
+        fi
         expected_new=1 expected_duplicates=1 ;;
+      malformed-trailing|canonical-trailing)
+        receipt "$a" "${style%-trailing}"
+        # A later closing sentinel cannot turn a non-duplicate receipt into one.
+        printf '\n<!-- repolens-dedupe:duplicate -->\n<!-- repolens-dedupe:end -->\n' >> "$a" ;;
       chain)
         receipt "$a" typed
         write_finding "$b" probe-b duplicate security/probe/003.md

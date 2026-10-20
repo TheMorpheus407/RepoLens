@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve custom local status metadata without duplicate YAML keys; derive duplicate classification from complete owned receipts and validated current links, including legacy notes, promotion and stale-link recovery (repolens-r15-pr536-custom-status).
+- Preserve custom local status metadata without duplicate YAML keys; derive duplicate classification from complete owned receipts and validated current links, including quoted status keys, legacy notes, promotion and stale-link recovery. Bound receipt ownership to its closing sentinel so appended user notes remain intact and do not cancel duplicate classification (repolens-r15-pr536-custom-status).
 
 - Retire spaced managed duplicate-status keys when a local finding becomes canonical, including quoted values, so registry rebuilding retains exactly one actionable finding (repolens-r15-pr534-fn-1).
 

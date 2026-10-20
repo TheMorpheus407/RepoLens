@@ -69,9 +69,10 @@ _local_dedupe_lib_dir() {
 #       and the whole `also_reported_by:` block (key + its indented children),
 #       then inserts <fm_add> at the existing root indentation immediately
 #       before the closing `---`. Nested names remain untouched;
-#     - body: drops everything from the `<!-- repolens-dedupe:begin -->` sentinel
-#       to EOF and trims trailing blank lines, then appends a fresh, blank-line-
-#       separated, sentinel-wrapped note carrying <note>.
+#     - body: replaces the first complete begin/end sentinel block in place,
+#       preserving all surrounding Markdown and whitespace. Without a block,
+#       trims trailing blank lines and appends a blank-line-separated note.
+#       An incomplete block fails without replacing the original file.
 #   Because strip removes exactly what add inserts and never perturbs any other
 #   line, re-applying the transform is a fixed point (byte-identical).
 #
@@ -84,15 +85,18 @@ _local_dedupe_lib_dir() {
 #   Writes atomically (tmp + mv). No model invoked.
 _local_dedupe_mark_file() {
   local file="$1" fm_add="$2" note="$3"
-  local tmp="${file}.rldedupe.$$"
+  local tmp="${file}.rldedupe.$$" last_byte
+  # awk normalizes record separators; retain a user suffix lacking final LF.
+  last_byte="$(tail -c 1 -- "$file")" || return 1
 
-  RL_FM_ADD="$fm_add" RL_NOTE="$note" awk '
+  RL_FM_ADD="$fm_add" RL_NOTE="$note" RL_LAST_BYTE="$last_byte" awk '
     BEGIN {
       fm_add = ENVIRON["RL_FM_ADD"]
       note   = ENVIRON["RL_NOTE"]
       state  = "pre"     # pre -> fm -> body
       skip_arb = 0       # inside an also_reported_by: block we are dropping
-      seen_sentinel = 0  # past the body note sentinel (drop to EOF)
+      seen_sentinel = 0  # first owned body block
+      closed_sentinel = 0
       nb = 0
     }
     # Buffer frontmatter to determine root indentation before replacing any
@@ -116,7 +120,7 @@ _local_dedupe_mark_file() {
           # Newly supported spaced keys match complete managed scalar values.
           if (text ~ /^status[[:space:]]+:[[:space:]]*(duplicate|"duplicate"|\047duplicate\047)([[:space:]]+#.*)?[[:space:]]*$/) continue
           if (text ~ /^duplicate_of[[:space:]]*:/) continue
-          if (text ~ /^status[[:space:]]*:/) has_custom_status = 1
+          if (text ~ /^(status|"status"|\047status\047)[[:space:]]*:/) has_custom_status = 1
         }
         print line
       }
@@ -153,8 +157,12 @@ _local_dedupe_mark_file() {
         }
         next
       }
-      # state == body: buffer up to the sentinel, drop the sentinel block + after.
-      if (seen_sentinel == 1) { next }
+      # Buffer both sides of the first receipt, dropping only its owned block.
+      if (seen_sentinel) {
+        if (closed_sentinel) tail[++nt] = $0
+        else if ($0 == "<!-- repolens-dedupe:end -->") closed_sentinel = 1
+        next
+      }
       if ($0 == "<!-- repolens-dedupe:begin -->") { seen_sentinel = 1; next }
       nb++
       body[nb] = $0
@@ -163,14 +171,18 @@ _local_dedupe_mark_file() {
     END {
       # Never publish buffered, incomplete frontmatter or append a body note
       # to a file that changed after ingestion. The caller discards the temp.
-      if (state != "body") exit 1
-      while (nb > 0 && body[nb] == "") nb--   # trim trailing blank lines
+      if (state != "body" || (seen_sentinel && !closed_sentinel)) exit 1
+      if (!seen_sentinel) while (nb > 0 && body[nb] == "") nb--
       for (k = 1; k <= nb; k++) print body[k]
       if (length(note) > 0) {
-        print ""
+        if (!seen_sentinel) print ""
         print "<!-- repolens-dedupe:begin -->"
         print note
         print "<!-- repolens-dedupe:end -->"
+      }
+      for (k = 1; k <= nt; k++) {
+        if (k == nt && ENVIRON["RL_LAST_BYTE"] != "") printf "%s", tail[k]
+        else print tail[k]
       }
     }
   ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
