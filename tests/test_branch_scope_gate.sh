@@ -76,6 +76,48 @@ printf 'src/changed.sh:1\n' > "$TMP/findings/missing-scope.md"
 rm "$BRANCH_SCOPE_FILE"
 check 'missing scope fails closed at ingestion' test "$(count_dry_run_issues "$TMP/findings")" = 0
 check 'missing scope preserves pending source for retry' test -f "$TMP/findings/missing-scope.md"
+# Scope configuration is exactly one array document, never a selected subset
+# of a JSON stream. Reject it before changing directory or manifest evidence.
+for scenario in arrays object-first object-last invalid-array empty whitespace; do
+  case "$scenario" in
+    arrays) printf '["src/changed.sh"]\n["src/unchanged.sh"]\n' > "$BRANCH_SCOPE_FILE" ;;
+    object-first) printf '{}\n["src/unchanged.sh"]\n' > "$BRANCH_SCOPE_FILE" ;;
+    object-last) printf '["src/unchanged.sh"]\n{}\n' > "$BRANCH_SCOPE_FILE" ;;
+    invalid-array) printf '["src/unchanged.sh"]\n[42]\n' > "$BRANCH_SCOPE_FILE" ;;
+    empty) : > "$BRANCH_SCOPE_FILE" ;;
+    whitespace) printf ' \n\t\n' > "$BRANCH_SCOPE_FILE" ;;
+  esac
+  scope_rc=0
+  _branch_scope_read_paths >/dev/null || scope_rc=$?
+  check "$scenario scope configuration is unavailable" test "$scope_rc" -ne 0
+  scope_rc=0
+  branch_scope_verify_body 'src/unchanged.sh:1' >/dev/null || scope_rc=$?
+  check "$scenario body verification is retryable" test "$scope_rc" -eq 2
+  scope_dir="$TMP/$scenario"
+  mkdir "$scope_dir"
+  printf 'src/unchanged.sh:1\n' > "$scope_dir/finding.md"
+  printf 'No citation yet\n' > "$scope_dir/draft.md"
+  scope_before="$(sha256sum "$scope_dir"/*.md)"
+  scope_rc=0
+  branch_scope_filter_directory "$scope_dir" >/dev/null 2>&1 || scope_rc=$?
+  check "$scenario directory filter stops for repair" test "$scope_rc" -ne 0
+  check "$scenario preserves every source byte" test "$(sha256sum "$scope_dir"/*.md)" = "$scope_before"
+  check "$scenario writes no rejection reason" test ! -e "$scope_dir/draft.md.out-of-scope.reason"
+  printf '[{"cluster_id":"saved","title":"Saved evidence","severity":"high","body":"src/unchanged.sh:1"}]\n' > "$scope_dir/manifest.json"
+  scope_before="$(sha256sum "$scope_dir/manifest.json")"
+  scope_rc=0
+  branch_scope_filter_manifest "$scope_dir/manifest.json" >/dev/null 2>&1 || scope_rc=$?
+  check "$scenario manifest filter is retryable" test "$scope_rc" -eq 2
+  check "$scenario preserves the complete manifest" test "$(sha256sum "$scope_dir/manifest.json")" = "$scope_before"
+done
+# Repair the same scope file: valid empty and nonempty documents stay distinct.
+printf '[]\n' > "$BRANCH_SCOPE_FILE"
+check 'one empty array is available scope configuration' _branch_scope_read_paths
+scope_rc=0
+branch_scope_verify_body 'src/unchanged.sh:1' >/dev/null || scope_rc=$?
+check 'valid empty scope rejects citations semantically' test "$scope_rc" -eq 1
+printf '["src/unchanged.sh"]\n' > "$BRANCH_SCOPE_FILE"
+check 'repaired single document accepts its citation' branch_scope_verify_body 'src/unchanged.sh:1'
 MODE=audit
 mkdir "$TMP/audit-findings"
 printf 'anything\n' > "$TMP/audit-findings/audit.md"

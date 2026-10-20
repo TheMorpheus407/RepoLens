@@ -255,7 +255,10 @@ _repolens_scan_citations() {
 _branch_scope_read_paths() {
   local scope="${BRANCH_SCOPE_FILE:-${LOG_BASE:-}/branch-scope.json}"
   [[ -f "$scope" && ! -L "$scope" ]] || return 1
-  jq -ce 'select(type == "array" and all(.[]; type == "string"))' "$scope" 2>/dev/null
+  # Validate the whole stream, so an extra document cannot replace or be
+  # silently discarded from the persisted allowlist.
+  jq -cse 'select(length == 1) | .[0]
+    | select(type == "array" and all(.[]; type == "string"))' "$scope" 2>/dev/null
 }
 
 # Returns 0 for an accepted body, 1 for a rejected body, 2 if verification is

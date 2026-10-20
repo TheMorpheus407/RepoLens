@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Require exactly one array of path strings in persisted branch scope; reject multi-document JSON streams before filtering findings or manifests, preserving their evidence for a repaired retry (repolens-r16-p3-3).
+
 - Preserve the complete registry and duplicate provenance when the duplicate-presence staging read fails, including failures after partial output; readable inventories without duplicates remain publishable (repolens-r16-p3-2).
 
 - Preserve literal template expressions in bug reports and specifications when composing prompts, including the original scope passed to between-round orchestration, while still expanding the surrounding template slots (repolens-r16-p3-1).
