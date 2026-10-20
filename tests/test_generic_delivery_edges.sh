@@ -20,7 +20,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Reuse setup and the production finalization callback, without running scenarios.
 # shellcheck source=/dev/null
 source <(awk '/^LOG_BASE=/ {exit} /^REPO=/ {next} {print}' "$REPO/tests/test_generic_explicit_output.sh")
-for scenario in ${1:-severity invalid trust overlap large strings private-discovery rounds-dangling rounds-loop rounds-file rounds-during-find}; do
+for scenario in ${1:-severity invalid trust overlap large strings private-discovery rounds-dangling rounds-loop rounds-file rounds-before-find rounds-during-find}; do
   LOG_BASE="$FIXTURE/$scenario/run" OUTPUT_DIR="$FIXTURE/$scenario/output"
   OUTPUT_DIR_SET=true RUN_ID=probe MODE=bugreport LOCAL_MODE=true HUMAN_REVIEW=true
   PROJECT_PATH="$FIXTURE/project" REPOLENS_FINAL_STATE=finished
@@ -51,6 +51,11 @@ for scenario in ${1:-severity invalid trust overlap large strings private-discov
       # find -H succeeds with no matches on the now-dangling command-line link.
       # shellcheck disable=SC2329 # The production inventory invokes this callback.
       find() {
+        # Ordinary inventory runs after presence was observed but before the
+        # rounds listing. Removing the link must still fail, not skip that list.
+        if [[ "$scenario" == rounds-before-find && "${1:-}" == -H && "${2:-}" == "$OUTPUT_DIR" ]]; then
+          command rm "$LOG_BASE/rounds" || return 1
+        fi
         if [[ "$scenario" == rounds-during-find && "${1:-}" == -H && "${2:-}" == "$LOG_BASE/rounds" ]]; then
           command mv "$rounds_store" "$rounds_store.offline" || return 1
         fi
@@ -64,7 +69,7 @@ for scenario in ${1:-severity invalid trust overlap large strings private-discov
       test "$GLOBAL_ISSUES_CREATED" -eq 1
       unset -f find
       if [[ -d "$rounds_store.offline" ]]; then mv "$rounds_store.offline" "$rounds_store"; fi
-      rm "$LOG_BASE/rounds"
+      rm -f "$LOG_BASE/rounds"
       ln -s "$rounds_store" "$LOG_BASE/rounds"
       RUN_ROUNDS_RC=0 REPOLENS_FINAL_STATE=finished
       optional_local_finalization
