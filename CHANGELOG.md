@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve trailing content quotes and apostrophes in plain Generic delivery titles, keeping the complete title in exported Markdown and the finding registry (repolens-r16-p9-2).
+
 - Stream manifest entries into registry serialization instead of passing their complete evidence bodies as command arguments, so valid large findings retain JSONL and CSV output (repolens-r16-p7-1).
 
 - Preserve a previous scope-rejection diagnostic when quarantine publication fails, restoring its saved bytes and retaining a recovery copy with its path if restoration itself fails (repolens-r16-p6-2).

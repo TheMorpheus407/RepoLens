@@ -2378,7 +2378,13 @@ except (ValueError, UnicodeError, OSError) as exc:
 '
     return $?
   fi
-  _round_digest_trim_yaml_value "$value"
+  # Only a leading quote selects quoted-scalar handling. A trailing quote in
+  # a plain title is content, such as Failure in "login" or Expired users'.
+  if [[ "$value" == \'* ]]; then
+    _round_digest_trim_yaml_value "$value"
+  else
+    printf '%s\n' "$value"
+  fi
 }
 
 _round_digest_sanitize_identifier() {

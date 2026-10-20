@@ -77,7 +77,9 @@ For Generic investigators with `bugreport --local --output`, finalization conver
 private multi-finding evidence to one ordinary Markdown file per segment in the
 requested output. Each projection records `source_finding_path`,
 `source_finding_segment` and `generic_source_id`; its `lens` comes from `lens_id`
-and its title comes from a supplied title or the hypothesis. Single-line
+and its title comes from a supplied title or the hypothesis. Titles without a
+leading quote are plain scalars; trailing quotation marks and apostrophes remain
+title content in both Markdown and the registry. Single-line
 double-quoted titles decode [YAML escape sequences](https://yaml.org/spec/1.2.2/#57-escaped-characters),
 including quote, backslash and Unicode/hex escapes. Decoded terminal newlines and
 Unicode separators remain title content in both Markdown and the registry;
