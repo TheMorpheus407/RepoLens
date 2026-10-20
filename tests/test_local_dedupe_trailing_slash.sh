@@ -50,7 +50,7 @@ relative_contributor_link() {
   ' "$1")" || return 1
   [[ -n "$target" && "$target" != /* && "${2%/}/$target" -ef "$3" ]]
 }
-for variant in plain slash repeated-slash symlink-slash root; do
+for variant in plain slash repeated-slash symlink-slash relative relative-slash relative-symlink dot root; do
   case_dir="$FIXTURE/$variant"
   output_dir="$case_dir/findings"
   must mkdir -p "$output_dir/security/injection" "$output_dir/security/auth"
@@ -61,6 +61,18 @@ for variant in plain slash repeated-slash symlink-slash root; do
   argument="$output_dir"
   link_root="$output_dir"
   case "$variant" in
+    relative|relative-slash|relative-symlink|dot)
+      cd "$case_dir" || exit 1
+      argument=findings
+      case "$variant" in
+        relative-slash) argument=findings/// ;;
+        relative-symlink)
+          must ln -s findings output-link
+          argument=output-link/
+          ;;
+        dot) cd "$output_dir" || exit 1; argument=. ;;
+      esac
+      ;;
     slash) argument="$output_dir/" ;;
     repeated-slash) argument="$output_dir///" ;;
     root)

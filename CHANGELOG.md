@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Bind relative local-finding roots to the caller’s working directory before registry ingestion, so Markdown reports resolve their source links from the report location, including paths with spaces and URL-special characters (repolens-r16-p5-4).
+- Bind relative local-finding roots to the caller’s working directory before registry ingestion, so Markdown reports resolve their source links from the report location, including paths with spaces, URL-special characters and trailing newlines in the working directory. Keep dedupe’s canonical and contributor links relative to that root, and avoid URL host links when called from `/` (repolens-r16-p5-4).
 
 - Publish round digests at their exact path, rejecting directory and directory-symlink destinations with cleaned stages and a repaired retry. Stage hard-capped output before the same portable publisher, preserving normal digest permissions and the previous report on cap preparation failures (repolens-r16-p5-3).
 

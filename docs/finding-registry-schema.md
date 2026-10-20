@@ -191,7 +191,12 @@ retained in every case.
 Triage and human-review Markdown reports percent-encode finding and contributor
 link destinations while preserving directory separators. Labels escape Markdown
 and HTML syntax and replace carriage returns and newlines with spaces; the
-encoded destination retains the original path bytes.
+encoded destination retains the original path bytes. Local ingestion binds relative
+output roots to the caller’s working directory before traversal, so source links
+resolve from reports stored elsewhere. This preserves trailing newlines in the
+working-directory name and emits a single leading slash when called from `/`.
+Absolute input-root spelling is retained; dedupe uses the same root spelling to
+keep its stored canonical and contributor links relative to the output root.
 
 Standalone local registry building replaces the exact requested file path
 atomically. Directory and directory-symlink destinations fail without changing

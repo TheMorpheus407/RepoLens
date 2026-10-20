@@ -217,7 +217,10 @@ dedupe_local_markdown() {
   fi
 
   # Match ledger traversal before deriving relative duplicate/contributor
-  # links for standalone callers that supply trailing slashes.
+  # links, including relative roots and callers in / or newline-named dirs.
+  if [[ "$output_dir" != /* ]]; then
+    output_dir="${PWD%/}/$output_dir"
+  fi
   while [[ "$output_dir" == */ && "$output_dir" != / ]]; do output_dir="${output_dir%/}"; done
 
   # On-demand source of the reused helpers. repolens.sh sources synthesize.sh but

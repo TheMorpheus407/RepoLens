@@ -495,7 +495,7 @@ _ledger_local_duplicate_receipt() {
 #   two deliberate differences —
 #   - markdown_path is POPULATED with the .md file's path (the point of #319:
 #     link the registry row back to the human-readable file). The path is
-#     absolute input-root path, binding relative <output_dir> arguments to the
+#     an absolute input-root path, binding relative <output_dir> arguments to the
 #     caller's working directory so reports elsewhere can resolve the file.
 #   - duplicate_group is null and source_finding_paths is OMITTED: local runs
 #     have no synthesizer clusters, so there is nothing to seed or pass through.
@@ -537,9 +537,10 @@ build_findings_jsonl_from_local() {
   [[ -n "$out" ]] || { echo "build_findings_jsonl_from_local: missing out path" >&2; return 2; }
   [[ -d "$dir" ]] || { echo "build_findings_jsonl_from_local: output_dir not found: $dir" >&2; return 2; }
 
-  # Bind relative roots before find emits paths consumed from other directories.
+  # PWD preserves trailing newlines; trim only the root slash before joining
+  # so callers in / produce local absolute links rather than URL authorities.
   if [[ "$dir" != /* ]]; then
-    dir="$(pwd)/$dir" || return 1
+    dir="${PWD%/}/$dir"
   fi
   # Keep the traversal and relative-path prefix consistent for library callers.
   while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
