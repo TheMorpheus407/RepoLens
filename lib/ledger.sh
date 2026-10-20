@@ -453,6 +453,38 @@ _ledger_frontmatter_value() {
   _ledger_trim_yaml_value "$raw"
 }
 
+# _ledger_local_duplicate_receipt <snapshot> <canonical_relative_path>
+#   Print duplicate for a complete owned duplicate body receipt, otherwise
+#   nothing. Legacy notes must exactly name this link; typed notes carry an
+#   explicit duplicate marker. Read through EOF and retain awk IO failures.
+#   This proves ownership only: the registry still validates the link/group.
+_ledger_local_duplicate_receipt() {
+  local expected
+  printf -v expected '> Duplicate of `%s` — see the canonical finding for the full details.' "$2"
+  RL_LOCAL_DUPLICATE_NOTE="$expected" awk '
+    BEGIN { n = split(ENVIRON["RL_LOCAL_DUPLICATE_NOTE"], legacy, "\n"); legacy_ok = 1 }
+    NR == 1 { in_fm = 1; next }
+    in_fm { if ($0 == "---") in_fm = 0; next }
+    !seen {
+      if ($0 == "<!-- repolens-dedupe:begin -->") seen = 1
+      next
+    }
+    # Closing the first owned block ends classification, not the IO read.
+    closed { next }
+    {
+      count++
+      if (count == 1) typed = ($0 == "<!-- repolens-dedupe:duplicate -->")
+      if ($0 == "<!-- repolens-dedupe:end -->") {
+        complete = typed || (legacy_ok && count == n + 1)
+        closed = 1
+        next
+      }
+      if (count > n || $0 != legacy[count]) legacy_ok = 0
+    }
+    END { if (complete) print "duplicate" }
+  ' "$1"
+}
+
 # build_findings_jsonl_from_local <output_dir> <out_jsonl_path> [generic_raw_root]
 #   Optional physical rounds root excludes private raw Generic files during
 #   explicit delivery; standalone/default callers keep their source selection.
@@ -484,7 +516,8 @@ _ledger_frontmatter_value() {
 #     arrived via a manifest cluster or a local .md file.
 #   - severity is run through _ledger_severity_normalize ("Critical"->"critical").
 #   - confidence is null, primary_location is "", validation is {}.
-#   - status preserves a "duplicate" mark only with a direct duplicate_of link
+#   - status accepts a legacy "duplicate" mark or complete owned duplicate
+#     receipt (preserving custom root status), only with a direct duplicate_of link
 #     to a different, parsed non-duplicate in the same current deterministic
 #     group; otherwise it is "new", so stale marks cannot suppress review.
 #     Valid links reconstruct also_reported_by on canonical records.
@@ -527,7 +560,7 @@ build_findings_jsonl_from_local() {
   fi
   # Unlike the projected metadata, this file holds the complete private body.
   # mktemp creates it exclusively with owner-only permissions, regardless of umask.
-  local ingest_failed=0 list_complete=0 snapshot frontmatter_rc raw_value
+  local ingest_failed=0 list_complete=0 snapshot frontmatter_rc raw_value receipt_status
   if ! snapshot="$(mktemp "$tmp.source.XXXXXX")"; then
     rm -f "$tmp" "$tmp.files"
     return 1
@@ -566,8 +599,8 @@ build_findings_jsonl_from_local() {
     status="$(_ledger_frontmatter_value "$snapshot" status)" || { ingest_failed=1; break; }
     [[ "$status" == duplicate ]] || status=new
     duplicate_of=""
-    if [[ "$status" == duplicate ]]; then
-      raw_value="$(_ledger_frontmatter_scalar "$snapshot" duplicate_of)" || { ingest_failed=1; break; }
+    raw_value="$(_ledger_frontmatter_scalar "$snapshot" duplicate_of)" || { ingest_failed=1; break; }
+    if [[ "$status" == duplicate || -n "$raw_value" ]]; then
       # The deduper JSON-quotes paths that YAML plain scalars cannot preserve.
       # Decode before matching; malformed links restore eligibility below.
       if [[ "$raw_value" == \"* ]]; then
@@ -586,6 +619,10 @@ build_findings_jsonl_from_local() {
         fi
       else
         duplicate_of="$(_ledger_trim_yaml_value "$raw_value")"
+      fi
+      if [[ "$status" != duplicate && -n "$duplicate_of" ]]; then
+        receipt_status="$(_ledger_local_duplicate_receipt "$snapshot" "$duplicate_of")" || { ingest_failed=1; break; }
+        [[ "$receipt_status" != duplicate ]] || status=duplicate
       fi
     fi
     # Complexity (#385): optional 1..5 routing tier from the finding frontmatter.
@@ -695,7 +732,7 @@ build_findings_jsonl_from_local() {
 
   # The local dedupe pass stores canonical paths relative to output_dir. Resolve
   # only against records in this same tree; no referenced file is opened. Check
-  # RAW statuses before normalization so self-links, chains and cycles cannot
+  # Candidate states before normalization so self-links, chains and cycles cannot
   # validate one another. Missing/filtered/invalid or now-unrelated canonicals
   # restore eligibility without modifying evidence. Only valid links contribute.
   if ! jq -cs --arg dir "${dir%/}" --slurpfile groups "$components" '
