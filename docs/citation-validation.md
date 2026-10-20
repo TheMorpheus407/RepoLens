@@ -114,3 +114,13 @@ filtering leaves findings pending; synthesis preserves saved publications and
 the complete candidate for a repaired retry. The scope retry-caller suite
 injects status-1 failures and real Bash here-string failures and checks both
 publication preservation and successful recovery.
+
+Mandatory live-source revalidation preserves scanner execution status too,
+including the later scan that binds snippets. An unavailable extraction returns
+2 through the issue governor and both parent/action cross-link guards. These
+paths retain pending work and saved receipts without a new terminal failure;
+repair permits publication once or reattests a saved success without another
+POST. Malformed citations and source-evidence mismatches retain status 1.
+`tests/test_branch_scope_retry_callers.sh` injects scanner status 1 specifically
+inside these live guards, with empty/partial output and caller `pipefail`
+disabled for comments, covering fresh work and saved receipts.

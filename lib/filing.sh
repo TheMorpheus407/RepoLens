@@ -210,7 +210,9 @@ _filing_lock_age() {
 #        found -> MISMATCH "snippet not found near cited line".
 #
 #   On success: returns 0. Prints nothing.
-#   On failure: returns 1. Prints exactly one concise reason line on stdout
+#   On semantic/source-evidence failure: returns 1. Scanner execution failures
+#   return 2 so callers preserve retry eligibility and saved receipts.
+#   Both failures print exactly one concise reason line on stdout
 #               of the form `<path>:<line> <description>` so callers can
 #               embed it verbatim after `VERIFICATION_FAILED: `.
 #
@@ -239,9 +241,13 @@ filing_verify_cluster_citations() {
   # The shared extractor preserves complete paths and formatted citations.
   # A malformed list is a body-level failure, even with another valid anchor.
   local citations
-  if ! citations="$(repolens_extract_citations "$body")"; then
-    printf 'malformed citation list in body\n'
-    return 1
+  if citations="$(repolens_extract_citations "$body")"; then
+    :
+  else
+    case $? in
+      1) printf 'malformed citation list in body\n'; return 1 ;;
+      *) printf 'citation extraction unavailable\n'; return 2 ;;
+    esac
   fi
 
   if [[ -z "$citations" ]]; then
@@ -321,9 +327,13 @@ filing_verify_cluster_citations() {
 
     # Verify the snippet attached to every occurrence of this citation.
     local snippets
-    if ! snippets="$(repolens_citation_snippets "$body" "$citation")"; then
-      printf 'could not bind citation snippets\n'
-      return 1
+    if snippets="$(repolens_citation_snippets "$body" "$citation")"; then
+      :
+    else
+      case $? in
+        1) printf 'could not bind citation snippets\n'; return 1 ;;
+        *) printf 'citation snippet extraction unavailable\n'; return 2 ;;
+      esac
     fi
     if [[ -n "$snippets" ]]; then
       context_start=$(( lstart - 20 ))
@@ -380,7 +390,16 @@ _filing_real_agent() {
     _filing_fail "$filed_dir" "$cluster_id" 'invalid or ambiguous manifest entry'
     return 1
   }
-  if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$entry")"; then
+  if reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$entry")"; then
+    :
+  else
+    scope_rc=$?
+    if (( scope_rc != 1 )); then
+      rm -f "$filed_dir/$cluster_id.lock"
+      rmdir "$filed_dir/$cluster_id.governor"
+      printf 'filing: %s; retry after citation repair\n' "$reason" >&2
+      return 2
+    fi
     _filing_fail "$filed_dir" "$cluster_id" "$reason"
     return 1
   fi
@@ -866,7 +885,10 @@ _filing_cross_link_enact() {
     fi
     [[ -n "$evidence" ]] || evidence="$(jq -cn --arg body "$body" '{body:$body}')"
     reason=""
-    if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$evidence")"; then
+    scope_rc=0
+    reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$evidence")" || scope_rc=$?
+    (( scope_rc <= 1 )) || return 2
+    if (( scope_rc == 1 )); then
       _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
       continue
     fi
@@ -932,7 +954,10 @@ _filing_cross_link_enact() {
     }
     (( unsupported_reference )) && continue
     if [[ -n "$action_citations" ]]; then
-      if ! reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")"; then
+      scope_rc=0
+      reason="$(filing_verify_cluster_citations "${PROJECT_PATH:-}" "$(jq -cn --arg body "$body" '{body:$body}')")" || scope_rc=$?
+      (( scope_rc <= 1 )) || return 2
+      if (( scope_rc == 1 )); then
         _filing_cross_link_fail "$sentinel_done" "$sentinel_failed" "VERIFICATION_FAILED: $reason" || return 1
         continue
       fi
