@@ -24,6 +24,27 @@ done
 set -euo pipefail
 FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
+# Root may bypass mode bits. Re-exec with both DAC read bypass capabilities
+# removed so the real denied-open regressions remain active in root runners.
+# Use the checkout owner so private parent directories remain traversable.
+touch "$FIXTURE/permission-probe"
+chmod 000 "$FIXTURE/permission-probe"
+if [[ -r "$FIXTURE/permission-probe" ]]; then
+  if (( EUID == 0 )) && [[ "${REPOLENS_TEST_DAC_DROPPED:-0}" != 1 ]] \
+      && command -v setpriv >/dev/null 2>&1; then
+    rm -rf -- "$FIXTURE"
+    export REPOLENS_TEST_DAC_DROPPED=1
+    exec setpriv --bounding-set=-dac_override,-dac_read_search \
+      --inh-caps=-dac_override,-dac_read_search \
+      --ambient-caps=-dac_override,-dac_read_search \
+      --reuid="$(stat -c %u "$REPO")" --regid="$(stat -c %g "$REPO")" \
+      --clear-groups \
+      bash "${BASH_SOURCE[0]}" "$@"
+  fi
+  printf 'Cannot exercise denied opens: mode-000 files remain readable; root requires setpriv to drop DAC read bypass capabilities.\n' >&2
+  exit 1
+fi
+rm "$FIXTURE/permission-probe"
 PASS=0 FAIL=0
 # Record every assertion, including independent publication boundaries.
 check() {
@@ -114,6 +135,7 @@ for artifact in "${artifacts[@]}"; do
 done
 cp "$LOG_BASE/final/findings.jsonl" "$FIXTURE/unreadable.jsonl"
 chmod 000 "$FIXTURE/unreadable.jsonl"
+check 'standalone permission fault prevents reading' test ! -r "$FIXTURE/unreadable.jsonl"
 rc=0
 validate_findings_jsonl "$FIXTURE/unreadable.jsonl" > "$LOG_BASE/validate.log" 2>&1 || rc=$?
 check 'standalone validator rejects an unreadable registry' test "$rc" -ne 0
@@ -125,12 +147,14 @@ mv() {
   if [[ "${1:-}" == "$LOG_BASE/final/findings.jsonl.tmp.$$.dedup" ]]; then
     : > "$LOG_BASE/validation-read-reached"
     chmod 000 "$2"
+    if [[ ! -r "$2" ]]; then : > "$LOG_BASE/validation-read-denied"; fi
   fi
 }
 rc=0
 build_finding_registry fixture "$local_dir" > "$LOG_BASE/rebuild.log" 2>&1 || rc=$?
 unset -f mv
 check 'validator input fault was reached after assembly' test -e "$LOG_BASE/validation-read-reached"
+check 'staged permission fault prevents reading' test -e "$LOG_BASE/validation-read-denied"
 check 'unreadable candidate fails registry rebuilding' test "$rc" -ne 0
 check 'failed validation leaves the published registry readable' test -r "$LOG_BASE/final/findings.jsonl"
 # Restore permissions only so a red-phase replacement can be compared/removed.
