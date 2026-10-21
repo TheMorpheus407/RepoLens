@@ -93,6 +93,9 @@ for fault in "${faults[@]}"; do
       [[ "$(command jq -r .stopped_reason "$SUMMARY_FILE")" == filing-failed ]] || fail "$fault lost stop reason"
       if [[ "$fault" != completion && "$fault" != partial_completion ]]; then
         [[ ! -e "$LOG_BASE/callbacks" ]] || fail "$fault dispatched a callback"
+      else
+        [[ "$(cat "$LOG_BASE/callbacks")" == $'c1\nc2' ]] || fail "$fault did not dispatch both callbacks before retry"
+        [[ -f "$LOG_BASE/final/filed/c1.url" && -f "$LOG_BASE/final/filed/c2.url" ]] || fail "$fault did not save both receipts before retry"
       fi
       # Repair the read and retry the same saved batch. Completion failures
       # retain both receipts, so recovery must not repeat either callback.
