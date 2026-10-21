@@ -8,7 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Reject failed live-citation and snippet input as retryable instead of admitting unverified citations for publication (repolens-r18-p4-1).
+- Reject failed live-snippet input as retryable instead of admitting unverified citations for publication (repolens-r18-p4-1).
+
+- Keep failed live-citation list input retryable, preventing skipped source verification from approving a finding (repolens-r18-p10-1).
 
 - Fail filing admission and completion when manifest length or cluster-ID reads fail, preserving retry eligibility instead of accepting a partial or empty batch (repolens-r18-p2-1).
 
