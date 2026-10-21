@@ -188,6 +188,7 @@ _local_dedupe_mark_file() {
     }
   ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
 
+  chmod --reference="$file" "$tmp" || { rm -f "$tmp"; return 1; }
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
 
