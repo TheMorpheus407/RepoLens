@@ -23,7 +23,6 @@ FIXTURE="$(mktemp -d)"
 trap 'rm -rf -- "$FIXTURE"' EXIT
 MODE=branch-review BRANCH_SCOPE_FILE="$FIXTURE/scope.json"
 printf '["src/probe.sh"]\n' > "$BRANCH_SCOPE_FILE"
-jq -n '[{title:"Finding",severity:"high",body:(("x" * 100000) + " src/probe.sh:1")}]' > "$FIXTURE/original.json"
 printf '[{"saved":"previous rejection report"}]\n' > "$FIXTURE/report.json"
 saved_limit="$(ulimit -S -f)"
 # Normal aggregation recovers write availability after the input failure. This
@@ -34,6 +33,7 @@ jq() {
   fi
   command jq "$@"
 }
+jq -n '[{title:"Finding",severity:"high",body:(("x" * 100000) + " src/probe.sh:1")}]' > "$FIXTURE/original.json"
 for pipefail_mode in on off; do
   cp "$FIXTURE/original.json" "$FIXTURE/manifest.json"
   cp "$FIXTURE/report.json" "$FIXTURE/manifest.json.out-of-scope.json"
