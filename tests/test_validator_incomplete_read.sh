@@ -75,6 +75,21 @@ rc=0
 validate_findings_jsonl "$FIXTURE/invalid.jsonl" > "$FIXTURE/invalid.log" 2>&1 || rc=$?
 test "$rc" -ne 0
 grep -q 'line 2:' "$FIXTURE/invalid.log"
+# A literal dash names a file, even when stdin contains different records.
+(
+  cd "$FIXTURE"
+  printf 'not JSON\n' > ./-
+  rc=0
+  validate_findings_jsonl - < empty.jsonl > dash.log 2>&1 || rc=$?
+  test "$rc" -eq 1
+  grep -q 'line 1: not a JSON object' dash.log
+  rc=0
+  validate_findings_jsonl - < findings.jsonl > dash.log 2>&1 || rc=$?
+  test "$rc" -eq 1
+  grep -q 'line 1: not a JSON object' dash.log
+  printf '%s\n' "$row" > ./-
+  validate_findings_jsonl - < invalid.jsonl
+)
 # The same read failure must not promote a partially validated registry.
 LOG_BASE="$FIXTURE/run"
 mkdir -p "$LOG_BASE/final"

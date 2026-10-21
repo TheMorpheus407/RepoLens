@@ -881,6 +881,10 @@ validate_findings_jsonl() {
     echo "validate_findings_jsonl: findings.jsonl not found: $findings" >&2
     return 2
   fi
+  # jq treats a bare dash as stdin even after --; preserve literal file paths.
+  if [[ "$findings" == - ]]; then
+    findings=./-
+  fi
 
   # A Bash read returns the same status for EOF and IO errors and can retain
   # the previous line. Let jq own the complete read, and require its successful
