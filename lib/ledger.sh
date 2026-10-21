@@ -854,10 +854,9 @@ build_findings_csv() {
 #   so siblings (dedupe/validation/triage/html/csv) can trust the structure even
 #   if a builder regresses or a future producer writes the file. It mirrors
 #   validate_manifest's reporting discipline (every message to stderr, prefixed
-#   "validate_findings_jsonl: ...", accumulate-then-return), but iterates line by
-#   line because JSONL is one independent JSON object per line: a single jq pass
-#   would abort on the first malformed line, skip every line after it, and could
-#   not attribute a violation to a line number.
+#   "validate_findings_jsonl: ...", accumulate-then-return). A checked raw-line
+#   jq reader parses each record independently so malformed JSON does not hide
+#   later violations, while input IO errors still fail the complete validation.
 #
 #   Per non-empty line it asserts: the line parses as a JSON object; the 12
 #   required keys are present (id, title, severity, type, domain, lens, status,
@@ -870,7 +869,7 @@ build_findings_csv() {
 #   Extra/forward-compatible keys (e.g. source_finding_paths) are tolerated.
 #
 #   Empty file -> 0. Returns 0 when every line is valid, 1 on a violation or
-#   input open failure, 2 on missing arg / missing file.
+#   input read failure, 2 on missing arg / missing file.
 #   Pure: reads only, no writes, no model.
 validate_findings_jsonl() {
   local findings="${1:-}"
@@ -883,21 +882,11 @@ validate_findings_jsonl() {
     return 2
   fi
 
-  local errors=0 lineno=0 line out rc violation
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    lineno=$((lineno + 1))
-    # Skip genuinely blank lines (e.g. a trailing newline). lineno is still
-    # incremented above so reported numbers match what an editor shows.
-    [[ -n "${line//[[:space:]]/}" ]] || continue
-
-    # One jq pass per line emits one violation string per problem. The
-    # `if type != "object"` guard is load-bearing: has(...) on a non-object
-    # raises a jq error, so we branch on object-ness first. A valid-but-non-object
-    # line (e.g. a bare array/scalar) parses with rc=0 and falls into the
-    # "not a JSON object" arm; an unparseable line makes jq exit non-zero and is
-    # caught by the rc != 0 arm below. Enum checks are guarded by has(...) so a
-    # MISSING key reports only "missing required key: ..." without duplicate noise.
-    out="$(jq -r '
+  # A Bash read returns the same status for EOF and IO errors and can retain
+  # the previous line. Let jq own the complete read, and require its successful
+  # exit even when a valid prefix produced no violations.
+  local out
+  if ! out="$(jq -Rnr '
       def is_nonempty_string: type == "string" and length > 0;
       def severities: ["critical","high","medium","low"];
       def statuses:   ["new","duplicate","needs-validation","likely-false-positive"];
@@ -905,6 +894,7 @@ validate_findings_jsonl() {
       # finding_resolve_type / finding_type_normalize emit (#344). Additive so
       # existing short-form fixtures stay valid while resolver output validates.
       def types:      ["security","reliability","performance","maintainability","test-gap","external-dependency","security-vulnerability","reliability-bug","performance-risk"];
+      def violations:
       if type != "object" then "not a JSON object"
       else
         . as $v
@@ -933,28 +923,21 @@ validate_findings_jsonl() {
                      or $v.complexity != ($v.complexity | floor))
                then "invalid complexity: \($v.complexity | tostring)" else empty end)
           )
-      end
-    ' <<<"$line" 2>/dev/null)"
-    rc=$?
-
-    if (( rc != 0 )); then
-      # jq could not parse the line -> not valid JSON (and so not an object).
-      echo "validate_findings_jsonl: line $lineno: not a JSON object" >&2
-      errors=$((errors + 1))
-      continue
-    fi
-
-    while IFS= read -r violation; do
-      [[ -n "$violation" ]] || continue
-      echo "validate_findings_jsonl: line $lineno: $violation" >&2
-      errors=$((errors + 1))
-    done <<< "$out"
-  done < "$findings" || {
+      end;
+      foreach inputs as $line (0; . + 1;
+        . as $lineno | $line
+        | select(test("[^[:space:]]"))
+        | (try (fromjson | violations) catch "not a JSON object")
+        | split("\n")[] | select(length > 0)
+        | "validate_findings_jsonl: line \($lineno): \(.)")
+    ' -- "$findings" 2>/dev/null)"; then
     echo "validate_findings_jsonl: cannot read findings.jsonl: $findings" >&2
     return 1
-  }
-
-  (( errors == 0 )) || return 1
+  fi
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
   return 0
 }
 

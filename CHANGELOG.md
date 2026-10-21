@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Terminate finding-registry validation on incomplete input reads, preserving prior JSONL and CSV output instead of looping on a stale valid record (repolens-r18-p11-1).
+
 - Keep failed live-verifier body reads retryable, including failures after partial output, instead of permanently retiring a valid finding or accepting an incompletely read body (repolens-r18-p10-3).
 
 - Preserve branch-review candidates and rejection reports when manifest entry input fails, returning a retryable error instead of publishing an empty successful batch. Report retained private-stage paths if cleanup also fails (repolens-r18-p4-3, repolens-r18-p10-2).
