@@ -537,10 +537,11 @@ run_polish_issue_emission() {
     GLOBAL_ISSUES_CREATED="$saved_issues"
   fi
   # A signal may terminate the summary writer after the receipt was saved.
-  # Repair that window even when the cap is exhausted or no groups remain.
-  if (( saved_issues > 0 )) && [[ -n "${SUMMARY_FILE:-}" && -f "$SUMMARY_FILE" ]] \
+  # Repair that window and persist an explicit cap replacement before filing,
+  # even when no receipts exist yet or the cap is exhausted.
+  if [[ -n "${SUMMARY_FILE:-}" && -f "$SUMMARY_FILE" ]] \
       && declare -F ensure_summary_issues_created >/dev/null 2>&1; then
-    if ! ensure_summary_issues_created "$SUMMARY_FILE" "$saved_issues"; then
+    if ! ensure_summary_issues_created "$SUMMARY_FILE" "$saved_issues" "${MAX_ISSUES:-}"; then
       _polish_log_warn "Polish issue emission: failed to recover summary issue count"
       [[ "${REPOLENS_FINAL_STATE:-finished}" != interrupted ]] || return "${REPOLENS_INTERRUPT_EXIT_CODE:-130}"
       return 1

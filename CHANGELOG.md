@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Restore the saved polish issue limit on resume unless an explicit replacement is supplied, preventing previously withheld shortlists from exceeding the run cap (repolens-r18-p4-2).
+
 - Terminate finding-registry validation on incomplete input reads, preserving prior JSONL and CSV output instead of looping on a stale valid record (repolens-r18-p11-1).
 
 - Keep failed live-verifier body reads retryable, including failures after partial output, instead of permanently retiring a valid finding or accepting an incompletely read body (repolens-r18-p10-3).

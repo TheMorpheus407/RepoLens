@@ -1115,12 +1115,13 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
   if [[ -L "$_resume_summary" ]]; then
     die "Persisted run summary must not be a symlink: $_resume_summary"
   fi
-  # A resumed governed branch review keeps its creation cap unless the caller
-  # explicitly supplies a replacement. Explicit-local bugreports retain their
-  # shared finding cap too, including saved segments withheld by that cap.
+  # Resumed governed branch reviews and polish runs keep their creation caps
+  # unless the caller explicitly supplies a replacement. Explicit-local
+  # bugreports also retain their cap, including saved segments withheld by it.
   if [[ -z "$MAX_ISSUES" && -f "$_resume_summary" ]] \
       && { [[ "$MODE" == branch-review && "$LOCAL_MODE" == false ]] \
-        || [[ "$MODE" == bugreport && "$LOCAL_MODE" == true && "$OUTPUT_DIR_SET" == true ]]; }; then
+        || [[ "$MODE" == bugreport && "$LOCAL_MODE" == true && "$OUTPUT_DIR_SET" == true ]] \
+        || [[ "$MODE" == polish ]]; }; then
     require_cmd jq
     MAX_ISSUES="$(jq -r '.max_issues // empty' "$_resume_summary")" \
       || die "Unable to read persisted issue limit."
