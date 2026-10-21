@@ -210,8 +210,9 @@ _filing_lock_age() {
 #        found -> MISMATCH "snippet not found near cited line".
 #
 #   On success: returns 0. Prints nothing.
-#   On semantic/source-evidence failure: returns 1. Scanner execution failures
-#   return 2 so callers preserve retry eligibility and saved receipts.
+#   On semantic/source-evidence failure: returns 1. Scanner execution and loop
+#   input setup failures return 2 so callers preserve retry eligibility and saved
+#   receipts.
 #   Both failures print exactly one concise reason line on stdout
 #               of the form `<path>:<line> <description>` so callers can
 #               embed it verbatim after `VERIFICATION_FAILED: `.
@@ -354,7 +355,10 @@ filing_verify_cluster_citations() {
         return 2
       }
     fi
-  done <<< "$citations"
+  done <<< "$citations" || {
+    printf 'could not read citations\n'
+    return 2
+  }
 
   return 0
 }

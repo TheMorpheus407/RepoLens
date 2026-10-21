@@ -127,3 +127,11 @@ serializer returns 2 before verification, even if it emitted valid JSON first.
 inside these live guards, with empty/partial output and caller `pipefail`
 disabled for comments, covering fresh work and saved receipts. It also covers
 failed action-evidence serialization with empty or complete valid output.
+
+Live citation and snippet input setup failures also return 2. A failed Bash
+here-string must never skip checks and approve unverified evidence. The dedicated
+`tests/test_filing_snippet_input_failure.sh` regression uses a real file-size
+limit failure at that input boundary and checks the status and diagnostic through
+command substitution, as used by publication callers, for both loop inputs.
+A repaired retry rejects invalid evidence with status 1; valid evidence still
+returns 0.
