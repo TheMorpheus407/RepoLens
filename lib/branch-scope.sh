@@ -482,7 +482,10 @@ branch_scope_filter_manifest() {
         return 2
       }
     fi
-  done <<< "$entries"
+  done <<< "$entries" || {
+    rm -f -- "$kept" "$rejected"
+    return 2
+  }
   # Aggregate both streams before publishing either result. Accepted-entry
   # IO must preserve the candidate and the previous report for the caller.
   accepted="$(mktemp "${kept}.accepted.XXXXXX")" || {

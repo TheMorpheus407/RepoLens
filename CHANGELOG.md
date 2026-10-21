@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve branch-review candidates and rejection reports when manifest entry input fails, returning a retryable error instead of publishing an empty successful batch (repolens-r18-p4-3, repolens-r18-p10-2).
+
 - Reject failed live-snippet input as retryable instead of admitting unverified citations for publication (repolens-r18-p4-1).
 
 - Keep failed live-citation list input retryable, preventing skipped source verification from approving a finding (repolens-r18-p10-1).
