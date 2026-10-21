@@ -85,7 +85,7 @@ _local_dedupe_lib_dir() {
 #   Writes atomically (tmp + mv). No model invoked.
 _local_dedupe_mark_file() {
   local file="$1" fm_add="$2" note="$3"
-  local tmp="${file}.rldedupe.$$" last_byte
+  local tmp="${file}.rldedupe.$$" last_byte mode
   # awk normalizes record separators; retain a receipt or suffix lacking final LF.
   last_byte="$(tail -c 1 -- "$file")" || return 1
 
@@ -188,7 +188,11 @@ _local_dedupe_mark_file() {
     }
   ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
 
-  chmod --reference="$file" "$tmp" || { rm -f "$tmp"; return 1; }
+  # GNU and BSD stat differ; numeric chmod works with both native utilities.
+  mode="$(stat -c '%a' -- "$file" 2>/dev/null)" \
+    || mode="$(stat -f '%Lp' "$file")" \
+    || { rm -f "$tmp"; return 1; }
+  chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
 

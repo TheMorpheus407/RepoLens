@@ -14,23 +14,75 @@
 # limitations under the License.
 
 # Regression: repolens-r17-p6-3. Dedupe must preserve private file modes.
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 # shellcheck source=/dev/null
-source "$ROOT/lib/local-dedupe.sh"
-set -euo pipefail
-fixture="$(mktemp -d)"
+source "$ROOT/lib/local-dedupe.sh" || exit 1
+fixture="$(mktemp -d)" || exit 1
 trap 'rm -rf -- "$fixture"' EXIT
 umask 022
-for mode in 600 640 644; do
-  file="$fixture/finding-$mode.md"
-  printf -- '---\ntitle: Finding\nseverity: high\n---\nEvidence\n' > "$file"
-  chmod "$mode" "$file"
-  _local_dedupe_mark_file "$file" 'status: duplicate' 'Duplicate finding'
-  actual="$(stat -c %a "$file")"
-  if [[ "$actual" != "$mode" ]]; then
-    printf 'FAIL: expected mode %s, got %s\n' "$mode" "$actual" >&2
-    exit 1
+
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+file_mode() {
+  python3 - "$1" <<'PYMODE'
+import os, stat, sys
+print(format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "o"))
+PYMODE
+}
+
+# Simulate native BSD utilities without relying on GNU stat in assertions.
+# shellcheck disable=SC2329
+stat() {
+  [[ "$platform" != stat_error ]] || return 1
+  if [[ "$platform" == bsd ]]; then
+    [[ "$#" == 3 && "$1" == -f && "$2" == %Lp ]] || return 1
+    file_mode "$3"
+  else
+    command stat "$@"
   fi
+}
+# shellcheck disable=SC2329
+chmod() {
+  [[ "$platform" != chmod_error ]] || return 1
+  if [[ "$platform" == bsd && "${1:-}" == --* ]]; then
+    printf 'chmod: unsupported GNU option %s\n' "$1" >&2
+    return 1
+  fi
+  command chmod "$@"
+}
+
+for platform in native bsd; do
+  for mode in 400 600 640 644; do
+    file="$fixture/$platform-finding-$mode.md"
+    printf -- '---\ntitle: Finding\nseverity: high\n---\nEvidence\n' > "$file" || exit 1
+    command chmod "$mode" "$file" || exit 1
+    _local_dedupe_mark_file "$file" 'status: duplicate' 'Duplicate finding' || fail "$platform duplicate rewrite"
+    actual="$(file_mode "$file")" || exit 1
+    [[ "$actual" == "$mode" ]] || fail "$platform expected mode $mode, got $actual"
+    grep -q '^status: duplicate$' "$file" || fail "$platform duplicate metadata missing"
+    grep -q '^Duplicate finding$' "$file" || fail "$platform receipt missing"
+
+    # Canonical promotion uses the same helper and must preserve permissions too.
+    _local_dedupe_mark_file "$file" 'also_reported_by: []' 'Canonical finding' || fail "$platform canonical rewrite"
+    actual="$(file_mode "$file")" || exit 1
+    [[ "$actual" == "$mode" ]] || fail "$platform canonical expected mode $mode, got $actual"
+    grep -q '^also_reported_by: \[\]$' "$file" || fail "$platform canonical metadata missing"
+    grep -q '^Canonical finding$' "$file" || fail "$platform canonical receipt missing"
+  done
+  printf 'PASS: %s permissions, metadata and receipts preserved\n' "$platform"
+done
+
+for platform in stat_error chmod_error; do
+  file="$fixture/$platform.md"
+  printf -- '---\ntitle: Finding\nseverity: high\n---\nEvidence\n' > "$file" || exit 1
+  command chmod 600 "$file" || exit 1
+  cp "$file" "$fixture/before.md" || exit 1
+  if _local_dedupe_mark_file "$file" 'status: duplicate' 'Duplicate finding'; then
+    fail "$platform unexpectedly published a rewrite"
+  fi
+  cmp -s "$fixture/before.md" "$file" || fail "$platform changed original content"
+  [[ "$(file_mode "$file")" == 600 ]] || fail "$platform changed original permissions"
+  [[ ! -e "$file.rldedupe.$$" ]] || fail "$platform left staged output"
+  printf 'PASS: %s preserves original and cleans staged output\n' "$platform"
 done
 printf 'Results: file permissions preserved\n'

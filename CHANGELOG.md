@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- Preserve local finding file permissions when dedupe rewrites metadata and receipts (repolens-r17-p6-3).
+- Preserve local finding file permissions when dedupe rewrites metadata and receipts, using GNU/BSD-compatible mode copying (repolens-r17-p6-3).
 
 - Preserve custom local status values beginning with `duplicate` during dedupe and canonical promotion; retire only the complete managed scalar while retaining its spaced-key compatibility (repolens-r16-p10-2).
 
