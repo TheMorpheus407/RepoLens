@@ -349,7 +349,10 @@ filing_verify_cluster_citations() {
           printf '%s snippet not found near cited line\n' "$citation"
           return 1
         fi
-      done <<< "$snippets"
+      done <<< "$snippets" || {
+        printf '%s could not read citation snippets\n' "$citation"
+        return 2
+      }
     fi
   done <<< "$citations"
 

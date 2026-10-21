@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Reject failed live-snippet input as retryable instead of admitting unverified citations for publication (repolens-r18-p4-1).
+
 - Fail filing admission and completion when manifest length or cluster-ID reads fail, preserving retry eligibility instead of accepting a partial or empty batch (repolens-r18-p2-1).
 
 - Preserve custom local status values beginning with `duplicate` during dedupe and canonical promotion; retire only the complete managed scalar while retaining its spaced-key compatibility (repolens-r16-p10-2).
