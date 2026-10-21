@@ -5464,7 +5464,9 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "${REPOLENS_FINAL_STATE:-finished}" != interrupt
         filing_deferred=0
         manifest_path="$LOG_BASE/final/manifest.json"
         filed_dir="$LOG_BASE/final/filed"
-        while IFS= read -r filing_cluster_id; do
+        if ! filing_cluster_ids="$(jq -r '.[].cluster_id' "$manifest_path")"; then
+          filing_missing=1
+        elif ! while IFS= read -r filing_cluster_id; do
           [[ -n "$filing_cluster_id" ]] || continue
           if [[ -e "$filed_dir/$filing_cluster_id.url" ]]; then
             continue
@@ -5481,7 +5483,9 @@ if [[ "$RUN_ROUNDS_RC" -eq 0 && "${REPOLENS_FINAL_STATE:-finished}" != interrupt
           else
             filing_missing=$((filing_missing + 1))
           fi
-        done < <(jq -r '.[].cluster_id' "$manifest_path")
+        done <<< "$filing_cluster_ids"; then
+          filing_missing=$((filing_missing + 1))
+        fi
         for filing_deferred_action in "$filed_dir"/cross-link/*.deferred; do
           [[ ! -f "$filing_deferred_action" ]] || filing_deferred=$((filing_deferred + 1))
         done
