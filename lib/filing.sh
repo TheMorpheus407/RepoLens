@@ -1263,7 +1263,10 @@ dispatch_filing_batch() {
   rm -f -- "$filed_dir"/cross-link/*.deferred || return 1
 
   local entry_count
-  entry_count="$(jq 'length' "$manifest")"
+  if ! entry_count="$(jq 'length' "$manifest")"; then
+    echo "dispatch_filing_batch: cannot read manifest length" >&2
+    return 1
+  fi
   if (( entry_count == 0 )); then
     mkdir -p "$filed_dir" || {
       echo "dispatch_filing_batch: cannot create filed dir: $filed_dir" >&2
@@ -1288,11 +1291,18 @@ dispatch_filing_batch() {
   }
 
   local -a cluster_ids=()
-  local cid
-  while IFS= read -r cid; do
+  local cid cluster_ids_text
+  if ! cluster_ids_text="$(jq -r '.[].cluster_id' "$manifest")"; then
+    echo "dispatch_filing_batch: cannot read manifest cluster ids" >&2
+    return 1
+  fi
+  if ! while IFS= read -r cid; do
     [[ -n "$cid" ]] || continue
     cluster_ids+=("$cid")
-  done < <(jq -r '.[].cluster_id' "$manifest")
+  done <<< "$cluster_ids_text"; then
+    echo "dispatch_filing_batch: cannot consume manifest cluster ids" >&2
+    return 1
+  fi
 
   local -A pre_existing_url=()
   local -a to_dispatch=()
