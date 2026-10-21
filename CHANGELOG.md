@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve custom local status values beginning with `duplicate` during dedupe and canonical promotion; retire only the complete managed scalar while retaining its spaced-key compatibility (repolens-r16-p10-2).
+
 - Retain round-digest rendering write failures even when later output succeeds, preserving the previous complete digest and permitting a repaired retry instead of publishing partial findings (repolens-r16-p10-1).
 
 - Preserve trailing content quotes and apostrophes in plain Generic delivery titles, keeping the complete title in exported Markdown and the finding registry (repolens-r16-p9-2).
