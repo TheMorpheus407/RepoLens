@@ -35,6 +35,8 @@ filing_verify_cluster_citations "$FIXTURE" "$entry" >/dev/null || normal_rc=$?
 test "$normal_rc" -eq 1
 saved_limit="$(ulimit -S -f)"
 armed=0
+# Arm EFBIG after extraction, immediately before the outer citation here-string.
+# Restore the file-size limit at verifier return so later controls can use IO.
 debug_boundary() {
   case "$BASH_COMMAND" in
     'local snippet_pattern context_start context_end') ulimit -S -f 0; armed=1 ;;

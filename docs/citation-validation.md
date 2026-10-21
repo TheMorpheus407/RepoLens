@@ -127,3 +127,9 @@ serializer returns 2 before verification, even if it emitted valid JSON first.
 inside these live guards, with empty/partial output and caller `pipefail`
 disabled for comments, covering fresh work and saved receipts. It also covers
 failed action-evidence serialization with empty or complete valid output.
+
+Failure to set up the outer live-verification loop's captured citation-list input
+also returns retry status 2 with `could not read citations`. The dedicated
+`tests/test_filing_citation_input_failure.sh` suite induces a real Bash temporary
+file failure after extraction, then checks repaired semantic rejection and valid
+evidence. The separate inner snippet-input loop is outside this guarantee.
