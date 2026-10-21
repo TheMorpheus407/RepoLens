@@ -24,8 +24,12 @@ source "$ROOT/lib/filing.sh" || fail 'load filing helpers'
 source "$ROOT/lib/summary.sh" || fail 'load summary helpers'
 set -euo pipefail
 # Extract the actual caller once; fail if its boundaries disappear.
-sed -n '/^# --- Synthesizer (post-rounds, post-verifier) ---/,/^# --- Finalize ---/p' "$ROOT/repolens.sh" \
-  | sed '$d' > "$FIXTURE/orchestration.sh" || fail 'extract orchestration'
+awk '
+  /^# --- Synthesizer \(post-rounds, post-verifier\) ---$/ { started=1 }
+  /^# --- Finalize ---$/ { if (started) ended=1; exit }
+  started { print }
+  END { if (!started || !ended) exit 1 }
+' "$ROOT/repolens.sh" > "$FIXTURE/orchestration.sh" || fail 'missing or misordered orchestration boundaries'
 [[ -s "$FIXTURE/orchestration.sh" ]] || fail 'missing orchestration block'
 faults=("$@")
 if (( ${#faults[@]} == 0 )); then
