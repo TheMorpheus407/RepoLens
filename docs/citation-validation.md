@@ -141,3 +141,12 @@ file failure at that boundary and checks the status and diagnostic through
 command substitution, as used by publication callers. A later valid citation
 cannot hide the skipped snippet check. A repaired retry rejects invalid snippets
 with status 1; valid evidence still returns 0.
+
+If the outer manifest-entry loop cannot set up its captured input, the scope
+filter returns retry status 2 before aggregation or publication and attempts to
+remove its private stages. If cleanup fails, a diagnostic names both stages for
+removal after access is repaired. The candidate and previous rejection report
+remain byte-for-byte intact. `tests/test_scope_manifest_input_failure.sh` induces a real Bash
+temporary-file failure with caller `pipefail` both enabled and disabled, checks
+preservation, cleanup and retained-stage diagnostics, then verifies a successful
+repaired retry.

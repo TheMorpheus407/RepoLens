@@ -482,7 +482,13 @@ branch_scope_filter_manifest() {
         return 2
       }
     fi
-  done <<< "$entries"
+  done <<< "$entries" || {
+    if ! rm -f -- "$kept" "$rejected"; then
+      printf 'branch_scope_filter_manifest: cannot remove private stages: %s %s\n' \
+        "$kept" "$rejected" >&2
+    fi
+    return 2
+  }
   # Aggregate both streams before publishing either result. Accepted-entry
   # IO must preserve the candidate and the previous report for the caller.
   accepted="$(mktemp "${kept}.accepted.XXXXXX")" || {
