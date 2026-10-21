@@ -51,6 +51,28 @@ for pipefail_mode in on off; do
   cmp "$FIXTURE/original.json" "$FIXTURE/manifest.json"
   cmp "$FIXTURE/report.json" "$FIXTURE/manifest.json.out-of-scope.json"
   test -z "$(find "$FIXTURE" -name 'manifest.json.scope.*' -print)"
+  # A cleanup outage must identify retained private stages without publishing.
+  fault_rc=0
+  diagnostics="$( {
+    trap '' XFSZ
+    [[ "$pipefail_mode" != off ]] || set +o pipefail
+    rm() { return 74; }
+    ulimit -S -f 0
+    branch_scope_filter_manifest "$FIXTURE/manifest.json"
+  } 2>&1)" || fault_rc=$?
+  printf 'pipefail=%s cleanup_failure_status=%s\n%s\n' "$pipefail_mode" "$fault_rc" "$diagnostics"
+  test "$fault_rc" -eq 2
+  cmp "$FIXTURE/original.json" "$FIXTURE/manifest.json"
+  cmp "$FIXTURE/report.json" "$FIXTURE/manifest.json.out-of-scope.json"
+  [[ "$diagnostics" == *'branch_scope_filter_manifest: cannot remove private stages:'* ]]
+  stages=()
+  while IFS= read -r stage; do stages+=("$stage"); done < <(find "$FIXTURE" -name 'manifest.json.scope.*' -print)
+  test "${#stages[@]}" -eq 2
+  for stage in "${stages[@]}"; do
+    [[ "$diagnostics" == *"$stage"* ]]
+  done
+  # Restore cleanup availability and remove precisely the retained stages.
+  command rm -f -- "${stages[@]}"
   # The complete original candidate remains eligible for a repaired retry.
   branch_scope_filter_manifest "$FIXTURE/manifest.json"
   command jq -e 'length == 1 and .[0].title == "[REGRESSION][HIGH] Finding" and (.[0].body | endswith(" src/probe.sh:1"))' "$FIXTURE/manifest.json" >/dev/null

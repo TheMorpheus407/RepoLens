@@ -483,7 +483,10 @@ branch_scope_filter_manifest() {
       }
     fi
   done <<< "$entries" || {
-    rm -f -- "$kept" "$rejected"
+    if ! rm -f -- "$kept" "$rejected"; then
+      printf 'branch_scope_filter_manifest: cannot remove private stages: %s %s\n' \
+        "$kept" "$rejected" >&2
+    fi
     return 2
   }
   # Aggregate both streams before publishing either result. Accepted-entry
