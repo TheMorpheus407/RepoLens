@@ -132,4 +132,12 @@ Failure to set up the outer live-verification loop's captured citation-list inpu
 also returns retry status 2 with `could not read citations`. The dedicated
 `tests/test_filing_citation_input_failure.sh` suite induces a real Bash temporary
 file failure after extraction, then checks repaired semantic rejection and valid
-evidence. The separate inner snippet-input loop is outside this guarantee.
+evidence.
+
+The inner snippet loop also returns retry status 2 if its captured input cannot
+be set up, with `<path>:<line> could not read citation snippets`. The dedicated
+`tests/test_filing_snippet_input_failure.sh` suite induces a real Bash temporary
+file failure at that boundary and checks the status and diagnostic through
+command substitution, as used by publication callers. A later valid citation
+cannot hide the skipped snippet check. A repaired retry rejects invalid snippets
+with status 1; valid evidence still returns 0.
