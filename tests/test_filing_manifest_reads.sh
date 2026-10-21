@@ -16,59 +16,90 @@
 # Manifest read failures must never become a successful empty filing batch.
 # shellcheck disable=SC2030,SC2031,SC2329
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE="$(mktemp -d)"
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fail 'resolve repository'
+FIXTURE="$(mktemp -d)" || fail 'create fixture'
 trap 'rm -rf -- "$FIXTURE"' EXIT
-source "$ROOT/lib/filing.sh"
+source "$ROOT/lib/filing.sh" || fail 'load filing helpers'
+source "$ROOT/lib/summary.sh" || fail 'load summary helpers'
 set -euo pipefail
+# Extract the actual caller once; fail if its boundaries disappear.
+sed -n '/^# --- Synthesizer (post-rounds, post-verifier) ---/,/^# --- Finalize ---/p' "$ROOT/repolens.sh" \
+  | sed '$d' > "$FIXTURE/orchestration.sh" || fail 'extract orchestration'
+[[ -s "$FIXTURE/orchestration.sh" ]] || fail 'missing orchestration block'
+faults=("$@")
+if (( ${#faults[@]} == 0 )); then
+  faults=(none empty length partial_length ids partial_ids completion partial_completion)
+fi
 
-for fault in none length ids partial_ids completion; do
+for fault in "${faults[@]}"; do
   (
     export LOG_BASE="$FIXTURE/$fault" RUN_ID=probe MODE=bugreport ROUNDS=2 LOCAL_MODE=false
     PARALLEL=false CROSS_LINK_MODE=off REPOLENS_FINAL_STATE=finished RUN_ROUNDS_RC=0
     MAX_ISSUES='' SUMMARY_FILE="$LOG_BASE/summary.json"
-    mkdir -p "$LOG_BASE/final"
-    printf '[{"cluster_id":"c1"},{"cluster_id":"c2"}]\n' > "$LOG_BASE/final/manifest.json"
-    printf '{"stopped_reason":null}\n' > "$SUMMARY_FILE"
+    mkdir -p "$LOG_BASE/final" || fail 'create run directory'
+    printf '[{"cluster_id":"c1"},{"cluster_id":"c2"}]\n' > "$LOG_BASE/final/manifest.json" || fail 'write manifest'
+    if [[ "$fault" == empty ]]; then
+      printf '[]\n' > "$LOG_BASE/final/manifest.json" || fail 'write empty manifest'
+    fi
+    printf '{"stopped_reason":null}\n' > "$SUMMARY_FILE" || fail 'write summary'
     _FILING_AGENT_CALLBACK=mock_filing
     mock_filing() {
-      printf '%s\n' "$2" >> "$LOG_BASE/callbacks"
-      printf 'mock-url\n' > "$LOG_BASE/final/filed/$2.url"
+      printf '%s\n' "$2" >> "$LOG_BASE/callbacks" || fail 'record callback'
+      printf 'mock-url\n' > "$LOG_BASE/final/filed/$2.url" || fail 'write success receipt'
     }
     run_synthesizer() { return 0; }
     log_info() { printf 'INFO %s\n' "$*"; }
     log_warn() { printf 'WARN %s\n' "$*"; }
-    set_stop_reason() { printf '%s\n' "$2" > "$LOG_BASE/stop-reason"; }
-    clear_stop_reason() { :; }
+    # Simulate jq failing both before and after it emits plausible output.
     jq() {
-      if [[ "$1" == length && "$fault" == length ]]; then return 74; fi
+      if [[ "$1" == length && ( "$fault" == length || "$fault" == partial_length ) ]]; then
+        [[ "$fault" != partial_length ]] || printf '0\n'
+        return 74
+      fi
       if [[ "$*" == '-r .[].cluster_id '* ]]; then
         if [[ "$fault" == ids || "$fault" == partial_ids ||
-              ( "$fault" == completion && -f "$LOG_BASE/callbacks" ) ]]; then
-          [[ "$fault" != partial_ids ]] || printf 'c1\n'
+              ( ( "$fault" == completion || "$fault" == partial_completion ) && -f "$LOG_BASE/callbacks" ) ]]; then
+          [[ "$fault" != partial_ids && "$fault" != partial_completion ]] || printf 'c1\n'
           return 74
         fi
       fi
       command jq "$@"
     }
-    if [[ "$fault" == length || "$fault" == ids || "$fault" == partial_ids ]]; then
+    if [[ "$fault" == length || "$fault" == partial_length || "$fault" == ids || "$fault" == partial_ids ]]; then
       if dispatch_filing_batch "$RUN_ID" > "$LOG_BASE/direct.log" 2>&1; then
         printf 'FAIL: dispatcher accepted %s read failure\n' "$fault"; exit 1
       fi
-      [[ ! -e "$LOG_BASE/callbacks" ]]
+      [[ ! -e "$LOG_BASE/callbacks" ]] || fail "$fault dispatched a callback"
     fi
     # Exercise the actual caller's completion check as well as the dispatcher.
-    # shellcheck disable=SC1090
-    source <(sed -n '/^# --- Synthesizer (post-rounds, post-verifier) ---/,/^# --- Finalize ---/p' "$ROOT/repolens.sh" | sed '$d')
-    if [[ "$fault" == none ]]; then
-      [[ "$RUN_ROUNDS_RC" == 0 && "$REPOLENS_FINAL_STATE" == finished ]]
-      [[ "$(wc -l < "$LOG_BASE/callbacks")" == 2 ]]
+    # shellcheck source=/dev/null
+    source "$FIXTURE/orchestration.sh"
+    if [[ "$fault" == none || "$fault" == empty ]]; then
+      [[ "$RUN_ROUNDS_RC" == 0 && "$REPOLENS_FINAL_STATE" == finished ]] || fail "$fault control failed"
+      if [[ "$fault" == empty ]]; then
+        [[ ! -e "$LOG_BASE/callbacks" ]] || fail 'empty manifest dispatched a callback'
+      else
+        [[ "$(cat "$LOG_BASE/callbacks")" == $'c1\nc2' ]] || fail 'control did not dispatch both clusters once'
+      fi
     else
       [[ "$RUN_ROUNDS_RC" != 0 && "$REPOLENS_FINAL_STATE" == failed ]] || {
         printf 'FAIL: %s read failure was accepted\n' "$fault"; exit 1;
       }
-      [[ "$(cat "$LOG_BASE/stop-reason")" == filing-failed ]]
-      if [[ "$fault" != completion ]]; then [[ ! -e "$LOG_BASE/callbacks" ]]; fi
+      [[ "$(command jq -r .stopped_reason "$SUMMARY_FILE")" == filing-failed ]] || fail "$fault lost stop reason"
+      if [[ "$fault" != completion && "$fault" != partial_completion ]]; then
+        [[ ! -e "$LOG_BASE/callbacks" ]] || fail "$fault dispatched a callback"
+      fi
+      # Repair the read and retry the same saved batch. Completion failures
+      # retain both receipts, so recovery must not repeat either callback.
+      failed_fault="$fault"
+      fault=none RUN_ROUNDS_RC=0 REPOLENS_FINAL_STATE=finished
+      # shellcheck source=/dev/null
+      source "$FIXTURE/orchestration.sh"
+      [[ "$RUN_ROUNDS_RC" == 0 && "$REPOLENS_FINAL_STATE" == finished ]] || fail "$failed_fault retry failed"
+      [[ "$(cat "$LOG_BASE/callbacks")" == $'c1\nc2' ]] || fail "$failed_fault retry skipped or repeated callbacks"
+      [[ "$(command jq -r .stopped_reason "$SUMMARY_FILE")" == null ]] || fail "$failed_fault retry retained stop reason"
+      fault="$failed_fault"
     fi
     printf 'PASS: %s\n' "$fault"
   )
