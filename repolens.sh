@@ -1115,9 +1115,9 @@ if [[ -n "$RESUME_RUN_ID" ]]; then
   if [[ -L "$_resume_summary" ]]; then
     die "Persisted run summary must not be a symlink: $_resume_summary"
   fi
-  # Resumed governed branch reviews and polish runs keep their creation caps
-  # unless the caller explicitly supplies a replacement. Explicit-local
-  # bugreports also retain their cap, including saved segments withheld by it.
+  # A resumed governed branch review keeps its creation cap unless the caller
+  # explicitly supplies a replacement. Polish runs and explicit-local
+  # bugreports retain their caps too, including saved segments withheld by them.
   if [[ -z "$MAX_ISSUES" && -f "$_resume_summary" ]] \
       && { [[ "$MODE" == branch-review && "$LOCAL_MODE" == false ]] \
         || [[ "$MODE" == bugreport && "$LOCAL_MODE" == true && "$OUTPUT_DIR_SET" == true ]] \
