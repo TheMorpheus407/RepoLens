@@ -132,6 +132,8 @@ ensure_summary_issues_created() {
     _ensure_summary_issues_created_locked "$file" "$minimum" "$cap" "$update_cap"
 }
 
+# Atomically raise the receipt count floor and optionally replace the cap.
+# The caller holds the summary lock for this read-modify-write.
 _ensure_summary_issues_created_locked() {
   local file="$1" minimum="$2" cap="$3" update_cap="$4" tmp rc
   tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1

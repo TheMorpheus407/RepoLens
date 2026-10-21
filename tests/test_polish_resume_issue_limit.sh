@@ -14,28 +14,35 @@
 # limitations under the License.
 
 # repolens-r18-p4-2: resume must retain the saved creation limit.
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-mkdir -p "$ROOT/logs"
-RUN_DIR="$(mktemp -d "$ROOT/logs/test-polish-resume-limit.XXXXXX")"
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
+mkdir -p "$ROOT/logs" || exit 1
+RUN_DIR="$(mktemp -d "$ROOT/logs/test-polish-resume-limit.XXXXXX")" || exit 1
 trap 'rm -rf -- "$RUN_DIR"' EXIT
 RUN_ID="${RUN_DIR##*/}"
-mkdir -p "$RUN_DIR/bin" "$RUN_DIR/polish"
-cat > "$RUN_DIR/bin/codex" <<'AGENT'
+mkdir -p "$RUN_DIR/bin" "$RUN_DIR/polish" || exit 1
+cat > "$RUN_DIR/bin/codex" <<'AGENT' || exit 1
 #!/usr/bin/env bash
-set -euo pipefail
-printf 'DONE\n'
+set -uo pipefail
+printf 'DONE\n' || exit 1
 AGENT
-cat > "$RUN_DIR/bin/gh" <<'FORGE'
+cat > "$RUN_DIR/bin/gh" <<'FORGE' || exit 1
 #!/usr/bin/env bash
-set -euo pipefail
-printf '[]\n'
+set -uo pipefail
+printf '[]\n' || exit 1
 FORGE
-chmod +x "$RUN_DIR/bin/codex" "$RUN_DIR/bin/gh"
-printf 'Saved voice profile.\n' > "$RUN_DIR/polish/voice-profile.md"
-cat > "$RUN_DIR/polish/suggestions.json" <<'JSON'
+chmod +x "$RUN_DIR/bin/codex" "$RUN_DIR/bin/gh" || exit 1
+printf 'Saved voice profile.\n' > "$RUN_DIR/polish/voice-profile.md" || exit 1
+cat > "$RUN_DIR/polish/suggestions.json" <<'JSON' || exit 1
 [{"domain":"effort-signal","lens_id":"loading-transparency","title":"First shortlist","body":"First concrete refinement","voice_fit":"strong","location_expectedness":"expected"},{"domain":"effort-signal","lens_id":"error-specificity","title":"Second shortlist","body":"Second concrete refinement","voice_fit":"strong","location_expectedness":"expected"}]
 JSON
+# Fail on either receipt enumeration errors or an unexpected count.
+assert_receipts() {
+  local count
+  count="$(find "$RUN_DIR/polish/filed" -name '*.url' | wc -l)" || return 1
+  test "$count" -eq "$1"
+}
+# Resume the fixture through the CLI with local agent and forge stubs.
 run_cli() {
   env -u TASK_HOURS -u REPOLENS_ROUNDS -u DONE_STREAK_REQUIRED \
     PATH="$RUN_DIR/bin:$PATH" REPOLENS_AGENT_TIMEOUT=5 REPOLENS_AGENT_KILL_GRACE=1 \
@@ -45,19 +52,19 @@ run_cli() {
     --focus loading-transparency --rounds 1 --depth 1 "$@"
 }
 run_cli --max-issues 1 > "$RUN_DIR/first.log" 2>&1 || { cat "$RUN_DIR/first.log"; exit 1; }
-test "$(find "$RUN_DIR/polish/filed" -name '*.url' | wc -l)" -eq 1
-jq -e '.max_issues == 1 and .totals.issues_created == 1' "$RUN_DIR/summary.json" >/dev/null
+assert_receipts 1 || exit 1
+jq -e '.max_issues == 1 and .totals.issues_created == 1' "$RUN_DIR/summary.json" >/dev/null || exit 1
 run_cli > "$RUN_DIR/resume.log" 2>&1 || { cat "$RUN_DIR/resume.log"; exit 1; }
-receipts="$(find "$RUN_DIR/polish/filed" -name '*.url' | wc -l)"
-printf 'saved_limit=1 receipts_after_resume=%s\n' "$receipts"
-test "$receipts" -eq 1
-jq -e '.max_issues == 1 and .totals.issues_created == 1' "$RUN_DIR/summary.json" >/dev/null
+receipts="$(find "$RUN_DIR/polish/filed" -name '*.url' | wc -l)" || exit 1
+printf 'saved_limit=1 receipts_after_resume=%s\n' "$receipts" || exit 1
+test "$receipts" -eq 1 || exit 1
+jq -e '.max_issues == 1 and .totals.issues_created == 1' "$RUN_DIR/summary.json" >/dev/null || exit 1
 # A deliberate replacement still permits the remaining shortlist exactly once.
 run_cli --max-issues 2 > "$RUN_DIR/override.log" 2>&1 || { cat "$RUN_DIR/override.log"; exit 1; }
-test "$(find "$RUN_DIR/polish/filed" -name '*.url' | wc -l)" -eq 2
+assert_receipts 2 || exit 1
 jq -e '.max_issues == 2 and .totals.issues_created == 2' "$RUN_DIR/summary.json" >/dev/null || { cat "$RUN_DIR/summary.json"; cat "$RUN_DIR/override.log"; exit 1; }
 # The replacement becomes the saved cap for subsequent flag-free resumes.
 run_cli > "$RUN_DIR/replaced-resume.log" 2>&1 || { cat "$RUN_DIR/replaced-resume.log"; exit 1; }
-test "$(find "$RUN_DIR/polish/filed" -name '*.url' | wc -l)" -eq 2
-jq -e '.max_issues == 2 and .totals.issues_created == 2' "$RUN_DIR/summary.json" >/dev/null
+assert_receipts 2 || exit 1
+jq -e '.max_issues == 2 and .totals.issues_created == 2' "$RUN_DIR/summary.json" >/dev/null || exit 1
 printf 'Results: saved polish limit retained; explicit replacement respected and persisted\n'
