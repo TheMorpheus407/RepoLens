@@ -188,9 +188,10 @@ _local_dedupe_mark_file() {
     }
   ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
 
-  # GNU and BSD stat differ; numeric chmod works with both native utilities.
+  # BSD splits special bits (M) from rwx bits (L); pad L to keep octal places.
+  # Numeric chmod works with both native utilities.
   mode="$(stat -c '%a' -- "$file" 2>/dev/null)" \
-    || mode="$(stat -f '%Lp' "$file")" \
+    || mode="$(stat -f '%Mp%03Lp' "$file")" \
     || { rm -f "$tmp"; return 1; }
   chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
   mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }

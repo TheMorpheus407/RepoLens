@@ -35,8 +35,18 @@ PYMODE
 stat() {
   [[ "$platform" != stat_error ]] || return 1
   if [[ "$platform" == bsd ]]; then
-    [[ "$#" == 3 && "$1" == -f && "$2" == %Lp ]] || return 1
-    file_mode "$3"
+    [[ "$#" == 3 && "$1" == -f ]] || return 1
+    python3 - "$2" "$3" <<'PYBSD'
+import os, stat, sys
+mode = stat.S_IMODE(os.stat(sys.argv[2]).st_mode)
+if sys.argv[1] == "%Lp":
+    # Native BSD's low field excludes setuid, setgid and sticky bits.
+    print(format(mode & 0o777, "o"))
+elif sys.argv[1] == "%Mp%03Lp":
+    print(format(mode >> 9, "o") + format(mode & 0o777, "03o"))
+else:
+    sys.exit(1)
+PYBSD
   else
     command stat "$@"
   fi
@@ -52,7 +62,7 @@ chmod() {
 }
 
 for platform in native bsd; do
-  for mode in 400 600 640 644; do
+  for mode in 400 600 640 644 1600 2600 4600 7644; do
     file="$fixture/$platform-finding-$mode.md"
     printf -- '---\ntitle: Finding\nseverity: high\n---\nEvidence\n' > "$file" || exit 1
     command chmod "$mode" "$file" || exit 1
