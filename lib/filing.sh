@@ -233,7 +233,10 @@ filing_verify_cluster_citations() {
   fi
 
   local body
-  body="$(jq -r '.body // empty' <<<"$entry_json" 2>/dev/null)"
+  body="$(jq -r '.body // empty' <<<"$entry_json" 2>/dev/null)" || {
+    printf 'could not read manifest entry body\n'
+    return 2
+  }
   if [[ -z "$body" ]]; then
     printf 'manifest entry has no body to verify citations against\n'
     return 1
