@@ -120,21 +120,26 @@ _increment_summary_issues_created_locked() {
   return "$rc"
 }
 
-# ensure_summary_issues_created <summary_file> <minimum>
+# ensure_summary_issues_created <summary_file> <minimum> [max_issues]
 #   Recover a missed issue-count write from durable Polish receipts. Taking a
 #   lower bound makes repeated resumes safe and preserves any higher count.
+#   An explicit third argument also persists the current Polish issue cap.
 ensure_summary_issues_created() {
-  local file="$1" minimum="$2"
+  local file="$1" minimum="$2" cap="${3:-null}" update_cap=false
+  (( $# < 3 )) || update_cap=true
   [[ "$minimum" =~ ^[0-9]+$ ]] || return 1
   with_file_lock "${file}.lock" "${REPOLENS_SUMMARY_LOCK_TIMEOUT:-30}" \
-    _ensure_summary_issues_created_locked "$file" "$minimum"
+    _ensure_summary_issues_created_locked "$file" "$minimum" "$cap" "$update_cap"
 }
 
+# Atomically raise the receipt count floor and optionally replace the cap.
+# The caller holds the summary lock for this read-modify-write.
 _ensure_summary_issues_created_locked() {
-  local file="$1" minimum="$2" tmp rc
+  local file="$1" minimum="$2" cap="$3" update_cap="$4" tmp rc
   tmp="$(mktemp "${file}.tmp.XXXXXX")" || return 1
-  jq --argjson minimum "$minimum" \
-    '.totals.issues_created = ([.totals.issues_created // 0, $minimum] | max)' \
+  jq --argjson minimum "$minimum" --argjson cap "$cap" --argjson update_cap "$update_cap" \
+    '.totals.issues_created = ([.totals.issues_created // 0, $minimum] | max)
+     | if $update_cap then .max_issues = $cap else . end' \
     "$file" > "$tmp" && mv "$tmp" "$file"
   rc=$?
   rm -f "$tmp" 2>/dev/null || true
