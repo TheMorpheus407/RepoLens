@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Preserve local finding file permissions, including special mode bits, when dedupe rewrites metadata and receipts, using GNU/BSD-compatible mode copying; leave the original unchanged if mode lookup or application fails (#568).
+
 - Restore the saved polish issue limit on resume unless an explicit replacement is supplied, preventing previously withheld shortlists from exceeding the run cap (repolens-r18-p4-2).
 
 - Terminate finding-registry validation on incomplete input reads, preserving prior JSONL and CSV output instead of looping on a stale valid record (repolens-r18-p11-1).
