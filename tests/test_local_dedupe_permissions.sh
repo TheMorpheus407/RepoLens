@@ -95,4 +95,55 @@ for platform in stat_error chmod_error; do
   [[ ! -e "$file.rldedupe.$$" ]] || fail "$platform left staged output"
   printf 'PASS: %s preserves original and cleans staged output\n' "$platform"
 done
+
+# Inspect the staged file while a controlled slow writer still has it open.
+platform=native
+file="$fixture/private-during-write.md"
+started="$fixture/private-during-write.started"
+release="$fixture/private-during-write.release"
+printf -- '---\ntitle: Finding\nseverity: high\n---\nEvidence\n' > "$file" || exit 1
+command chmod 400 "$file" || exit 1
+tmp="$file.rldedupe.$$"
+
+# shellcheck disable=SC2329
+awk() {
+  local input="$2" line
+  local first=1 attempt
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    printf '%s\n' "$line"
+    if [[ "$first" == 1 ]]; then
+      : > "$started" || return 1
+      for ((attempt = 0; attempt < 500; attempt++)); do
+        [[ ! -e "$release" ]] || break
+        sleep 0.01
+      done
+      [[ -e "$release" ]] || return 1
+      first=0
+    fi
+  done < "$input"
+}
+
+_local_dedupe_mark_file "$file" 'status: duplicate' 'Duplicate finding' &
+rewrite_pid=$!
+for ((attempt = 0; attempt < 500; attempt++)); do
+  [[ ! -e "$started" ]] || break
+  sleep 0.01
+done
+if [[ ! -e "$started" ]]; then
+  : > "$release"
+  wait "$rewrite_pid" || true
+  fail "slow writer did not start"
+fi
+if [[ ! -e "$tmp" ]]; then
+  : > "$release"
+  wait "$rewrite_pid" || true
+  fail "staged output missing during write"
+fi
+during_mode="$(file_mode "$tmp")"
+: > "$release" || exit 1
+wait "$rewrite_pid" || fail "private rewrite failed"
+[[ "$during_mode" == 600 ]] || fail "staged output mode under umask 022 was $during_mode, expected 600"
+[[ "$(file_mode "$file")" == 400 ]] || fail "private rewrite changed final permissions"
+unset -f awk
+printf 'PASS: staged output is private throughout the write\n'
 printf 'Results: file permissions preserved\n'

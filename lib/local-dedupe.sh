@@ -89,7 +89,9 @@ _local_dedupe_mark_file() {
   # awk normalizes record separators; retain a receipt or suffix lacking final LF.
   last_byte="$(tail -c 1 -- "$file")" || return 1
 
-  RL_FM_ADD="$fm_add" RL_NOTE="$note" RL_LAST_BYTE="$last_byte" awk '
+  (
+    umask 077
+    RL_FM_ADD="$fm_add" RL_NOTE="$note" RL_LAST_BYTE="$last_byte" awk '
     BEGIN {
       fm_add = ENVIRON["RL_FM_ADD"]
       note   = ENVIRON["RL_NOTE"]
@@ -186,7 +188,8 @@ _local_dedupe_mark_file() {
         else print tail[k]
       }
     }
-  ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    ' "$file" > "$tmp"
+  ) || { rm -f "$tmp"; return 1; }
 
   # BSD splits special bits (M) from rwx bits (L); pad L to keep octal places.
   # Numeric chmod works with both native utilities.
