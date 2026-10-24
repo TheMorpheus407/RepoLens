@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- Log lens prompt-render abort-marker write failures and add sequential/parallel regression coverage for failure reporting and resume across local and forge modes (#431).
+
 - Preserve local finding file permissions, including special mode bits, when dedupe rewrites metadata and receipts, using GNU/BSD-compatible mode copying; leave the original unchanged if mode lookup or application fails (#568).
 
 - Restore the saved polish issue limit on resume unless an explicit replacement is supplied, preventing previously withheld shortlists from exceeding the run cap (repolens-r18-p4-2).

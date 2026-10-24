@@ -4859,7 +4859,9 @@ run_lens() {
 
   if (( prompt_rc != 0 )); then
     log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
-    printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+    if ! printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"; then
+      log_error "[$domain/$lens_id] Unable to persist systemic-abort marker."
+    fi
     set_stop_reason "$SUMMARY_FILE" "prompt-render-failed" || true
     record_lens "$SUMMARY_FILE" "$domain" "$lens_id" 0 "prompt-render-failed" 0 0
     return 1
@@ -4997,7 +4999,9 @@ run_lens() {
       fi
       if (( prompt_rc != 0 )); then
         log_error "[$domain/$lens_id] Unable to compose prompt from $base_file; stopping before agent dispatch."
-        printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"
+        if ! printf '%s\n' 'prompt-render-failed' > "$LOG_BASE/.systemic-failure-abort"; then
+          log_error "[$domain/$lens_id] Unable to persist systemic-abort marker."
+        fi
         set_stop_reason "$SUMMARY_FILE" "prompt-render-failed" || true
         exit_status="prompt-render-failed"
         break
